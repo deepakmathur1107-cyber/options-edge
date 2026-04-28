@@ -43,12 +43,12 @@ const TF_CONFIG = {
 }
 
 const FUT_SYMBOLS = {
-  ES:  { name:'E-Mini S&P 500',    under:'SPY' },
-  NQ:  { name:'E-Mini Nasdaq 100', under:'QQQ' },
-  YM:  { name:'Dow Jones',         under:'DIA' },
-  RTY: { name:'Russell 2000',      under:'IWM' },
-  CL:  { name:'Crude Oil',         under:'USO' },
-  GC:  { name:'Gold',              under:'GLD' },
+  ES:  { name:'E-Mini S&P 500',    quote:'$SPX.X', chain:'SPX',  label:'S&P 500 Index' },
+  NQ:  { name:'E-Mini Nasdaq 100', quote:'$NDX.X', chain:'NDX',  label:'Nasdaq 100 Index' },
+  YM:  { name:'Dow Jones',         quote:'$DJX.X', chain:'DJX',  label:'Dow Jones Index' },
+  RTY: { name:'Russell 2000',      quote:'$RUT.X', chain:'RUT',  label:'Russell 2000 Index' },
+  CL:  { name:'Crude Oil',         quote:'$WTIC',  chain:'USO',  label:'WTI Crude Oil' },
+  GC:  { name:'Gold',              quote:'$GOLD',  chain:'GLD',  label:'Gold Spot' },
 }
 
 const SP500 = [
@@ -255,7 +255,7 @@ export default function App() {
   // ─── Single ticker scan ───────────────────────────────────────────────────
   const runScan = async () => {
     if (!scanTicker.trim()) return
-    if (!tradierToken) { setScanErr('❌ Add your Tradier token in ⚙️ Settings first'); return }
+    // Token can be empty — server /api/tradier uses TRADIER_TOKEN env var as fallback
     const log=[]; const dbg=m=>{log.push(m);setDebugLog([...log])}
     setScanning(true); setScanResult(null); setScanErr(''); setDebugLog([])
     const ticker = scanTicker.toUpperCase()
@@ -354,26 +354,79 @@ export default function App() {
 
   // ─── Futures fetch ────────────────────────────────────────────────────────
   const fetchFutures = async sym => {
-    if (!tradierToken) { setFutErr('Add Tradier token in ⚙️ Settings'); return }
+    // Token optional — server uses TRADIER_TOKEN env var
     setFutLoading(true); setFutErr(''); setFutData(null)
     const cfg = FUT_SYMBOLS[sym]
     try {
-      const quote = await getQuote(cfg.under)
-      if (!quote) throw new Error(`No quote for ${cfg.under}`)
+      // Step 1: Get real index quote (e.g. $SPX.X for ES)
+      const quote = await getQuote(cfg.quote)
+      if (!quote) throw new Error(`No quote for ${cfg.quote} — check Tradier token`)
       const price = parseFloat(quote.last||quote.prevclose||0)
-      if (!price) throw new Error('Price is $0 — market may be closed')
+      if (!price) throw new Error(`Price is $0 for ${cfg.quote} — market may be closed`)
 
-      const expDates = await getExpiries(cfg.under)
+      // Step 2: Get options chain on the tradeable chain symbol (e.g. SPX)
+      const expDates = await getExpiries(cfg.chain)
       const expiry = expDates[1]||expDates[0]
-      let topCalls=[], topPuts=[], chainLen=0
+      let topCalls=[], topPuts=[], chainLen=0, tradeSetups=[]
 
       if (expiry) {
-        const chain = await getChain(cfg.under, expiry)
+        const chain = await getChain(cfg.chain, expiry)
         chainLen = chain.length
         const calls = chain.filter(o=>o.option_type==='call').sort((a,b)=>(b.open_interest||0)-(a.open_interest||0))
         const puts  = chain.filter(o=>o.option_type==='put').sort((a,b)=>(b.open_interest||0)-(a.open_interest||0))
-        topCalls = calls.slice(0,3).map(o=>({strike:o.strike, oi:o.open_interest||0, iv:o.greeks?.mid_iv?(o.greeks.mid_iv*100).toFixed(1)+'%':'—'}))
-        topPuts  = puts.slice(0,3).map(o=>({strike:o.strike, oi:o.open_interest||0, iv:o.greeks?.mid_iv?(o.greeks.mid_iv*100).toFixed(1)+'%':'—'}))
+        topCalls = calls.slice(0,5).map(o=>({
+          strike:o.strike, oi:o.open_interest||0, vol:o.volume||0,
+          bid:o.bid||0, ask:o.ask||0,
+          mid:((o.bid||0)+(o.ask||0))/2,
+          iv:o.greeks?.mid_iv?(o.greeks.mid_iv*100).toFixed(1)+'%':'—',
+          delta:o.greeks?.delta?o.greeks.delta.toFixed(3):'—',
+        }))
+        topPuts = puts.slice(0,5).map(o=>({
+          strike:o.strike, oi:o.open_interest||0, vol:o.volume||0,
+          bid:o.bid||0, ask:o.ask||0,
+          mid:((o.bid||0)+(o.ask||0))/2,
+          iv:o.greeks?.mid_iv?(o.greeks.mid_iv*100).toFixed(1)+'%':'—',
+          delta:o.greeks?.delta?o.greeks.delta.toFixed(3):'—',
+        }))
+
+        // Generate trade setups from best risk/reward options
+        const chgPct_ = parseFloat(quote.change_percentage||0)
+        const bias_ = chgPct_>0.3?'bull':chgPct_<-0.3?'bear':'neutral'
+        const step_ = autoStep(price)
+        // Best call setup: 2% OTM
+        const callTgt = Math.round(price*1.02/step_)*step_
+        const bestCall = calls.find(o=>Math.abs(o.strike-callTgt)<=step_*2)
+        // Best put setup: 2% OTM
+        const putTgt = Math.round(price*0.98/step_)*step_
+        const bestPut = puts.find(o=>Math.abs(o.strike-putTgt)<=step_*2)
+
+        const expiryDisplay = new Date(expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+        if (bestCall) {
+          const mid=(bestCall.bid||0+bestCall.ask||0)/2||((bestCall.bid||0)+(bestCall.ask||0))/2
+          if (mid>0) tradeSetups.push({
+            type:'Call', strike:`$${bestCall.strike}C`,
+            expiry:expiryDisplay, entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),
+            target:fmtP(mid*1.8), stop:fmtP(mid*0.5),
+            iv:bestCall.greeks?.mid_iv?(bestCall.greeks.mid_iv*100).toFixed(1)+'%':'—',
+            delta:bestCall.greeks?.delta?bestCall.greeks.delta.toFixed(3):'—',
+            oi:bestCall.open_interest||0,
+            conviction: bias_==='bull'?'High':'Medium',
+            color:C.green,
+          })
+        }
+        if (bestPut) {
+          const mid=(bestPut.bid||0+bestPut.ask||0)/2||((bestPut.bid||0)+(bestPut.ask||0))/2
+          if (mid>0) tradeSetups.push({
+            type:'Put', strike:`$${bestPut.strike}P`,
+            expiry:expiryDisplay, entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),
+            target:fmtP(mid*1.8), stop:fmtP(mid*0.5),
+            iv:bestPut.greeks?.mid_iv?(bestPut.greeks.mid_iv*100).toFixed(1)+'%':'—',
+            delta:bestPut.greeks?.delta?bestPut.greeks.delta.toFixed(3):'—',
+            oi:bestPut.open_interest||0,
+            conviction: bias_==='bear'?'High':'Medium',
+            color:C.red,
+          })
+        }
       }
 
       const chgPct = parseFloat(quote.change_percentage||0)
@@ -400,6 +453,7 @@ export default function App() {
         vol:  quote.volume||0,
         open: parseFloat(quote.open||price),
         resistance, support, topCalls, topPuts, chainLen,
+        tradeSetups, expiry,
         fetchedAt: new Date().toLocaleTimeString(),
       })
     } catch(e) {
@@ -547,7 +601,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
       setAutoOn(false)
       setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] 🔴 Stopped`,...p.slice(0,99)])
     } else {
-      if (!tradierToken) { setScanErr('Enter Tradier token in Settings first'); return }
+      // Token optional — /api/tradier uses TRADIER_TOKEN env var server-side
       setAutoOn(true)
       setAutoLog([`[${new Date().toLocaleTimeString()}] 🟢 Started — scanning every ${scanFreq} min`])
       runAutoScan()
@@ -820,8 +874,8 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         {tab===5 && (
           <div className="si">
             {!tradierToken && (
-              <div style={{background:'#1a0a00',border:`1px solid ${C.orange}`,borderRadius:6,padding:12,marginBottom:12,fontSize:12,color:C.orange,lineHeight:1.6}}>
-                ⚠️ No Tradier token set. Go to <strong>⚙️ Settings</strong> → paste your token.
+              <div style={{background:'#02080e',border:`1px solid ${C.blue}30`,borderRadius:6,padding:11,marginBottom:11,fontSize:11,color:'#5a8aaa',lineHeight:1.6}}>
+                ℹ️ No token in Settings — using server-side Tradier token (set via Vercel env var). If scans fail, paste your token in <strong>⚙️ Settings</strong>.
               </div>
             )}
 
@@ -860,12 +914,12 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               <Field label="Type" value={scanType} onChange={setScanType} options={['Any','Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
             </div>
 
-            <button className="hv" onClick={runScan} disabled={scanning||!scanTicker||!tradierToken} style={{
+            <button className="hv" onClick={runScan} disabled={scanning||!scanTicker} style={{
               width:'100%', padding:'13px', borderRadius:6, fontSize:14, letterSpacing:2, cursor:'pointer',
               fontFamily:"'Bebas Neue',sans-serif", marginBottom:14,
               background:scanning?`${C.green}10`:`${C.green}22`,
-              border:`1px solid ${scanning||!scanTicker||!tradierToken?C.border:C.green}`,
-              color:scanning||!scanTicker||!tradierToken?C.dim:C.green,
+              border:`1px solid ${scanning||!scanTicker?C.border:C.green}`,
+              color:scanning||!scanTicker?C.dim:C.green,
             }}>
               {scanning
                 ? <span className="pulse">🔴 FETCHING LIVE DATA — ${scanTicker}...</span>
@@ -977,12 +1031,12 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               ))}
             </div>
 
-            <button className="hv" onClick={()=>fetchFutures(futSym)} disabled={futLoading||!tradierToken} style={{
+            <button className="hv" onClick={()=>fetchFutures(futSym)} disabled={futLoading} style={{
               width:'100%', padding:'12px', borderRadius:6, fontSize:13, letterSpacing:2,
               fontFamily:"'Bebas Neue',sans-serif", marginBottom:12, cursor:'pointer',
               background:futLoading?`${C.blue}10`:`${C.blue}22`,
-              border:`1px solid ${futLoading||!tradierToken?C.border:C.blue}`,
-              color:futLoading||!tradierToken?C.dim:C.blue,
+              border:`1px solid ${futLoading?C.border:C.blue}`,
+              color:futLoading?C.dim:C.blue,
             }}>
               {futLoading
                 ? <span className="pulse">🔴 FETCHING — {FUT_SYMBOLS[futSym]?.name}...</span>
@@ -990,7 +1044,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               }
             </button>
 
-            {!tradierToken && <div style={{background:'#1a0a00',border:`1px solid ${C.orange}`,borderRadius:6,padding:11,marginBottom:11,fontSize:12,color:C.orange}}>⚠️ Add Tradier token in ⚙️ Settings first</div>}
+            
             {futErr && <div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:6,padding:11,color:C.red,fontSize:12,marginBottom:11}}>{futErr}</div>}
 
             {futData && (
@@ -998,7 +1052,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                 {/* Price header */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
                   <div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:'#c8d8e8',letterSpacing:2,lineHeight:1}}>{futData.sym} <span style={{fontSize:13,color:C.dim}}>via {futData.cfg.under}</span></div>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:'#c8d8e8',letterSpacing:2,lineHeight:1}}>{futData.sym} <span style={{fontSize:13,color:C.dim}}>— {futData.cfg.label}</span></div>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:futData.biasColor,letterSpacing:1,lineHeight:1.1}}>${futData.price.toFixed(2)}</div>
                     <div style={{display:'flex',gap:10,alignItems:'center',marginTop:4,flexWrap:'wrap'}}>
                       <span style={{fontSize:13,color:futData.chgPct>=0?C.green:C.red,fontWeight:600}}>
@@ -1091,15 +1145,150 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                 <Card color={`${futData.biasColor}40`}>
                   <Lbl color={futData.biasColor}>📊 MARKET STRUCTURE</Lbl>
                   <div style={{fontSize:12,color:'#8ab0c0',lineHeight:2}}>
-                    <span style={{color:futData.biasColor,fontWeight:600}}>{futData.sym}</span> proxy trading at <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.price.toFixed(2)}</span>, <span style={{color:futData.chgPct>=0?C.green:C.red}}>{futData.chgPct>=0?'up':'down'} {Math.abs(futData.chgPct).toFixed(2)}%</span> today.
+                    <span style={{color:futData.biasColor,fontWeight:600}}>{futData.sym} ({futData.cfg.label})</span> trading at <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.price.toFixed(2)}</span>, <span style={{color:futData.chgPct>=0?C.green:C.red}}>{futData.chgPct>=0?'up':'down'} {Math.abs(futData.chgPct).toFixed(2)}%</span> today.
                     {' '}Bias: <span style={{color:futData.biasColor,fontWeight:600}}>{futData.bias}</span> · Range: <span style={{color:C.red}}>${futData.lo.toFixed(2)}</span> – <span style={{color:C.green}}>${futData.hi.toFixed(2)}</span><br/>
                     Nearest resistance: <span style={{color:C.red,fontWeight:600}}>${futData.resistance[0]?.toFixed(2)||'—'}</span> · Nearest support: <span style={{color:C.green,fontWeight:600}}>${futData.support[0]?.toFixed(2)||'—'}</span><br/>
                     Main line in the sand: <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.support[0]?.toFixed(2)||'—'}</span>
                   </div>
                 </Card>
 
+                {/* ── Trade Setups from live chain ── */}
+                {futData.tradeSetups?.length>0 && (
+                  <div style={{marginTop:12}}>
+                    <Lbl color={C.blue}>🎯 LIVE TRADE SETUPS — {futData.cfg.chain} OPTIONS CHAIN</Lbl>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      {futData.tradeSetups.map((s,i)=>(
+                        <div key={i} style={{background:'#030d06',border:`1px solid ${s.color}40`,borderRadius:6,padding:12}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:s.color,letterSpacing:1.5}}>{s.type.toUpperCase()} {s.strike}</div>
+                            <span style={{fontSize:9,color:s.color,border:`1px solid ${s.color}40`,padding:'2px 6px',borderRadius:3}}>{s.conviction}</span>
+                          </div>
+                          <div style={{display:'grid',gap:4}}>
+                            {[
+                              {l:'EXPIRY', v:s.expiry,  c:'#c8d8e8'},
+                              {l:'ENTRY',  v:s.entry,   c:C.blue},
+                              {l:'TARGET', v:s.target+' (+80%)', c:C.green},
+                              {l:'STOP',   v:s.stop+' (-50%)',   c:C.red},
+                              {l:'IV',     v:s.iv,      c:C.orange},
+                              {l:'DELTA',  v:s.delta,   c:'#c8d8e8'},
+                              {l:'OI',     v:s.oi.toLocaleString(), c:C.dim},
+                            ].map((f,j)=>(
+                              <div key={j} style={{display:'flex',justifyContent:'space-between',fontSize:11,borderBottom:`1px solid ${C.border}`,paddingBottom:3}}>
+                                <span style={{color:C.dim,fontSize:9,letterSpacing:1}}>{f.l}</span>
+                                <span style={{color:f.c,fontWeight:600}}>{f.v}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <button className="hv" onClick={()=>{setAlert(p=>({...p,ticker:futData.cfg.chain,type:s.type,expiry:s.expiry,strike:s.strike,entry:s.entry,target:s.target+' (+80%)',stop:s.stop+' (-50%)'}));setTab(2)}} style={{marginTop:8,width:'100%',background:`${s.color}15`,border:`1px solid ${s.color}40`,color:s.color,padding:'6px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>
+                            → PUSH TO ALERT BUILDER
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {futData.tradeSetups?.length===0 && (
+                  <div style={{marginTop:10,padding:'10px 12px',background:C.card,border:`1px solid ${C.border}`,borderRadius:5,fontSize:11,color:C.dim}}>
+                    No liquid options found near current price. Market may be closed or chain has no bid/ask.
+                  </div>
+                )}
+
+                {/* ── Full chain top strikes ── */}
+                {(futData.topCalls?.length>0||futData.topPuts?.length>0) && (
+                  <div style={{marginTop:12}}>
+                    <Lbl>TOP OPTIONS BY OPEN INTEREST — {futData.cfg.chain}</Lbl>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      <div>
+                        <div style={{fontSize:9,color:C.red,letterSpacing:2,marginBottom:5}}>TOP CALLS OI</div>
+                        {futData.topCalls.map((s,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#5a8a6a',marginBottom:3,padding:'4px 6px',background:C.card,borderRadius:3}}>
+                            <span style={{color:'#c8d8e8'}}>${s.strike}C</span>
+                            <span style={{color:C.dim}}>OI:{s.oi.toLocaleString()} V:{s.vol}</span>
+                            <span style={{color:C.orange}}>{s.iv}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div style={{fontSize:9,color:C.green,letterSpacing:2,marginBottom:5}}>TOP PUTS OI</div>
+                        {futData.topPuts.map((s,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#5a6a8a',marginBottom:3,padding:'4px 6px',background:C.card,borderRadius:3}}>
+                            <span style={{color:'#c8d8e8'}}>${s.strike}P</span>
+                            <span style={{color:C.dim}}>OI:{s.oi.toLocaleString()} V:{s.vol}</span>
+                            <span style={{color:C.orange}}>{s.iv}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+
+                {/* ── Trade Setups from live chain ── */}
+                {futData.tradeSetups?.length>0 && (
+                  <div style={{marginTop:12}}>
+                    <Lbl color={C.blue}>🎯 LIVE TRADE SETUPS — {futData.cfg.chain} OPTIONS</Lbl>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      {futData.tradeSetups.map((s,i)=>(
+                        <div key={i} style={{background:'#030d06',border:`1px solid ${s.color}40`,borderRadius:6,padding:12}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:s.color,letterSpacing:1.5}}>{s.type} {s.strike}</span>
+                            <span style={{fontSize:9,color:s.color,border:`1px solid ${s.color}40`,padding:'2px 6px',borderRadius:3}}>{s.conviction}</span>
+                          </div>
+                          {[
+                            {l:'EXPIRY',v:s.expiry,c:'#c8d8e8'},
+                            {l:'ENTRY', v:s.entry, c:C.blue},
+                            {l:'TARGET',v:s.target+' +80%',c:C.green},
+                            {l:'STOP',  v:s.stop+' -50%',  c:C.red},
+                            {l:'IV',    v:s.iv,    c:C.orange},
+                            {l:'DELTA', v:s.delta, c:'#c8d8e8'},
+                          ].map((f,j)=>(
+                            <div key={j} style={{display:'flex',justifyContent:'space-between',fontSize:11,borderBottom:`1px solid ${C.border}`,paddingBottom:3,marginBottom:3}}>
+                              <span style={{color:C.dim,fontSize:9,letterSpacing:1}}>{f.l}</span>
+                              <span style={{color:f.c,fontWeight:600}}>{f.v}</span>
+                            </div>
+                          ))}
+                          <button className="hv" onClick={()=>{setAlert(p=>({...p,ticker:futData.cfg.chain,type:s.type,expiry:s.expiry,strike:s.strike,entry:s.entry,target:s.target,stop:s.stop}));setTab(2)}} style={{marginTop:8,width:'100%',background:`${s.color}15`,border:`1px solid ${s.color}40`,color:s.color,padding:'6px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>
+                            → ALERT BUILDER
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Top OI strikes table ── */}
+                {(futData.topCalls?.length>0||futData.topPuts?.length>0) && (
+                  <div style={{marginTop:12}}>
+                    <Lbl>TOP STRIKES BY OPEN INTEREST — {futData.cfg.chain}</Lbl>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      <div>
+                        <div style={{fontSize:8,color:C.red,letterSpacing:2,marginBottom:5}}>CALLS OI</div>
+                        {futData.topCalls.map((s,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3,padding:'4px 7px',background:C.card,borderRadius:3}}>
+                            <span style={{color:'#c8d8e8'}}>${s.strike}C</span>
+                            <span style={{color:C.dim,fontSize:10}}>OI:{s.oi.toLocaleString()}</span>
+                            <span style={{color:C.orange,fontSize:10}}>{s.iv}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div style={{fontSize:8,color:C.green,letterSpacing:2,marginBottom:5}}>PUTS OI</div>
+                        {futData.topPuts.map((s,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:3,padding:'4px 7px',background:C.card,borderRadius:3}}>
+                            <span style={{color:'#c8d8e8'}}>${s.strike}P</span>
+                            <span style={{color:C.dim,fontSize:10}}>OI:{s.oi.toLocaleString()}</span>
+                            <span style={{color:C.orange,fontSize:10}}>{s.iv}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+
                 <div style={{marginTop:8,fontSize:10,color:'#2a4a5a',textAlign:'center'}}>
-                  Data via Tradier {tradierMode} · Proxy ETF: {futData.cfg.under} · S/R from top OI strikes
+                  Data via Tradier {tradierMode} · Index: {futData.cfg.quote} · Options chain: {futData.cfg.chain} · S/R from top OI
                 </div>
               </div>
             )}
