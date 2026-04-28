@@ -96,6 +96,44 @@ const TABS = [
   {e:'📈',l:'Futures'}, {e:'⚙️',l:'Settings'},
 ]
 
+// ─── Timeframe config — module level (NOT inside component) ─────────────────
+const TF_CONFIG = {
+  'Short Term — Quick (5–14 DTE)': {
+    expiryIdx:1, strikePct:1.02, dteFactor:0.012,
+    profitTarget:0.50, stopLoss:0.50,
+    label:'Quick Play', badge:'⚡', color:'#00ff88',
+    desc:'5–14 DTE · Fast momentum plays · Tight stops · 50% profit target',
+  },
+  'Short Term — Swing (21–45 DTE)': {
+    expiryIdx:2, strikePct:1.02, dteFactor:0.025,
+    profitTarget:0.80, stopLoss:0.50,
+    label:'Swing Trade', badge:'📈', color:'#00c8ff',
+    desc:'21–45 DTE · Directional swing · 80% profit target · 50% stop',
+  },
+  'Long Term — LEAP (90–180 DTE)': {
+    expiryIdx:4, strikePct:1.05, dteFactor:0.06,
+    profitTarget:1.00, stopLoss:0.40,
+    label:'LEAP Option', badge:'🏔️', color:'#ff9500',
+    desc:'90–180 DTE · Trend following · 100% target · More time to be right',
+  },
+  'Long Term — Deep LEAP (180–365 DTE)': {
+    expiryIdx:6, strikePct:1.08, dteFactor:0.10,
+    profitTarget:1.50, stopLoss:0.35,
+    label:'Deep LEAP', badge:'🚀', color:'#ff4466',
+    desc:'180–365 DTE · Long conviction plays · 150% target · Low theta decay',
+  },
+}
+
+// ─── Futures symbols — module level ─────────────────────────────────────────
+const FUT_SYMBOLS = {
+  ES:  { name:'E-Mini S&P 500',    underlying:'SPY' },
+  NQ:  { name:'E-Mini Nasdaq 100', underlying:'QQQ' },
+  YM:  { name:'E-Mini Dow Jones',  underlying:'DIA' },
+  RTY: { name:'E-Mini Russell 2k', underlying:'IWM' },
+  CL:  { name:'Crude Oil',         underlying:'USO' },
+  GC:  { name:'Gold',              underlying:'GLD' },
+}
+
 export default function App() {
   const [tab, setTab] = useState(0)
 
@@ -116,16 +154,6 @@ export default function App() {
   useEffect(()=>{ localStorage.setItem('watchlist',   watchlist)    },[watchlist])
   useEffect(()=>{ localStorage.setItem('minScore',    minScore)     },[minScore])
   useEffect(()=>{ localStorage.setItem('scanFreq',    scanFreq)     },[scanFreq])
-
-  // ─── Futures symbols map ──────────────────────────────────────────────────
-  const FUT_SYMBOLS = {
-    ES:  { name:'E-Mini S&P 500',   symbol:'ES1!',  tradier:'/SPX' },
-    NQ:  { name:'E-Mini Nasdaq 100',symbol:'NQ1!',  tradier:'/NDX' },
-    YM:  { name:'E-Mini Dow Jones', symbol:'YM1!',  tradier:'/DJX' },
-    RTY: { name:'E-Mini Russell 2k',symbol:'RTY1!', tradier:'/RUT' },
-    CL:  { name:'Crude Oil',        symbol:'CL1!',  tradier:'/CL'  },
-    GC:  { name:'Gold',             symbol:'GC1!',  tradier:'/GC'  },
-  }
 
   const fetchFutures = async (sym) => {
     if (!tradierToken) { setFutErr('Add Tradier token in ⚙️ Settings'); return }
@@ -257,54 +285,6 @@ export default function App() {
   const getChain = async (ticker, expiry) => {
     const d = await tGet(`/markets/options/chains?symbol=${ticker}&expiration=${expiry}&greeks=true`)
     return d?.options?.option || []
-  }
-
-  // TF_CONFIG defines how each timeframe behaves
-  const TF_CONFIG = {
-    'Short Term — Quick (5–14 DTE)': {
-      expiryIdx: 0,          // first/nearest expiry
-      strikePct: 1.02,       // 2% OTM
-      dteFactor: 0.012,      // ~1.2% of stock price for option premium estimate
-      profitTarget: 0.50,    // 50% gain target
-      stopLoss: 0.50,        // 50% stop
-      label: 'Quick Play',
-      badge: '⚡',
-      color: '#00ff88',
-      desc: '5–14 DTE · Fast momentum plays · Tight stops · 50% profit target',
-    },
-    'Short Term — Swing (21–45 DTE)': {
-      expiryIdx: 2,
-      strikePct: 1.02,
-      dteFactor: 0.025,
-      profitTarget: 0.80,
-      stopLoss: 0.50,
-      label: 'Swing Trade',
-      badge: '📈',
-      color: '#00c8ff',
-      desc: '21–45 DTE · Directional swing · 80% profit target · 50% stop',
-    },
-    'Long Term — LEAP (90–180 DTE)': {
-      expiryIdx: 4,
-      strikePct: 1.05,       // 5% OTM for LEAPs
-      dteFactor: 0.06,       // ~6% of stock price
-      profitTarget: 1.00,    // 100% gain target
-      stopLoss: 0.40,        // 40% stop (more room)
-      label: 'LEAP Option',
-      badge: '🏔️',
-      color: '#ff9500',
-      desc: '90–180 DTE · Trend following · 100% target · More time to be right',
-    },
-    'Long Term — Deep LEAP (180–365 DTE)': {
-      expiryIdx: 6,
-      strikePct: 1.08,       // 8% OTM for deep LEAPs
-      dteFactor: 0.10,       // ~10% of stock price
-      profitTarget: 1.50,    // 150% gain target
-      stopLoss: 0.35,        // 35% stop
-      label: 'Deep LEAP',
-      badge: '🚀',
-      color: '#ff4466',
-      desc: '180–365 DTE · Long conviction plays · 150% target · Low theta decay',
-    },
   }
 
   const pickExpiry = (dates, tf) => {
