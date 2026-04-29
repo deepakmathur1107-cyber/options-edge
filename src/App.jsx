@@ -43,18 +43,67 @@ const TF_CONFIG = {
 }
 
 const FUT_SYMBOLS = {
-  ES:  { name:'E-Mini S&P 500',    quote:'$SPX.X', chain:'SPX',  label:'S&P 500 Index' },
-  NQ:  { name:'E-Mini Nasdaq 100', quote:'$NDX.X', chain:'NDX',  label:'Nasdaq 100 Index' },
-  YM:  { name:'Dow Jones',         quote:'$DJX.X', chain:'DJX',  label:'Dow Jones Index' },
-  RTY: { name:'Russell 2000',      quote:'$RUT.X', chain:'RUT',  label:'Russell 2000 Index' },
-  CL:  { name:'Crude Oil',         quote:'$WTIC',  chain:'USO',  label:'WTI Crude Oil' },
-  GC:  { name:'Gold',              quote:'$GOLD',  chain:'GLD',  label:'Gold Spot' },
+  // quote: Tradier futures symbol (tries /ES first, falls back to index $SPX.X)
+  // chain: symbol used for options chain
+  ES:  { name:'/ES — E-Mini S&P 500',    futures:'/ES',  index:'$SPX.X', chain:'SPX',  display:'/ES' },
+  NQ:  { name:'/NQ — E-Mini Nasdaq 100', futures:'/NQ',  index:'$NDX.X', chain:'NDX',  display:'/NQ' },
+  YM:  { name:'/YM — Dow Jones',         futures:'/YM',  index:'$DJI',   chain:'DJX',  display:'/YM' },
+  RTY: { name:'/RTY — Russell 2000',     futures:'/RTY', index:'$RUT.X', chain:'RUT',  display:'/RTY' },
+  CL:  { name:'/CL — Crude Oil',         futures:'/CL',  index:'$WTIC',  chain:'USO',  display:'/CL' },
+  GC:  { name:'/GC — Gold',              futures:'/GC',  index:'$GOLD',  chain:'GLD',  display:'/GC' },
 }
 
+// Full S&P 500 constituent list — all have listed options, market cap > $500M
 const SP500 = [
-  'NVDA','AAPL','MSFT','META','AMZN','GOOGL','TSLA',
-  'JPM','GS','XOM','LLY','UNH','CAT','BA','AMD',
-  'CRM','NFLX','V','COIN','PLTR',
+  // Technology
+  'AAPL','MSFT','NVDA','AVGO','META','ORCL','CRM','AMD','INTC','QCOM',
+  'TXN','AMAT','LRCX','KLAC','MCHP','CDNS','SNPS','ADI','MRVL','FTNT',
+  'PANW','CRWD','DDOG','SNOW','MDB','ZS','NET','OKTA','TWLO','DOCN',
+  'ADBE','NOW','WDAY','ANSS','PTC','TYL','EPAM','CTSH','ACN','IBM',
+  'HPE','HPQ','STX','WDC','NTAP','PSTG','DELL','SMCI',
+  // Communication Services
+  'GOOGL','GOOG','META','NFLX','DIS','CMCSA','T','VZ','CHTR','TMUS',
+  'PARA','WBD','FOXA','FOX','OMC','IPG','TTWO','EA','ATVI','RBLX',
+  // Consumer Discretionary
+  'AMZN','TSLA','HD','MCD','NKE','SBUX','LOW','TJX','BKNG','CMG',
+  'YUM','DG','DLTR','ROST','BBY','ETSY','EBAY','ABNB','LYFT','UBER',
+  'F','GM','RIVN','LCID','APTV','MGA','BWA',
+  // Consumer Staples
+  'WMT','COST','PG','KO','PEP','PM','MO','MDLZ','KHC','CL',
+  'GIS','K','CPB','SJM','HRL','CAG','MKC','CHD','CLX','KMB',
+  // Financials
+  'JPM','BAC','WFC','GS','MS','C','BLK','SCHW','AXP','V','MA',
+  'COF','USB','TFC','PNC','FITB','HBAN','KEY','RF','CFG','MTB',
+  'STT','BK','NTRS','ICE','CME','CBOE','NDAQ','MCO','SPGI','FDS',
+  'AFL','MET','PRU','AIG','TRV','ALL','CB','MMC','WTW','AON',
+  // Healthcare
+  'LLY','JNJ','UNH','ABBV','MRK','PFE','ABT','TMO','DHR','BMY',
+  'AMGN','GILD','REGN','VRTX','BIIB','MRNA','BNTX','ILMN','IQV',
+  'CVS','CI','HUM','CNC','MOH','ELV','DGX','LH','HOLX','BAX',
+  'BSX','EW','SYK','MDT','BDX','ZBH','STE','HSIC','RMD','IDXX',
+  // Industrials
+  'CAT','BA','HON','GE','LMT','RTX','NOC','GD','L3H','HII',
+  'UPS','FDX','DAL','UAL','AAL','LUV','ALK','EXPD','XPO','JBHT',
+  'DE','EMR','ETN','ROK','PH','ITW','DOV','AME','NDSN','GWW',
+  'URI','WAB','TT','CARR','OTIS','JCI','GNRC',
+  // Energy
+  'XOM','CVX','COP','EOG','SLB','MPC','PSX','VLO','OXY','HAL',
+  'DVN','FANG','PXD','APA','HES','MRO','OKE','KMI','WMB','ET',
+  // Materials
+  'LIN','APD','SHW','ECL','PPG','NEM','GOLD','FCX','NUE','STLD',
+  'RS','CF','MOS','ALB','EMN','CE','IFF','FMC','RPM','SEE',
+  // Real Estate
+  'AMT','PLD','CCI','EQIX','DLR','PSA','EQR','AVB','VTR','WELL',
+  'ARE','BXP','SLG','KIM','REG','FRT','SPG','MAC','SKT','O',
+  // Utilities
+  'NEE','DUK','SO','AEP','EXC','SRE','PCG','ED','EIX','XEL',
+  'WEC','ES','ETR','PPL','CMS','LNT','PNW','OGE','EVRG','NI',
+  // High-volume ETFs (options rich)
+  'SPY','QQQ','IWM','DIA','GLD','SLV','USO','TLT','HYG','LQD',
+  'XLF','XLE','XLK','XLV','XLI','XLU','XLB','XLRE','XLP','XLY',
+  // High-beta / growth
+  'COIN','MSTR','PLTR','SOFI','HOOD','UPST','AFRM','OPEN','OPENDOOR',
+  'CARVANA','CVNA','IONQ','ARRY','ENPH','SEDG','RUN','FSLR','NOVA',
 ]
 
 const CHECKLIST = [
@@ -358,11 +407,28 @@ export default function App() {
     setFutLoading(true); setFutErr(''); setFutData(null)
     const cfg = FUT_SYMBOLS[sym]
     try {
-      // Step 1: Get real index quote (e.g. $SPX.X for ES)
-      const quote = await getQuote(cfg.quote)
-      if (!quote) throw new Error(`No quote for ${cfg.quote} — check Tradier token`)
+      // Step 1: Try actual futures price first (/ES, /NQ etc)
+      // Tradier supports futures with slash-prefix symbols on production
+      // Falls back to index ($SPX.X) if futures not available
+      let quote = null
+      let priceSource = cfg.display  // e.g. '/ES'
+
+      try {
+        quote = await getQuote(cfg.futures)  // Try /ES, /NQ etc
+        const testPrice = parseFloat(quote?.last||quote?.prevclose||0)
+        if (!testPrice) quote = null  // No real price, fall back
+      } catch(e) { quote = null }
+
+      if (!quote) {
+        // Fallback to index
+        priceSource = cfg.index   // e.g. '$SPX.X'
+        quote = await getQuote(cfg.index)
+      }
+
+      if (!quote) throw new Error(`No quote for ${cfg.display} or ${cfg.index} — check Tradier token`)
       const price = parseFloat(quote.last||quote.prevclose||0)
-      if (!price) throw new Error(`Price is $0 for ${cfg.quote} — market may be closed`)
+      if (!price) throw new Error(`Price is $0 — market may be closed`)
+      const usingFutures = priceSource === cfg.display
 
       // Step 2: Get options chain on the tradeable chain symbol (e.g. SPX)
       const expDates = await getExpiries(cfg.chain)
@@ -454,6 +520,8 @@ export default function App() {
         open: parseFloat(quote.open||price),
         resistance, support, topCalls, topPuts, chainLen,
         tradeSetups, expiry,
+        priceSource,
+        usingFutures,
         fetchedAt: new Date().toLocaleTimeString(),
       })
     } catch(e) {
@@ -572,9 +640,11 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
   const runAutoScan = useCallback(async () => {
     if (!tradierToken) return
     const list = watchlist.split(',').map(t=>t.trim().toUpperCase()).filter(Boolean)
-    const tickers = list.length ? list : SP500
+    // Shuffle full pool each run so we don't always start from the same tickers
+    const shuffle = arr => [...arr].sort(()=>Math.random()-.5)
+    const tickers = list.length ? list : shuffle(SP500)
     const ts = new Date().toLocaleTimeString()
-    setAutoLog(p=>[`[${ts}] Scanning ${tickers.length} tickers (${list.length?'custom':'SP500 pool'})...`,...p.slice(0,99)])
+    setAutoLog(p=>[`[${ts}] Scanning ${tickers.length} tickers (${list.length?'custom watchlist':'full SP500 pool — shuffled'})...`,...p.slice(0,99)])
 
     for (const ticker of tickers) {
       const r = await scanOneTicker(ticker)
@@ -1020,13 +1090,14 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
             <div style={{display:'flex',gap:7,marginBottom:14,flexWrap:'wrap'}}>
               {Object.entries(FUT_SYMBOLS).map(([sym,cfg]) => (
                 <button key={sym} className="hv" onClick={()=>{setFutSym(sym);setFutData(null);setFutErr('')}} style={{
-                  padding:'8px 16px', borderRadius:5, cursor:'pointer',
-                  fontFamily:"'Bebas Neue',sans-serif", fontSize:14, letterSpacing:2,
+                  padding:'8px 14px', borderRadius:5, cursor:'pointer', textAlign:'left',
+                  fontFamily:"'Bebas Neue',sans-serif", letterSpacing:1.5,
                   border:`1px solid ${futSym===sym?C.green:C.border}`,
                   color:futSym===sym?C.green:C.dim,
                   background:futSym===sym?`${C.green}18`:C.card,
                 }}>
-                  {sym}
+                  <div style={{fontSize:16}}>{cfg.display}</div>
+                  <div style={{fontSize:9,letterSpacing:.5,fontFamily:"'IBM Plex Mono',monospace",opacity:.7,marginTop:1}}>{cfg.name.split('—')[1]?.trim()||cfg.name}</div>
                 </button>
               ))}
             </div>
@@ -1039,7 +1110,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               color:futLoading?C.dim:C.blue,
             }}>
               {futLoading
-                ? <span className="pulse">🔴 FETCHING — {FUT_SYMBOLS[futSym]?.name}...</span>
+                ? <span className="pulse">🔴 FETCHING {FUT_SYMBOLS[futSym]?.display}...</span>
                 : `📡 FETCH LIVE ${futSym} — ${FUT_SYMBOLS[futSym]?.name}`
               }
             </button>
@@ -1052,7 +1123,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                 {/* Price header */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
                   <div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:'#c8d8e8',letterSpacing:2,lineHeight:1}}>{futData.sym} <span style={{fontSize:13,color:C.dim}}>— {futData.cfg.label}</span></div>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:'#c8d8e8',letterSpacing:2,lineHeight:1}}>{futData.cfg.display} <span style={{fontSize:13,color:futData.usingFutures?C.green:C.orange}}>{futData.usingFutures?'● LIVE FUTURES':'● INDEX PROXY'}</span></div>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:futData.biasColor,letterSpacing:1,lineHeight:1.1}}>${futData.price.toFixed(2)}</div>
                     <div style={{display:'flex',gap:10,alignItems:'center',marginTop:4,flexWrap:'wrap'}}>
                       <span style={{fontSize:13,color:futData.chgPct>=0?C.green:C.red,fontWeight:600}}>
@@ -1145,7 +1216,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                 <Card color={`${futData.biasColor}40`}>
                   <Lbl color={futData.biasColor}>📊 MARKET STRUCTURE</Lbl>
                   <div style={{fontSize:12,color:'#8ab0c0',lineHeight:2}}>
-                    <span style={{color:futData.biasColor,fontWeight:600}}>{futData.sym} ({futData.cfg.label})</span> trading at <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.price.toFixed(2)}</span>, <span style={{color:futData.chgPct>=0?C.green:C.red}}>{futData.chgPct>=0?'up':'down'} {Math.abs(futData.chgPct).toFixed(2)}%</span> today.
+                    <span style={{color:futData.biasColor,fontWeight:600}}>{futData.cfg.display}</span> trading at <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.price.toFixed(2)}</span>, <span style={{color:futData.chgPct>=0?C.green:C.red}}>{futData.chgPct>=0?'up':'down'} {Math.abs(futData.chgPct).toFixed(2)}%</span> today.
                     {' '}Bias: <span style={{color:futData.biasColor,fontWeight:600}}>{futData.bias}</span> · Range: <span style={{color:C.red}}>${futData.lo.toFixed(2)}</span> – <span style={{color:C.green}}>${futData.hi.toFixed(2)}</span><br/>
                     Nearest resistance: <span style={{color:C.red,fontWeight:600}}>${futData.resistance[0]?.toFixed(2)||'—'}</span> · Nearest support: <span style={{color:C.green,fontWeight:600}}>${futData.support[0]?.toFixed(2)||'—'}</span><br/>
                     Main line in the sand: <span style={{color:'#c8d8e8',fontWeight:600}}>${futData.support[0]?.toFixed(2)||'—'}</span>
@@ -1288,7 +1359,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
 
 
                 <div style={{marginTop:8,fontSize:10,color:'#2a4a5a',textAlign:'center'}}>
-                  Data via Tradier {tradierMode} · Index: {futData.cfg.quote} · Options chain: {futData.cfg.chain} · S/R from top OI
+                  Data: {futData.priceSource} via Tradier {tradierMode} · Options chain: {futData.cfg.chain} · S/R from top OI strikes
                 </div>
               </div>
             )}
@@ -1390,7 +1461,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               </div>
 
               <div style={{marginBottom:10}}>
-                <Field label="Watchlist — blank = full SP500 pool (20 tickers)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY — or leave blank"/>
+                <Field label="Watchlist (blank = scans all ~350 S&P 500 stocks, shuffled each run)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY — or leave blank"/>
               </div>
 
               {/* Last alert */}
