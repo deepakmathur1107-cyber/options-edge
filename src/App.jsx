@@ -21,25 +21,42 @@ const safe   = v => v==null?'—':typeof v==='object'?JSON.stringify(v):String(v
 // ─── Module-level constants ───────────────────────────────────────────────────
 const TF_CONFIG = {
   'Quick (5–14 DTE)': {
-    expiryIdx:0, strikePct:1.02, profitTarget:0.50, stopLoss:0.50,
+    minDTE:5,   maxDTE:14,  strikePct:1.02, profitTarget:0.50, stopLoss:0.50,
     label:'Quick Play', badge:'⚡', color:C.green,
     desc:'5–14 DTE · Fast momentum plays · 50% profit target',
   },
   'Swing (21–45 DTE)': {
-    expiryIdx:2, strikePct:1.02, profitTarget:0.80, stopLoss:0.50,
+    minDTE:21,  maxDTE:45,  strikePct:1.02, profitTarget:0.80, stopLoss:0.50,
     label:'Swing Trade', badge:'📈', color:C.blue,
     desc:'21–45 DTE · Directional swing · 80% profit target',
   },
   'LEAP (90–180 DTE)': {
-    expiryIdx:4, strikePct:1.05, profitTarget:1.00, stopLoss:0.40,
+    minDTE:90,  maxDTE:180, strikePct:1.05, profitTarget:1.00, stopLoss:0.40,
     label:'LEAP Option', badge:'🏔️', color:C.orange,
     desc:'90–180 DTE · Trend plays · 100% profit target',
   },
   'Deep LEAP (180–365 DTE)': {
-    expiryIdx:6, strikePct:1.08, profitTarget:1.50, stopLoss:0.35,
+    minDTE:180, maxDTE:365, strikePct:1.08, profitTarget:1.50, stopLoss:0.35,
     label:'Deep LEAP', badge:'🚀', color:C.red,
     desc:'180–365 DTE · Long conviction · 150% profit target',
   },
+}
+
+// Pick the best expiry date within a DTE window.
+// Falls back to the closest available if no exact match in range.
+const pickExpiry = (dates, minDTE, maxDTE) => {
+  const now = new Date(); now.setHours(0,0,0,0)
+  const withDTE = dates.map(d => {
+    const exp = new Date(d+'T12:00:00')
+    const dte = Math.round((exp-now)/(1000*60*60*24))
+    return {date:d, dte}
+  }).filter(x=>x.dte>0)
+  // Ideal: first expiry inside the DTE window
+  const inRange = withDTE.filter(x=>x.dte>=minDTE && x.dte<=maxDTE)
+  if (inRange.length) return inRange[0].date
+  // Fallback: closest expiry to the midpoint of the window
+  const mid=(minDTE+maxDTE)/2
+  return withDTE.reduce((best,x)=>Math.abs(x.dte-mid)<Math.abs(best.dte-mid)?x:best, withDTE[0]).date
 }
 
 const FUT_SYMBOLS = {
@@ -248,6 +265,7 @@ export default function App() {
   const [toolsTab,   setToolsTab]   = useState('settings')
 
   // ── settings ──
+  const [anthropicKey,  setAnthropicKey]  = useState(()=>ls('anthropicKey'))
   const [tradierToken, setTradierToken] = useState(()=>ls('tradierToken'))
   const [tradierMode,  setTradierMode]  = useState(()=>ls('tradierMode','production'))
   const [tgToken,      setTgToken]      = useState(()=>ls('tgToken'))
@@ -257,6 +275,7 @@ export default function App() {
   const [scanFreq,     setScanFreq]     = useState(()=>Number(ls('scanFreq','5')))
   const [tgStatus,     setTgStatus]     = useState('')
 
+  useEffect(()=>{try{localStorage.setItem('anthropicKey', anthropicKey)}catch{}},[anthropicKey])
   useEffect(()=>{try{localStorage.setItem('tradierToken',tradierToken)}catch{}},[tradierToken])
   useEffect(()=>{try{localStorage.setItem('tradierMode', tradierMode)} catch{}},[tradierMode])
   useEffect(()=>{try{localStorage.setItem('tgToken',     tgToken)}     catch{}},[tgToken])
@@ -400,7 +419,7 @@ export default function App() {
       const expDates=await getExpiries(ticker)
       if (!expDates.length) throw new Error('No expiry dates found')
       const tfCfg=TF_CONFIG[scanTF]||TF_CONFIG['Swing (21–45 DTE)']
-      const expiryRaw=expDates[Math.min(tfCfg.expiryIdx,expDates.length-1)]
+      const expiryRaw=pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       dbg(`   ✓ Expiry: ${expiryRaw} → ${expiryDisplay}`)
 
@@ -634,7 +653,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
       if (!price) return null
       const expDates=await getExpiries(ticker)
       if (!expDates.length) return null
-      const expiryRaw=expDates[Math.min(tfCfg2.expiryIdx,expDates.length-1)]
+      const expiryRaw=pickExpiry(expDates, tfCfg2.minDTE, tfCfg2.maxDTE)
       const chain=await getChain(ticker,expiryRaw)
       if (!chain.length) return null
       const chgPct=parseFloat(quote.change_percentage||0)
@@ -742,7 +761,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
 
         for (const [tfKey, tfCfg] of Object.entries(TF_CONFIG)) {
           try {
-            const expiryRaw = expDates[Math.min(tfCfg.expiryIdx, expDates.length-1)]
+            const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
             if (!expiryRaw) continue
             const chain = await getChain(sym, expiryRaw)
             if (!chain.length) continue
@@ -811,6 +830,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
           spxChange: esBar?.chgPct?.toFixed(2),
           ndxPrice: nqBar?.price?.toFixed(2),
           ndxChange: nqBar?.chgPct?.toFixed(2),
+          apiKey: anthropicKey,
         })
       })
       const d = await r.json()
@@ -1458,6 +1478,17 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                       <Field label="Mode" value={tradierMode} onChange={setTradierMode} options={['production','sandbox']}/>
                     </div>
                     {tradierToken&&<div style={{fontSize:10,color:C.green}}>✓ Token set — using <strong>{tradierMode}</strong></div>}
+                  </Card>
+
+                  {/* Anthropic */}
+                  <Card style={{marginBottom:12}}>
+                    <Lbl color={C.orange}>🤖 CLAUDE AI — MORNING BRIEF</Lbl>
+                    <div style={{background:'#0a0c06',border:`1px solid ${C.orange}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:'#8a7a50',lineHeight:1.8}}>
+                      <strong style={{color:C.orange}}>Option A (recommended):</strong> Set <code style={{color:C.green}}>ANTHROPIC_API_KEY</code> in Vercel → Settings → Environment Variables → redeploy.{' '}
+                      <strong style={{color:C.orange}}>Option B (instant):</strong> Paste your key below — stored locally in your browser only.
+                    </div>
+                    <Field label="Anthropic API Key (claude.ai/settings → API Keys)" value={anthropicKey} onChange={setAnthropicKey} placeholder="sk-ant-api03-..." type="password"/>
+                    {anthropicKey&&<div style={{fontSize:10,color:C.green,marginTop:6}}>✓ Key set — Morning Brief will use this key</div>}
                   </Card>
 
                   {/* Telegram */}
