@@ -343,7 +343,9 @@ export default function App() {
   const [autoLog,     setAutoLog]     = useState([])
   const [lastAlert,   setLastAlert]   = useState(null)
   const [alertCopied, setAlertCopied] = useState(false)
-  const autoRef = useRef(null)
+  const autoRef    = useRef(null)
+  const scanTFRef  = useRef(scanTF)   // always holds live scanTF — avoids stale closure in interval
+  useEffect(()=>{ scanTFRef.current = scanTF },[scanTF])
 
   // ── futures (tools panel) ──
   const [futSym,     setFutSym]     = useState('ES')
@@ -698,13 +700,15 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
 
   const runAutoScan = useCallback(async()=>{
     if (!tradierToken) return
+    const activeTF = scanTFRef.current  // read live value — not stale closure
+    const tfCfgNow = TF_CONFIG[activeTF]||TF_CONFIG['Swing (21–45 DTE)']
     const list=watchlist.split(',').map(t=>t.trim().toUpperCase()).filter(Boolean)
     const shuffle=arr=>[...arr].sort(()=>Math.random()-.5)
     const tickers=list.length?list:shuffle(SP500)
     const ts=new Date().toLocaleTimeString()
-    setAutoLog(p=>[`[${ts}] Scanning ${tickers.length} tickers (${list.length?'custom watchlist':'full SP500 pool'})...`,...p.slice(0,99)])
+    setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
     for (const ticker of tickers) {
-      const r=await scanOneTicker(ticker, scanTF)
+      const r=await scanOneTicker(ticker, activeTF)
       const ts2=new Date().toLocaleTimeString()
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
@@ -725,10 +729,18 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
     if (autoOn) {
       clearInterval(autoRef.current)
       setAutoOn(false)
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] 🔴 Stopped`,...p.slice(0,99)])
+      const tfNow = scanTFRef.current
+      const tfLabel = TF_CONFIG[tfNow]?.label||tfNow
+      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ◼ Stopped · was using ${tfLabel}`,...p.slice(0,99)])
     } else {
+      // Re-read live scanTF so START always picks up whatever is currently selected
+      const tfNow = scanTFRef.current
+      const tfCfgNow = TF_CONFIG[tfNow]||TF_CONFIG['Swing (21–45 DTE)']
       setAutoOn(true)
-      setAutoLog([`[${new Date().toLocaleTimeString()}] 🟢 Started — every ${scanFreq} min`])
+      setAutoLog([
+        `[${new Date().toLocaleTimeString()}] ▶ Started · ${tfCfgNow.badge} ${tfCfgNow.label}`,
+        `[${new Date().toLocaleTimeString()}] DTE window: ${tfNow} · every ${scanFreq} min · ${minScore}%+ threshold`,
+      ])
       runAutoScan()
       autoRef.current=setInterval(runAutoScan,scanFreq*60*1000)
     }
@@ -833,10 +845,18 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
           apiKey: anthropicKey,
         })
       })
-      const d = await r.json()
-      setMorningBrief(d.brief || d.error || 'No brief returned')
+      // Read as text first — Vercel can return HTML error pages on server crashes
+      const text = await r.text()
+      let d
+      try { d = JSON.parse(text) } catch {
+        setMorningBrief('❌ Server returned non-JSON response:\n'+text.slice(0,300)+
+          '\n\nThis usually means the /api/morning function crashed on Vercel.\n'+
+          'Check Vercel → Deployments → Functions logs for details.')
+        setBriefLoading(false); return
+      }
+      setMorningBrief(d.brief || ('❌ '+(d.error||'No content returned')))
     } catch(e) {
-      setMorningBrief('❌ '+e.message+'\n\nEnsure ANTHROPIC_API_KEY is set in Vercel environment variables.')
+      setMorningBrief('❌ Fetch failed: '+e.message+'\n\nCheck that /api/morning.js is deployed.')
     }
     setBriefLoading(false)
   },[esBar,nqBar])
@@ -1260,7 +1280,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                 </div>
                 <div>
                   <div style={{fontSize:9,color:C.dim,letterSpacing:1.5,marginBottom:4}}>FREQUENCY</div>
-                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000)}}} style={iSt}>
+                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
