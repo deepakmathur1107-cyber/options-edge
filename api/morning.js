@@ -8,10 +8,12 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') { res.status(200).end(); return }
   if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  // Priority: Vercel env var (secure) → user-pasted key from app Settings (instant fallback)
+  const apiKey = process.env.ANTHROPIC_API_KEY || body.apiKey
+
   if (!apiKey) {
     res.status(400).json({
-      error: 'ANTHROPIC_API_KEY not set.\n\nAdd it in Vercel → Project → Settings → Environment Variables, then redeploy.'
+      error: 'No Anthropic API key found.\n\nFix A — Vercel env var (recommended): Vercel → Project → Settings → Environment Variables → add ANTHROPIC_API_KEY → redeploy.\n\nFix B — instant: paste your key in ⚙ Tools → Settings → Claude AI section in the app. Get a key at console.anthropic.com'
     })
     return
   }
