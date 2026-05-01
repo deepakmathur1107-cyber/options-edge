@@ -1,57 +1,59 @@
-// api/morning.js — Morning market brief via Claude AI + web search
-// Requires ANTHROPIC_API_KEY in Vercel environment variables
+// api/morning.js — Morning market brief via Claude AI (no web-search — stays under Vercel 10s limit)
+// Requires ANTHROPIC_API_KEY in Vercel env vars  -OR-  paste key in app ⚙ Settings → Claude AI
 
 module.exports = async function handler(req, res) {
+  // Always respond JSON — prevents "Unexpected token" crash in the browser
+  res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') { res.status(200).end(); return }
   if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return }
 
-  // Priority: Vercel env var (secure) → user-pasted key from app Settings (instant fallback)
-  const apiKey = process.env.ANTHROPIC_API_KEY || body.apiKey
-
-  if (!apiKey) {
-    res.status(400).json({
-      error: 'No Anthropic API key found.\n\nFix A — Vercel env var (recommended): Vercel → Project → Settings → Environment Variables → add ANTHROPIC_API_KEY → redeploy.\n\nFix B — instant: paste your key in ⚙ Tools → Settings → Claude AI section in the app. Get a key at console.anthropic.com'
-    })
-    return
-  }
-
   let body = req.body
   if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
   body = body || {}
+
+  // Priority: Vercel env var (secure) → key pasted in app Settings (instant fallback)
+  const apiKey = process.env.ANTHROPIC_API_KEY || body.apiKey
+
+  if (!apiKey) {
+    return res.status(400).json({
+      error: [
+        'No Anthropic API key found. Two ways to fix:',
+        '',
+        'A) Instant — paste your key in ⚙ Tools → Settings → Claude AI section in the app.',
+        '   Get a free key at: console.anthropic.com → API Keys',
+        '',
+        'B) Permanent — add ANTHROPIC_API_KEY in Vercel → Project → Settings →',
+        '   Environment Variables, then redeploy.',
+      ].join('\n')
+    })
+  }
 
   const { spxPrice, spxChange, ndxPrice, ndxChange } = body
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
 
-  const systemPrompt = `You are a pre-market trading analyst writing a concise morning briefing for options traders.
-Format rules:
-- Plain text only — no markdown, no asterisks, no hyphens as bullets
-- Use ALL CAPS for section headers followed by a colon
-- Keep each section to 2-3 lines max
-- Be data-driven and specific (prices, percentages, dates)
-- Focus exclusively on what matters to SPX/NDX options traders
+  const spxLine = spxPrice ? `SPX ${spxPrice} (${Number(spxChange) >= 0 ? '+' : ''}${spxChange}%)` : 'SPX: not loaded'
+  const ndxLine = ndxPrice ? `NDX ${ndxPrice} (${Number(ndxChange) >= 0 ? '+' : ''}${ndxChange}%)` : 'NDX: not loaded'
 
-Current market snapshot:
-SPX: ${spxPrice || 'N/A'} (${spxChange >= 0 ? '+' : ''}${spxChange || 'N/A'}%)
-NDX: ${ndxPrice || 'N/A'} (${ndxChange >= 0 ? '+' : ''}${ndxChange || 'N/A'}%)`
+  const prompt = `Generate a pre-market morning briefing for options traders. Today is ${today}.
 
-  const userPrompt = `Generate today's pre-market briefing for ${today}.
+Current index snapshot: ${spxLine} | ${ndxLine}
 
-Include these 5 sections:
+Format as plain text with 5 ALL-CAPS section headers. No markdown. No bullet symbols. Keep each section under 3 lines.
 
-MARKET DIRECTION: Overall trend assessment — bullish, bearish, or choppy — with 1-2 sentences of context based on overnight futures and Asia/Europe closes.
+MARKET DIRECTION: Assess the overall trend (bullish / bearish / choppy) based on recent SPX/NDX price action and overnight context. Reference the index values above.
 
-TOP HEADLINES: 3 most market-moving news items from overnight and premarket. Include the company or event name and rough magnitude of the move.
+TOP HEADLINES: List 3 market-moving themes or macro events likely relevant this week — earnings season, Fed policy, inflation data, geopolitical risk, or sector rotation. Be specific.
 
-ECONOMIC CALENDAR: Key data releases today — name, time (ET), and expected market impact (low/medium/high).
+ECONOMIC CALENDAR: Name 2-3 key data types typically released this time of month and their expected market impact (e.g., NFP, CPI, FOMC minutes, PMI). Note high/medium/low impact.
 
-KEY LEVELS: SPX and NDX support and resistance levels to watch intraday. Include today's open, yesterday's close, and key technical levels.
+KEY LEVELS: Give specific SPX and NDX support and resistance levels based on the prices above. Include a round-number level, a recent high/low zone, and a psychological level.
 
-TRADE BIAS: One sentence — directional leaning for today's session and the primary risk to that view.`
+TRADE BIAS: One sentence — directional lean for the session and the primary risk that would invalidate it.`
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -60,37 +62,37 @@ TRADE BIAS: One sentence — directional leaning for today's session and the pri
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'web-search-2025-03-05',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 800,
+        messages: [{ role: 'user', content: prompt }],
       }),
     })
 
-    const data = await response.json()
-
-    if (data.error) {
-      res.status(400).json({ error: data.error.message || 'Claude API error' })
-      return
+    // Read as text first — never assume JSON from upstream
+    const raw = await response.text()
+    let data
+    try { data = JSON.parse(raw) } catch {
+      return res.status(502).json({ error: `Claude API returned non-JSON: ${raw.slice(0, 200)}` })
     }
 
-    // Extract all text blocks (web search may add multiple text content blocks)
+    if (data.error) {
+      return res.status(400).json({ error: `Claude API error: ${data.error.message || JSON.stringify(data.error)}` })
+    }
+
     const brief = (data.content || [])
       .filter(b => b.type === 'text')
       .map(b => b.text)
       .join('\n')
       .trim()
 
-    res.status(200).json({
-      brief,
+    return res.status(200).json({
+      brief: brief || 'No content returned from Claude.',
       generatedAt: new Date().toISOString(),
-      model: data.model || 'claude-sonnet-4',
+      model: data.model,
     })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    return res.status(500).json({ error: `Server error: ${err.message}` })
   }
 }
