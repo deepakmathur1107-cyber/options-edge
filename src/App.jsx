@@ -43,12 +43,13 @@ const TF_CONFIG = {
 }
 
 const FUT_SYMBOLS = {
-  ES:  { name:'/ES — E-Mini S&P 500',    futures:'/ES',  index:'$SPX.X', chain:'SPX',  display:'/ES' },
-  NQ:  { name:'/NQ — E-Mini Nasdaq 100', futures:'/NQ',  index:'$NDX.X', chain:'NDX',  display:'/NQ' },
-  YM:  { name:'/YM — Dow Jones',         futures:'/YM',  index:'$DJI',   chain:'DJX',  display:'/YM' },
-  RTY: { name:'/RTY — Russell 2000',     futures:'/RTY', index:'$RUT.X', chain:'RUT',  display:'/RTY' },
-  CL:  { name:'/CL — Crude Oil',         futures:'/CL',  index:'$WTIC',  chain:'USO',  display:'/CL' },
-  GC:  { name:'/GC — Gold',              futures:'/GC',  index:'$GOLD',  chain:'GLD',  display:'/GC' },
+  // Primary is the Tradier-reliable symbol. SPX/NDX are the real index levels (≈ /ES /NQ)
+  ES:  { name:'SPX — S&P 500 Index',     primary:'SPX',  fallback:'$SPX.X', chain:'SPX',  display:'SPX' },
+  NQ:  { name:'NDX — Nasdaq 100 Index',  primary:'NDX',  fallback:'$NDX.X', chain:'NDX',  display:'NDX' },
+  YM:  { name:'DJX — Dow Jones Index',   primary:'DJX',  fallback:'$DJI',   chain:'DJX',  display:'DJX' },
+  RTY: { name:'RUT — Russell 2000',      primary:'RUT',  fallback:'$RUT.X', chain:'RUT',  display:'RUT' },
+  CL:  { name:'/CL — Crude Oil (USO)',   primary:'USO',  fallback:'USO',    chain:'USO',  display:'USO' },
+  GC:  { name:'/GC — Gold (GLD)',        primary:'GLD',  fallback:'GLD',    chain:'GLD',  display:'GLD' },
 }
 
 // Full S&P 500 constituent list
@@ -269,6 +270,13 @@ export default function App() {
   const [nqBar, setNqBar] = useState(null)
   const [barLoading, setBarLoading] = useState(false)
 
+  // ── index alerts & conviction ──
+  const [indexAlerts,        setIndexAlerts]        = useState([])
+  const [indexAlertsLoading, setIndexAlertsLoading] = useState(false)
+  const [marketConviction,   setMarketConviction]   = useState(null)
+  const [morningBrief,       setMorningBrief]       = useState('')
+  const [briefLoading,       setBriefLoading]       = useState(false)
+
   // ── checklist ──
   const [checked, setChecked] = useState({})
   const clScore = Math.round(Object.values(checked).filter(Boolean).length/CHECKLIST.length*100)
@@ -343,12 +351,32 @@ export default function App() {
       }
       return null
     }
+    // SPX/NDX are the primary symbols — direct Tradier index quotes
     const [es, nq] = await Promise.all([
-      tryQuote(['/ES','$SPX.X']),
-      tryQuote(['/NQ','$NDX.X']),
+      tryQuote(['SPX','$SPX.X','SPY']),
+      tryQuote(['NDX','$NDX.X','QQQ']),
     ])
-    if (es) setEsBar(es)
-    if (nq) setNqBar(nq)
+    if (es) setEsBar({...es, label:'SPX'})
+    if (nq) setNqBar({...nq, label:'NDX'})
+    // Update market conviction whenever prices refresh
+    if (es) {
+      const spxChg = es.chgPct
+      const ndxChg = nq?.chgPct || spxChg
+      const volR   = 1 // volume not in bar data — neutral
+      let bull = 50
+      if (spxChg > 1.0) bull += 22
+      else if (spxChg > 0.5) bull += 14
+      else if (spxChg > 0.1) bull += 6
+      else if (spxChg < -1.0) bull -= 22
+      else if (spxChg < -0.5) bull -= 14
+      else if (spxChg < -0.1) bull -= 6
+      if (ndxChg > 0 && spxChg > 0) bull += 8
+      else if (ndxChg < 0 && spxChg < 0) bull -= 8
+      bull = Math.min(94, Math.max(6, bull))
+      const dir = bull >= 62 ? 'BULLISH' : bull <= 38 ? 'BEARISH' : 'NEUTRAL'
+      setMarketConviction({ score: bull, direction: dir, spxChg, ndxChg,
+        color: dir==='BULLISH'?C.green:dir==='BEARISH'?C.red:C.orange })
+    }
     setBarLoading(false)
   },[tradierToken,tradierMode])
 
@@ -458,20 +486,20 @@ export default function App() {
     setFutLoading(true);setFutErr('');setFutData(null)
     const cfg=FUT_SYMBOLS[sym]
     try {
-      let quote=null,priceSource=cfg.display
-      try {
-        quote=await getQuote(cfg.futures)
-        const testPrice=parseFloat(quote?.last||quote?.prevclose||0)
-        if (!testPrice) quote=null
-      } catch { quote=null }
-      if (!quote) {
-        priceSource=cfg.index
-        quote=await getQuote(cfg.index)
+      // Use primary symbol directly (SPX, NDX, etc.)
+      let quote = null, priceSource = cfg.display, usingFutures = false
+      for (const sym of [cfg.primary, cfg.fallback]) {
+        try {
+          const q = await getQuote(sym)
+          const p = parseFloat(q?.last||q?.prevclose||0)
+          if (p) { quote=q; priceSource=sym; break }
+        } catch {}
       }
-      if (!quote) throw new Error(`No quote for ${cfg.display} or ${cfg.index}`)
+      if (!quote) throw new Error(
+        `No quote for ${cfg.primary}. Check your Tradier token in ⚙ Settings.`
+      )
       const price=parseFloat(quote.last||quote.prevclose||0)
       if (!price) throw new Error('Price is $0 — market may be closed')
-      const usingFutures=priceSource===cfg.display
 
       const expDates=await getExpiries(cfg.chain)
       const expiry=expDates[1]||expDates[0]
@@ -597,7 +625,8 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
   }
 
   // ─── Auto scanner ─────────────────────────────────────────────────────────
-  const scanOneTicker = useCallback(async ticker=>{
+  const scanOneTicker = useCallback(async (ticker, tf='Swing (21–45 DTE)')=>{
+    const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)']
     try {
       const quote=await getQuote(ticker)
       if (!quote) return null
@@ -605,7 +634,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
       if (!price) return null
       const expDates=await getExpiries(ticker)
       if (!expDates.length) return null
-      const expiryRaw=expDates[Math.min(2,expDates.length-1)]
+      const expiryRaw=expDates[Math.min(tfCfg2.expiryIdx,expDates.length-1)]
       const chain=await getChain(ticker,expiryRaw)
       if (!chain.length) return null
       const chgPct=parseFloat(quote.change_percentage||0)
@@ -638,8 +667,9 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
         expiryDisplay,
         entry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
-        target:`$${(mid*1.80).toFixed(2)} (+80%)`,
-        stop:`$${(mid*0.50).toFixed(2)} (-50%)`,
+        target:`$${(mid*(1+tfCfg2.profitTarget)).toFixed(2)} (+${(tfCfg2.profitTarget*100).toFixed(0)}%)`,
+        stop:`$${(mid*(1-tfCfg2.stopLoss)).toFixed(2)} (-${(tfCfg2.stopLoss*100).toFixed(0)}%)`,
+        tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
@@ -655,7 +685,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
     const ts=new Date().toLocaleTimeString()
     setAutoLog(p=>[`[${ts}] Scanning ${tickers.length} tickers (${list.length?'custom watchlist':'full SP500 pool'})...`,...p.slice(0,99)])
     for (const ticker of tickers) {
-      const r=await scanOneTicker(ticker)
+      const r=await scanOneTicker(ticker, scanTF)
       const ts2=new Date().toLocaleTimeString()
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
@@ -695,6 +725,101 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
     setShowAdd(false)
   }
   const gradeCol=g=>g==='A'?C.green:g==='B'?C.orange:C.red
+
+  // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
+  const generateIndexAlerts = useCallback(async()=>{
+    setIndexAlertsLoading(true); setIndexAlerts([])
+    const results = []
+    for (const sym of ['SPX','NDX']) {
+      try {
+        const quote = await getQuote(sym)
+        if (!quote) continue
+        const price = parseFloat(quote.last||quote.prevclose||0)
+        if (!price) continue
+        const expDates = await getExpiries(sym)
+        if (!expDates.length) continue
+        const chgPct = parseFloat(quote.change_percentage||0)
+
+        for (const [tfKey, tfCfg] of Object.entries(TF_CONFIG)) {
+          try {
+            const expiryRaw = expDates[Math.min(tfCfg.expiryIdx, expDates.length-1)]
+            if (!expiryRaw) continue
+            const chain = await getChain(sym, expiryRaw)
+            if (!chain.length) continue
+
+            // Determine bias from price action
+            const bearish = chgPct < -0.2
+            const optType = bearish ? 'put' : 'call'
+            const step = autoStep(price)
+            const tgtStrike = bearish
+              ? Math.round(price*(2-tfCfg.strikePct)/step)*step
+              : Math.round(price*tfCfg.strikePct/step)*step
+            const side = chain.filter(o=>o.option_type===optType)
+            if (!side.length) continue
+            const best = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
+            const bid=parseFloat(best.bid||0), ask=parseFloat(best.ask||0), mid=(bid+ask)/2
+            if (mid===0) continue
+            const iv=best.greeks?.mid_iv||0, delta=best.greeks?.delta||null
+
+            // Score — generous for indices (predictable trend vehicles)
+            const vol=quote.volume||0, avg=quote.average_volume||vol
+            const volRatio=vol/(avg||1)
+            let score=52; const reasons=[],warnings=[]
+            if(volRatio>=1.5){score+=14;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
+            else if(volRatio<0.8){score-=8;warnings.push(`Low volume`)}
+            if(Math.abs(chgPct)>=0.5){score+=12;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
+            else if(Math.abs(chgPct)>=0.2){score+=6}
+            if(iv>=0.10&&iv<=0.40){score+=12;reasons.push(`IV ${(iv*100).toFixed(0)}% — tradeable`)}
+            else if(iv>0.50){warnings.push(`Elevated IV ${(iv*100).toFixed(0)}%`)}
+            if(delta&&Math.abs(delta)>=0.30&&Math.abs(delta)<=0.70){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
+            // Bonus: both SPX + NDX moving together
+            if(marketConviction&&((marketConviction.spxChg>0&&!bearish)||(marketConviction.spxChg<0&&bearish))){score+=8;reasons.push('Market aligned')}
+            score=Math.min(96,Math.max(30,score))
+
+            const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+            results.push({
+              sym, tfKey, tfLabel:tfCfg.label, tfBadge:tfCfg.badge, tfColor:tfCfg.color,
+              tradeType: optType==='call'?'Call':'Put',
+              strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
+              expiryDisplay, score,
+              grade:score>=90?'A+':score>=80?'A':score>=70?'B':'C',
+              price:fmtP(price), bid:fmtP(bid), ask:fmtP(ask), mid:fmtP(mid),
+              iv:fmtPct(iv), delta:delta?delta.toFixed(3):'—',
+              entry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
+              target:`$${(mid*(1+tfCfg.profitTarget)).toFixed(2)} (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
+              stop:`$${(mid*(1-tfCfg.stopLoss)).toFixed(2)} (-${(tfCfg.stopLoss*100).toFixed(0)}%)`,
+              reasons, warnings, chgPct:chgPct.toFixed(2)+'%',
+            })
+          } catch {}
+        }
+      } catch {}
+    }
+    results.sort((a,b)=>b.score-a.score)
+    setIndexAlerts(results)
+    setIndexAlertsLoading(false)
+  },[tradierToken,tradierMode,marketConviction])
+
+  // ─── Morning brief via Claude API ─────────────────────────────────────────
+  const fetchMorningBrief = useCallback(async()=>{
+    setBriefLoading(true); setMorningBrief('')
+    try {
+      const r = await fetch('/api/morning', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          spxPrice: esBar?.price?.toFixed(2),
+          spxChange: esBar?.chgPct?.toFixed(2),
+          ndxPrice: nqBar?.price?.toFixed(2),
+          ndxChange: nqBar?.chgPct?.toFixed(2),
+        })
+      })
+      const d = await r.json()
+      setMorningBrief(d.brief || d.error || 'No brief returned')
+    } catch(e) {
+      setMorningBrief('❌ '+e.message+'\n\nEnsure ANTHROPIC_API_KEY is set in Vercel environment variables.')
+    }
+    setBriefLoading(false)
+  },[esBar,nqBar])
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
@@ -736,8 +861,8 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         {/* /ES /NQ price bar */}
         <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:'#070c12'}}>
           {[
-            {sym:'/ES',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
-            {sym:'/NQ',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
+            {sym:esBar?.label||'SPX',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
+            {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
           ].map(({sym,data,color},i)=>(
             <div key={sym} style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
               <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:2,color:C.dim}}>{sym}</span>
@@ -765,88 +890,158 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         {tab==='dash' && (
           <div className="si">
 
-            {/* Market overview mini cards */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+            {/* ── SPX / NDX price cards ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
               {[
-                {sym:'/ES',data:esBar,label:'E-Mini S&P 500'},
-                {sym:'/NQ',data:nqBar,label:'E-Mini Nasdaq 100'},
+                {sym:esBar?.label||'SPX',data:esBar,label:'S&P 500 Index'},
+                {sym:nqBar?.label||'NDX',data:nqBar,label:'Nasdaq 100 Index'},
               ].map(({sym,data,label})=>{
                 const up=data?.chgPct>=0
                 const bc=data?up?C.green:C.red:C.dim
                 return (
-                  <div key={sym} style={{background:C.card,border:`1px solid ${data?bc+'40':C.border}`,borderRadius:6,padding:'12px 14px'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:4}}>
-                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:2,color:bc}}>{sym}</span>
-                      {data && <span style={{fontSize:9,color:bc,border:`1px solid ${bc}40`,padding:'1px 5px',borderRadius:3,letterSpacing:.5}}>{data.chgPct>=0?'BULL':'BEAR'}</span>}
+                  <div key={sym} style={{background:C.card,border:`1px solid ${data?bc+'40':C.border}`,borderRadius:6,padding:'11px 13px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}}>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,color:bc}}>{sym}</span>
+                      {data && <span style={{fontSize:8,color:bc,border:`1px solid ${bc}40`,padding:'1px 5px',borderRadius:3}}>{up?'▲ BULL':'▼ BEAR'}</span>}
                     </div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:'#c8d8e8',letterSpacing:1,lineHeight:1.1}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:'#c8d8e8',letterSpacing:1,lineHeight:1.1}}>
                       {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
                     </div>
-                    {data && <div style={{fontSize:11,color:bc,marginTop:3}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}% · {data.chg>=0?'+':''}{data.chg.toFixed(2)}</div>}
-                    {!data && <div style={{fontSize:10,color:C.dim,marginTop:3}}>{label}</div>}
+                    {data && <div style={{fontSize:10,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}% ({data.chg>=0?'+':''}{data.chg.toFixed(2)})</div>}
+                    {!data && <div style={{fontSize:9,color:C.dim,marginTop:2}}>{label}</div>}
                   </div>
                 )
               })}
             </div>
 
-            {/* Fetch market data CTA if no data */}
+            {/* ── No token CTA ── */}
             {!esBar && !nqBar && (
-              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-                <div>
-                  <div style={{fontSize:11,color:C.blue,marginBottom:2}}>Live market data requires Tradier token</div>
-                  <div style={{fontSize:10,color:C.dim}}>Add your token in ⚙ Tools → Settings, then tap Refresh (↺)</div>
-                </div>
-                <button className="hv" onClick={()=>{setToolsTab('settings');setShowTools(true)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer',whiteSpace:'nowrap'}}>ADD TOKEN</button>
+              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+                <div style={{fontSize:10,color:C.blue}}>Add Tradier token in Settings to load live SPX/NDX data</div>
+                <button className="hv" onClick={()=>{setToolsTab('settings');setShowTools(true)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>ADD TOKEN</button>
               </div>
             )}
 
-            {/* Latest alert card */}
-            {lastAlert ? (
-              <div style={{background:'#020e06',border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                  <div style={{fontSize:9,color:C.green,letterSpacing:2}}>🚀 TOP SETUP — AUTO SCAN</div>
-                  <div style={{display:'flex',gap:6}}>
-                    <button className="hv" onClick={()=>pushToAlert(lastAlert)} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'4px 10px',borderRadius:3,fontSize:9,letterSpacing:.5,cursor:'pointer'}}>→ ALERT</button>
-                    {tgToken&&tgChatId&&(
-                      <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert(lastAlert),tgToken,tgChatId);setTgStatus('✅ Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'4px 10px',borderRadius:3,fontSize:9,letterSpacing:.5,cursor:'pointer'}}>📤 TG</button>
-                    )}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
-                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.green,letterSpacing:2}}>${lastAlert.ticker}</span>
-                  <span style={{fontSize:13,color:'#c8d8e8'}}>{lastAlert.tradeType} {lastAlert.strikeStr}</span>
-                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.green}}>{lastAlert.score}%</span>
-                  <span style={{fontSize:10,color:gradeCol(lastAlert.grade),border:`1px solid ${gradeCol(lastAlert.grade)}40`,padding:'2px 6px',borderRadius:3}}>GRADE {lastAlert.grade}</span>
-                </div>
-                <div style={{fontSize:11,color:C.dim}}>Entry: {lastAlert.entry} · Target: {lastAlert.target} · Stop: {lastAlert.stop}</div>
-                <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:7}}>
-                  {(lastAlert.reasons||[]).map((r,i)=><span key={i} style={{fontSize:9,color:C.green,background:`${C.green}10`,padding:'2px 6px',borderRadius:3}}>✓ {r}</span>)}
-                </div>
-                {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:5}}>{tgStatus}</div>}
-              </div>
-            ) : (
-              <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-                <div>
-                  <div style={{fontSize:11,color:C.dim,marginBottom:2}}>No alerts yet</div>
-                  <div style={{fontSize:10,color:'#3a6070'}}>Run the scanner or start Auto-Scan to find setups</div>
-                </div>
-                <button className="hv" onClick={()=>setTab('scan')} style={{background:`${C.green}18`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ SCAN</button>
-              </div>
-            )}
-
-            {/* Checklist score widget */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+            {/* ── Market Conviction ── */}
+            <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>PRE-TRADE CHECKLIST</div>
-                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'3px 8px',borderRadius:3,cursor:'pointer',letterSpacing:.5}}>OPEN →</button>
+                <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>MARKET CONVICTION</div>
+                <button className="hv" onClick={fetchPriceBar} style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>{'↺'} REFRESH</button>
               </div>
-              <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:6}}>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,color:clColor,letterSpacing:1,lineHeight:1}}>{clScore}%</div>
-                <div>
-                  <div style={{fontSize:12,color:clScore>=80?C.green:clScore>=60?C.orange:C.red}}>
-                    {clScore>=80?'STRONG SETUP 🔥':clScore>=60?'CAUTION ⚠️':'SKIP THIS TRADE ❌'}
+              {marketConviction ? (
+                <>
+                  <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:42,color:marketConviction.color,letterSpacing:1,lineHeight:1}}>{marketConviction.score}%</div>
+                    <div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:marketConviction.color,letterSpacing:2}}>{marketConviction.direction}</div>
+                      <div style={{fontSize:10,color:C.dim,marginTop:2}}>
+                        SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% {'·'} NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%
+                      </div>
+                    </div>
                   </div>
-                  <div style={{fontSize:10,color:C.dim,marginTop:1}}>{Object.values(checked).filter(Boolean).length} of {CHECKLIST.length} checks met</div>
+                  <div style={{position:'relative',height:6,background:C.border,borderRadius:3,overflow:'hidden'}}>
+                    <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
+                    <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:'#2a4a5a'}}/>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#2a5060',marginTop:3}}>
+                    <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
+                  </div>
+                </>
+              ) : (
+                <div style={{fontSize:11,color:C.dim,textAlign:'center',padding:'8px 0'}}>Fetch market data to see conviction</div>
+              )}
+            </div>
+
+            {/* ── Index Setups (SPX/NDX alerts) ── */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>SPX / NDX INDEX SETUPS</div>
+                  <div style={{fontSize:9,color:'#2a5060',marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
+                </div>
+                <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading||!tradierToken} style={{
+                  background:indexAlertsLoading?'transparent':`${C.green}18`,
+                  border:`1px solid ${indexAlertsLoading||!tradierToken?C.border:C.green}`,
+                  color:indexAlertsLoading||!tradierToken?C.dim:C.green,
+                  padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
+                  cursor:tradierToken&&!indexAlertsLoading?'pointer':'not-allowed',
+                  fontFamily:"'Bebas Neue',sans-serif",
+                }}>
+                  {indexAlertsLoading?<span className="pulse">SCANNING</span>:'GENERATE'}
+                </button>
+              </div>
+              {indexAlerts.length===0 && !indexAlertsLoading && (
+                <div style={{fontSize:10,color:'#2a5060',textAlign:'center',padding:'10px 0'}}>
+                  {tradierToken?'Hit GENERATE to scan SPX & NDX across all 4 timeframes':'Add Tradier token first'}
+                </div>
+              )}
+              {indexAlerts.slice(0,6).map((al,i)=>{
+                const high=al.score>=90; const midHit=al.score>=75
+                const cardC=high?C.green:midHit?C.blue:C.dim
+                return (
+                  <div key={i} style={{background:'#06101a',border:`1px solid ${cardC}30`,borderRadius:4,padding:'9px 11px',marginBottom:6}}>
+                    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:cardC,letterSpacing:2}}>{al.sym}</span>
+                      <span style={{fontSize:10,color:'#c8d8e8'}}>{al.tradeType} {al.strikeStr}</span>
+                      <span style={{fontSize:8,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 5px',borderRadius:2}}>{al.tfBadge} {al.tfLabel}</span>
+                      {high&&<span style={{fontSize:8,color:C.green,border:`1px solid ${C.green}40`,padding:'1px 5px',borderRadius:2}}>90%+ HIGH CONVICTION</span>}
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
+                    </div>
+                    <div style={{display:'flex',gap:10,fontSize:10,color:C.dim,marginBottom:4,flexWrap:'wrap'}}>
+                      <span>Entry: <span style={{color:'#8ab0c0'}}>{al.entry}</span></span>
+                      <span>Tgt: <span style={{color:C.green}}>{al.target}</span></span>
+                      <span>Stp: <span style={{color:C.red}}>{al.stop}</span></span>
+                    </div>
+                    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                      <span style={{fontSize:9,color:'#3a6070'}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv} {'·'} Delta: {al.delta}</span>
+                      {tgToken&&tgChatId&&(
+                        <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:9,cursor:'pointer'}}>TG</button>
+                      )}
+                    </div>
+                    {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:8,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
+                  </div>
+                )
+              })}
+              {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:4}}>{tgStatus}</div>}
+            </div>
+
+            {/* ── Morning Readout ── */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
+                <div>
+                  <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>MORNING READOUT</div>
+                  <div style={{fontSize:9,color:'#2a5060',marginTop:2}}>Claude AI brief {'·'} premarket news {'·'} key levels</div>
+                </div>
+                <button className="hv" onClick={fetchMorningBrief} disabled={briefLoading} style={{
+                  background:briefLoading?'transparent':`${C.orange}18`,
+                  border:`1px solid ${briefLoading?C.border:C.orange}`,
+                  color:briefLoading?C.dim:C.orange,
+                  padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
+                  cursor:briefLoading?'default':'pointer',fontFamily:"'Bebas Neue',sans-serif",
+                }}>
+                  {briefLoading?<span className="pulse">GENERATING</span>:'GENERATE'}
+                </button>
+              </div>
+              {morningBrief ? (
+                <pre style={{fontSize:10,lineHeight:1.85,color:'#8ab0c0',margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word',borderTop:`1px solid ${C.border}`,paddingTop:9,fontFamily:"'IBM Plex Mono',monospace"}}>{morningBrief}</pre>
+              ) : (
+                <div style={{fontSize:10,color:'#2a5060',textAlign:'center',padding:'8px 0'}}>
+                  Set ANTHROPIC_API_KEY in Vercel env vars to enable
+                </div>
+              )}
+            </div>
+
+            {/* ── Checklist ── */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
+                <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>PRE-TRADE CHECKLIST</div>
+                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>OPEN</button>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:clColor,letterSpacing:1,lineHeight:1}}>{clScore}%</div>
+                <div>
+                  <div style={{fontSize:11,color:clScore>=80?C.green:clScore>=60?C.orange:C.red}}>{clScore>=80?'STRONG SETUP':clScore>=60?'CAUTION':'SKIP THIS TRADE'}</div>
+                  <div style={{fontSize:9,color:C.dim,marginTop:1}}>{Object.values(checked).filter(Boolean).length}/{CHECKLIST.length} checks</div>
                 </div>
               </div>
               <div style={{width:'100%',height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
@@ -854,28 +1049,18 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
               </div>
             </div>
 
-            {/* Journal summary */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:14}}>
+            {/* ── Journal summary ── */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:12}}>
               {[
                 {l:'TOTAL P&L',v:(jStats.pnl>=0?'+':'-')+'$'+Math.abs(jStats.pnl).toFixed(0),c:jStats.pnl>=0?C.green:C.red},
                 {l:'WIN RATE', v:jStats.wr+'%',c:jStats.wr>=60?C.green:jStats.wr>=45?C.orange:C.red},
                 {l:'OPEN',     v:String(jStats.open),c:C.blue},
               ].map((s,i)=>(
-                <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
+                <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'9px 11px'}}>
                   <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{s.l}</div>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:s.c}}>{s.v}</div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:s.c}}>{s.v}</div>
                 </div>
               ))}
-            </div>
-
-            {/* Strategy golden rule */}
-            <div style={{background:'#050c14',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 14px',fontSize:12,color:'#6a9aaa',lineHeight:1.7}}>
-              <span style={{fontSize:9,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
-              Require <span style={{color:C.green}}>2+ TA signals</span> + <span style={{color:C.blue}}>1 flow signal</span> or <span style={{color:C.orange}}>1 catalyst</span> before entry.
-              <div style={{marginTop:5,display:'flex',gap:5,flexWrap:'wrap'}}>
-                <button className="hv" onClick={()=>{setToolsTab('strategy');setShowTools(true)}} style={{fontSize:9,color:C.green,background:'transparent',border:`1px solid ${C.green}30`,padding:'3px 8px',borderRadius:3,cursor:'pointer',letterSpacing:.5}}>STRATEGY →</button>
-                <button className="hv" onClick={()=>{setToolsTab('exit');setShowTools(true)}} style={{fontSize:9,color:C.orange,background:'transparent',border:`1px solid ${C.orange}30`,padding:'3px 8px',borderRadius:3,cursor:'pointer',letterSpacing:.5}}>EXIT RULES →</button>
-              </div>
             </div>
           </div>
         )}
@@ -1455,7 +1640,16 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                     {futLoading?<span className="pulse">🔴 FETCHING {FUT_SYMBOLS[futSym]?.display}...</span>:`📡 FETCH ${futSym} — ${FUT_SYMBOLS[futSym]?.name}`}
                   </button>
 
-                  {futErr&&<div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:5,padding:10,color:C.red,fontSize:11,marginBottom:10}}>{futErr}</div>}
+                  {futErr&&(
+                    <div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:5,padding:10,marginBottom:10,lineHeight:1.6}}>
+                      <div style={{color:C.red,fontSize:11,marginBottom:5}}>{futErr}</div>
+                      <div style={{fontSize:10,color:'#6a3040'}}>
+                        <strong style={{color:C.orange}}>Tip:</strong> Futures + index symbols need Tradier production tier.
+                        The ETF proxy (SPY/QQQ etc.) always works — it's loaded as final fallback automatically.
+                        If all 3 fail, your token is missing or invalid — add it in Settings.
+                      </div>
+                    </div>
+                  )}
 
                   {futData&&(
                     <div>
