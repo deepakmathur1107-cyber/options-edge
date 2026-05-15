@@ -59,6 +59,123 @@ const pickExpiry = (dates, minDTE, maxDTE) => {
   return withDTE.reduce((best,x)=>Math.abs(x.dte-mid)<Math.abs(best.dte-mid)?x:best, withDTE[0]).date
 }
 
+// ─── Structure Intelligence ──────────────────────────────────────────────────
+// Analyses IV level, momentum, and directional strength to recommend the
+// optimal options structure for each setup. Zero API calls — pure logic.
+//
+// Decision matrix:
+//   IV > 55%  + direction   → Credit Spread  (sell elevated premium)
+//   IV > 55%  + no dir      → Iron Condor    (range-bound, collect both sides)
+//   IV 28-55% + direction   → Debit Spread   (45% cheaper than naked)
+//   IV 28-55% + no dir      → Butterfly      (pin play, cheapest structure)
+//   IV < 28%  + direction   → Naked Option   (premium cheap, max leverage)
+//   IV < 28%  + no dir      → Strangle       (cheap to buy both sides)
+
+const pickStructure = (ivRaw, chgPct, mid, tfCfg) => {
+  const iv       = (ivRaw||0) * 100          // e.g. 0.38 → 38
+  const mom      = Math.abs(chgPct||0)
+  const bull     = (chgPct||0) >= 0
+  const strongDir = mom >= 1.2
+  const modDir    = mom >= 0.4
+  const hasDir    = modDir || strongDir
+  const m         = parseFloat(mid)||1       // mid premium value
+
+  // ── HIGH IV (>55%) — sell premium ──────────────────────────────────────────
+  if (iv > 55) {
+    if (hasDir) {
+      const type  = bull ? 'Bull Put Spread' : 'Bear Call Spread'
+      const cred  = (m * 0.35).toFixed(2)
+      return {
+        structure:'Credit Spread', type, icon:'📐',
+        color: bull ? '#00ff88' : '#ff4466',
+        why:`IV ${iv.toFixed(0)}% is elevated — selling premium beats buying it here. A ${type} collects credit and profits from the ${bull?'upside':'downside'} move while capping risk.`,
+        setup: bull
+          ? `Sell OTM put + buy lower-strike put, same expiry. Profit if stock stays above your short strike at expiry.`
+          : `Sell OTM call + buy higher-strike call, same expiry. Profit if stock stays below your short strike.`,
+        entry: `$${cred} credit received per spread`,
+        target:`Close at 50% of credit ($${(m*0.175).toFixed(2)} profit)`,
+        stop:  `Exit at 2× credit paid out ($${(m*0.70).toFixed(2)} debit to close)`,
+        note:  `Collects ~35% of ATM premium. Max risk = spread width − credit.`,
+        ivEnv: 'HIGH',
+      }
+    }
+    const cred = (m * 0.55).toFixed(2)
+    return {
+      structure:'Iron Condor', type:'Iron Condor', icon:'🦅',
+      color:'#ff9500',
+      why:`IV ${iv.toFixed(0)}% is high with only ${mom.toFixed(1)}% daily move — classic Iron Condor environment. Collect premium on both sides while stock stays in range.`,
+      setup:`Sell OTM call spread + sell OTM put spread, same expiry. Profit as long as stock stays between both short strikes.`,
+      entry: `$${cred} total credit (combined legs)`,
+      target:`Close at 50% of max profit`,
+      stop:  `Close if either short strike is breached`,
+      note:  `Max profit = total premium received. Ideal above IVR 50.`,
+      ivEnv: 'HIGH',
+    }
+  }
+
+  // ── MODERATE IV (28–55%) — spreads beat naked ──────────────────────────────
+  if (iv >= 28) {
+    if (hasDir) {
+      const type  = bull ? 'Bull Call Spread' : 'Bear Put Spread'
+      const deb   = (m * 0.55).toFixed(2)
+      return {
+        structure:'Debit Spread', type, icon:'📊',
+        color: bull ? '#00ff88' : '#ff4466',
+        why:`IV ${iv.toFixed(0)}% is moderate. A debit spread is ~45% cheaper than a naked ${bull?'call':'put'} while keeping the full directional trade. Better risk/reward here.`,
+        setup: bull
+          ? `Buy ATM call + sell OTM call, same expiry. Max profit = spread width − debit paid.`
+          : `Buy ATM put + sell OTM put, same expiry. Max profit = spread width − debit paid.`,
+        entry: `~$${deb} debit (vs $${m.toFixed(2)} naked)`,
+        target:`75–85% of spread width`,
+        stop:  `50% loss on debit ($${(m*0.275).toFixed(2)})`,
+        note:  `Approx 45% cheaper entry. Max loss = debit paid. Cap profit at OTM strike.`,
+        ivEnv: 'MODERATE',
+      }
+    }
+    const deb = (m * 0.28).toFixed(2)
+    return {
+      structure:'Butterfly', type: bull ? 'Call Butterfly' : 'Put Butterfly', icon:'🦋',
+      color:'#00c8ff',
+      why:`IV ${iv.toFixed(0)}% moderate + low momentum (${chgPct.toFixed(1)}%). No strong directional edge — Butterfly is the cheapest way to profit if stock pins near current price.`,
+      setup:`Buy 1 lower-strike + sell 2 ATM + buy 1 higher-strike, same expiry. Max profit achieved exactly at the middle strike at expiry.`,
+      entry: `~$${deb} net debit (all 3 legs)`,
+      target:`50–80% of max profit as expiry approaches`,
+      stop:  `Full debit at risk (capped, defined loss)`,
+      note:  `Cheapest structure. Needs precision — works best if stock doesn't move much.`,
+      ivEnv: 'MODERATE',
+    }
+  }
+
+  // ── LOW IV (<28%) — premium is cheap, buy it ──────────────────────────────
+  if (hasDir) {
+    return {
+      structure:'Naked Option', type: bull ? 'Long Call' : 'Long Put',
+      icon: bull ? '🟢' : '🔴',
+      color: bull ? '#00ff88' : '#ff4466',
+      why:`IV ${iv.toFixed(0)}% is LOW — options are cheap right now. Naked ${bull?'call':'put'} maximises leverage when premium is inexpensive. No need to spread here.`,
+      setup:`Buy single ${bull?'call':'put'} at ATM or slightly OTM. Full theta exposure but maximum profit potential on a move.`,
+      entry: `$${m.toFixed(2)} mid-market`,
+      target:`+${(tfCfg.profitTarget*100).toFixed(0)}% on premium ($${(m*(1+tfCfg.profitTarget)).toFixed(2)})`,
+      stop:  `-${(tfCfg.stopLoss*100).toFixed(0)}% on premium ($${(m*(1-tfCfg.stopLoss)).toFixed(2)})`,
+      note:  `Full premium at risk. Highest leverage when IV is suppressed. Best used with strong catalyst.`,
+      ivEnv: 'LOW',
+    }
+  }
+  // Low IV + no direction = long strangle
+  const total = (m * 1.9).toFixed(2)
+  return {
+    structure:'Strangle', type:'Long Strangle', icon:'🔀',
+    color:'#00c8ff',
+    why:`IV ${iv.toFixed(0)}% is very low + no clear direction (${chgPct.toFixed(1)}%). Premium is cheap on both sides — buy the move without committing to direction.`,
+    setup:`Buy OTM call + buy OTM put, same expiry, equidistant from current price. Profit from a large move in either direction.`,
+    entry: `~$${total} total (both legs combined)`,
+    target:`100%+ on the winning leg`,
+    stop:  `Exit if 50% of total premium lost`,
+    note:  `Needs a big move to overcome total premium paid. Ideal before catalysts when IV is suppressed.`,
+    ivEnv: 'LOW',
+  }
+}
+
 const FUT_SYMBOLS = {
   // Primary is the Tradier-reliable symbol. SPX/NDX are the real index levels (≈ /ES /NQ)
   ES:  { name:'SPX — S&P 500 Index',     primary:'SPX',  fallback:'$SPX.X', chain:'SPX',  display:'SPX' },
@@ -474,6 +591,7 @@ export default function App() {
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ All data from Tradier ${tradierMode}`)
 
+      const struct = pickStructure(iv, chgPct, mid, tfCfg)
       setScanResult({
         ticker,tradeType,score,
         expiryDisplay,expiryRaw,
@@ -484,7 +602,7 @@ export default function App() {
         grade:score>=80?'A':score>=65?'B':'C',
         confidence:score>=80?'High':score>=65?'Medium':'Low',
         price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
-        iv:fmtPct(iv),
+        iv:fmtPct(iv),ivRaw:iv,
         delta:delta?delta.toFixed(3):'—',
         theta:theta?theta.toFixed(3):'—',
         volume:best.volume||0,
@@ -494,6 +612,7 @@ export default function App() {
         reasons,warnings,
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:`Tradier ${tradierMode}`,
+        struct,
       })
     } catch(e) {
       setScanErr('❌ '+e.message)
@@ -691,6 +810,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         target:`$${(mid*(1+tfCfg2.profitTarget)).toFixed(2)} (+${(tfCfg2.profitTarget*100).toFixed(0)}%)`,
         stop:`$${(mid*(1-tfCfg2.stopLoss)).toFixed(2)} (-${(tfCfg2.stopLoss*100).toFixed(0)}%)`,
         tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
+        struct: pickStructure(iv, chgPct, mid, tfCfg2),
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
@@ -716,7 +836,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         setLastAlert(r)
         if (tgToken&&tgChatId) {
           const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId)
-          setAutoLog(p=>[`[${ts2}] 🚀 ALERT $${ticker} ${r.score}% → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
+          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.struct?.icon||''} ${r.struct?.structure||r.tradeType} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
         } else {
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% hits threshold`,...p.slice(0,99)])
         }
@@ -1195,6 +1315,53 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                   </div>
                 </div>
 
+                {/* ── Structure Recommendation ── */}
+                {scanResult.struct&&(
+                  <div style={{background:`${scanResult.struct.color}0d`,border:`1px solid ${scanResult.struct.color}50`,borderRadius:6,padding:'11px 13px',marginBottom:11}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+                      <span style={{fontSize:16}}>{scanResult.struct.icon}</span>
+                      <div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scanResult.struct.color,letterSpacing:2}}>{scanResult.struct.structure}</div>
+                        <div style={{fontSize:10,color:'#8ab0c0'}}>{scanResult.struct.type}</div>
+                      </div>
+                      <div style={{marginLeft:'auto',display:'flex',gap:5,alignItems:'center'}}>
+                        <span style={{
+                          fontSize:9,letterSpacing:1,padding:'2px 7px',borderRadius:3,
+                          color: scanResult.struct.ivEnv==='HIGH'?'#ff9500':scanResult.struct.ivEnv==='LOW'?'#00ff88':'#00c8ff',
+                          border:`1px solid ${scanResult.struct.ivEnv==='HIGH'?'#ff950040':scanResult.struct.ivEnv==='LOW'?'#00ff8840':'#00c8ff40'}`,
+                          background: scanResult.struct.ivEnv==='HIGH'?'#ff950015':scanResult.struct.ivEnv==='LOW'?'#00ff8815':'#00c8ff15',
+                        }}>IV {scanResult.struct.ivEnv}</span>
+                      </div>
+                    </div>
+
+                    <div style={{fontSize:11,color:'#8ab0c0',lineHeight:1.75,marginBottom:9}}>
+                      {scanResult.struct.why}
+                    </div>
+
+                    <div style={{background:'#020810',borderRadius:4,padding:'8px 10px',marginBottom:9,fontSize:10,color:'#5a8aaa',lineHeight:1.8}}>
+                      <span style={{fontSize:8,color:scanResult.struct.color,letterSpacing:2}}>HOW TO BUILD IT — </span>
+                      {scanResult.struct.setup}
+                    </div>
+
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:5,marginBottom:6}}>
+                      {[
+                        {l:'ENTRY',  v:scanResult.struct.entry,  c:'#00c8ff'},
+                        {l:'TARGET', v:scanResult.struct.target, c:'#00ff88'},
+                        {l:'STOP',   v:scanResult.struct.stop,   c:'#ff4466'},
+                      ].map((f,i)=>(
+                        <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'6px 8px'}}>
+                          <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
+                          <div style={{fontSize:10,color:f.c,fontWeight:600,lineHeight:1.4}}>{f.v}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{fontSize:9,color:'#3a6a7a',borderTop:`1px solid ${C.border}`,paddingTop:7,lineHeight:1.7}}>
+                      <span style={{color:scanResult.struct.color}}>◈ </span>{scanResult.struct.note}
+                    </div>
+                  </div>
+                )}
+
                 {/* Live chain stats */}
                 <div style={{background:'#030d18',border:`1px solid ${C.blue}50`,borderRadius:6,padding:11,marginBottom:11}}>
                   <Lbl color={C.blue}>📡 Live Options Chain — Tradier {tradierMode}</Lbl>
@@ -1307,6 +1474,14 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                     <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.green}}>{lastAlert.score}%</span>
                   </div>
                   <div style={{fontSize:10,color:C.dim,marginTop:3}}>Entry: {lastAlert.entry} · Target: {lastAlert.target} · Stop: {lastAlert.stop}</div>
+                  {lastAlert.struct&&(
+                    <div style={{display:'flex',alignItems:'center',gap:7,marginTop:6,padding:'4px 9px',borderRadius:4,background:`${lastAlert.struct.color}10`,border:`1px solid ${lastAlert.struct.color}30`}}>
+                      <span style={{fontSize:12}}>{lastAlert.struct.icon}</span>
+                      <span style={{fontSize:10,color:lastAlert.struct.color,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:1}}>{lastAlert.struct.structure}</span>
+                      <span style={{fontSize:9,color:'#5a8aaa'}}>{' — '}{lastAlert.struct.type}</span>
+                      <span style={{marginLeft:'auto',fontSize:8,color:'#3a6a7a',letterSpacing:.5}}>IV {lastAlert.struct.ivEnv}</span>
+                    </div>
+                  )}
                   {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:4}}>{tgStatus}</div>}
                 </div>
               )}
