@@ -593,12 +593,16 @@ export default function App() {
 
       const struct = pickStructure(iv, chgPct, mid, tfCfg)
       setScanResult({
-        ticker,tradeType,score,
-        expiryDisplay,expiryRaw,
+        ticker,
+        tradeType: struct.type,
+        nakedType: tradeType,
+        score, expiryDisplay, expiryRaw,
         strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
-        entry:`$${entry1} – $${entry2}`,
-        target:`$${target} (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
-        stop:`$${stop} (-${(tfCfg.stopLoss*100).toFixed(0)}%)`,
+        entry:  struct.entry,
+        target: struct.target,
+        stop:   struct.stop,
+        nakedEntry:`$${entry1} – $${entry2}`,
+        nakedMid: fmtP(mid),
         grade:score>=80?'A':score>=65?'B':'C',
         confidence:score>=80?'High':score>=65?'Medium':'Low',
         price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
@@ -735,30 +739,47 @@ export default function App() {
 _Not financial advice. Trade at your own risk._`
   }
 
-  const buildScanAlert = r=>`${r.tradeType==='Put'||r.tradeType==='Put Spread'?'🔴📉':'🟢📈'} *${r.tradeType.toUpperCase()} ALERT — $${r.ticker}*
+  const buildScanAlert = r => {
+  const sym      = r.ticker||r.sym||'—'
+  const struct   = r.struct
+  const isBear   = (r.nakedType||r.tradeType||'').toLowerCase()==='put'||
+                   (struct?.type||'').toLowerCase().includes('bear')||
+                   (struct?.type||'').toLowerCase().includes('put')
+  const em       = isBear?'🔴📉':'🟢📈'
+  const typeLine = struct ? `${struct.structure} — ${struct.type}` : r.tradeType
+  const whyLine  = struct ? struct.why.slice(0,100)+'...' : ''
+  const howLine  = struct ? struct.setup.slice(0,120)+'...' : ''
+  const nakRef   = r.nakedMid ? `\n📊 *Underlying option mid:* ${r.nakedMid} (${r.nakedType||''})` : ''
+  return `${em} *${typeLine.toUpperCase()} — $${sym}*
 
-🎯 *Conviction: ${r.score}%* | Grade: ${r.grade}
+🎯 *Conviction: ${r.score}%* | Grade: ${r.grade||'—'}
 💰 *Stock:* ${r.price} (${r.chgPct} today)
-📌 *Strike:* ${r.strikeStr}
-🗓 *Expiry:* ${r.expiryDisplay}
+📌 *Strike:* ${r.strikeStr} | Expiry: ${r.expiryDisplay}
+
+📐 *Structure:* ${whyLine}
+🔧 *Build:* ${howLine}
+
 📊 *Entry:* ${r.entry}
 🎯 *Target:* ${r.target}
-🛑 *Stop:* ${r.stop}
+🛑 *Stop:* ${r.stop}${nakRef}
 
-📡 *Live Chain:*
-Bid: ${r.bid} | Ask: ${r.ask} | Mid: ${r.mid}
-IV: ${r.iv} | Delta: ${r.delta} | Vol: ${r.volume}
+📡 *Chain:* IV: ${r.iv} | Δ ${r.delta} | Bid: ${r.bid} | Ask: ${r.ask}
 
 ✅ *Why:*
 ${(r.reasons||[]).map(x=>'• '+x).join('\n')||'• Momentum setup'}
 
-_Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
+_Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
+}
 
   const pushToAlert = r=>{
     setAlert(p=>({...p,
-      ticker:r.ticker||p.ticker,type:r.tradeType||p.type,
-      expiry:r.expiryDisplay||p.expiry,strike:r.strikeStr||p.strike,
-      entry:r.entry||p.entry,target:r.target||p.target,stop:r.stop||p.stop,
+      ticker: r.ticker||r.sym||p.ticker,
+      type:   r.struct?.type||r.tradeType||p.type,
+      expiry: r.expiryDisplay||p.expiry,
+      strike: r.strikeStr||p.strike,
+      entry:  r.entry||p.entry,
+      target: r.target||p.target,
+      stop:   r.stop||p.stop,
     }))
     setToolsTab('alert')
     setShowTools(true)
@@ -806,11 +827,14 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
         volume:best.volume||0,oi:best.open_interest||0,
         strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
         expiryDisplay,
-        entry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
-        target:`$${(mid*(1+tfCfg2.profitTarget)).toFixed(2)} (+${(tfCfg2.profitTarget*100).toFixed(0)}%)`,
-        stop:`$${(mid*(1-tfCfg2.stopLoss)).toFixed(2)} (-${(tfCfg2.stopLoss*100).toFixed(0)}%)`,
-        tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
+        nakedEntry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
+        nakedMid: fmtP(mid),
         struct: pickStructure(iv, chgPct, mid, tfCfg2),
+        get entry()     { return this.struct.entry },
+        get target()    { return this.struct.target },
+        get stop()      { return this.struct.stop },
+        get tradeType() { return this.struct.type },
+        tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
@@ -1298,7 +1322,8 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                   <div style={{display:'flex',gap:11,alignItems:'center'}}>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:54,color:gradeCol(scanResult.grade),lineHeight:1,textShadow:`0 0 30px ${gradeCol(scanResult.grade)}55`}}>{scanResult.grade}</div>
                     <div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:'#c8d8e8',letterSpacing:2}}>${scanResult.ticker} — {scanResult.tradeType}</div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:'#c8d8e8',letterSpacing:2}}>${scanResult.ticker} — {scanResult.struct?.structure||scanResult.tradeType}</div>
+                      <div style={{fontSize:10,color:'#5a8aaa',marginBottom:2}}>{scanResult.tradeType} · {scanResult.strikeStr} · {scanResult.expiryDisplay}</div>
                       <div style={{fontSize:11,color:C.dim}}>Conviction: <span style={{color:scanResult.score>=80?C.green:C.orange}}>{scanResult.score}%</span> · {scanResult.confidence}</div>
                       <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:4,padding:'2px 7px',borderRadius:4,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
                         <span style={{fontSize:11}}>{scanResult.tfBadge}</span>
@@ -1343,20 +1368,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                       {scanResult.struct.setup}
                     </div>
 
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:5,marginBottom:6}}>
-                      {[
-                        {l:'ENTRY',  v:scanResult.struct.entry,  c:'#00c8ff'},
-                        {l:'TARGET', v:scanResult.struct.target, c:'#00ff88'},
-                        {l:'STOP',   v:scanResult.struct.stop,   c:'#ff4466'},
-                      ].map((f,i)=>(
-                        <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'6px 8px'}}>
-                          <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
-                          <div style={{fontSize:10,color:f.c,fontWeight:600,lineHeight:1.4}}>{f.v}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div style={{fontSize:9,color:'#3a6a7a',borderTop:`1px solid ${C.border}`,paddingTop:7,lineHeight:1.7}}>
+                    <div style={{fontSize:9,color:'#3a6a7a',lineHeight:1.7,marginTop:4}}>
                       <span style={{color:scanResult.struct.color}}>◈ </span>{scanResult.struct.note}
                     </div>
                   </div>
@@ -1370,7 +1382,7 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                       {l:'STOCK',v:scanResult.price,  c:'#c8d8e8'},
                       {l:'BID',  v:scanResult.bid,    c:C.red},
                       {l:'ASK',  v:scanResult.ask,    c:C.green},
-                      {l:'MID',  v:scanResult.mid,    c:C.blue},
+                      {l:'OPT MID',v:scanResult.mid,  c:C.blue},
                       {l:'IV',   v:scanResult.iv,     c:C.orange},
                       {l:'DELTA',v:scanResult.delta,  c:'#c8d8e8'},
                       {l:'THETA',v:scanResult.theta,  c:C.red},
@@ -1386,20 +1398,24 @@ _Options Edge | ${new Date().toLocaleTimeString()} | Not financial advice_`
                   </div>
                 </div>
 
-                {/* Trade setup */}
-                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(115px,1fr))',gap:6,marginBottom:10}}>
-                  {[
-                    {l:'EXPIRY',v:scanResult.expiryDisplay,c:'#c8d8e8'},
-                    {l:'STRIKE',v:scanResult.strikeStr,    c:'#c8d8e8'},
-                    {l:'ENTRY', v:scanResult.entry,        c:C.blue},
-                    {l:'TARGET',v:scanResult.target,       c:C.green},
-                    {l:'STOP',  v:scanResult.stop,         c:C.red},
-                  ].map((f,i)=>(
-                    <Card key={i}>
-                      <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
-                      <div style={{fontSize:12,color:f.c,fontWeight:600}}>{f.v}</div>
-                    </Card>
-                  ))}
+                {/* Trade setup — struct prices are canonical */}
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:5}}>
+                    TRADE EXECUTION — {scanResult.struct?.type||scanResult.tradeType}
+                    {scanResult.nakedMid&&<span style={{color:'#2a5060',marginLeft:8}}>· underlying option mid: {scanResult.nakedMid}</span>}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6}}>
+                    {[
+                      {l:'ENTRY',  v:scanResult.entry,  c:C.blue},
+                      {l:'TARGET', v:scanResult.target, c:C.green},
+                      {l:'STOP',   v:scanResult.stop,   c:C.red},
+                    ].map((f,i)=>(
+                      <Card key={i}>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
+                        <div style={{fontSize:11,color:f.c,fontWeight:600,lineHeight:1.4}}>{f.v}</div>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
 
                 {scanResult.reasons?.length>0&&(
