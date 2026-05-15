@@ -71,109 +71,251 @@ const pickExpiry = (dates, minDTE, maxDTE) => {
 //   IV < 28%  + direction   → Naked Option   (premium cheap, max leverage)
 //   IV < 28%  + no dir      → Strangle       (cheap to buy both sides)
 
-const pickStructure = (ivRaw, chgPct, mid, tfCfg) => {
-  const iv       = (ivRaw||0) * 100          // e.g. 0.38 → 38
-  const mom      = Math.abs(chgPct||0)
-  const bull     = (chgPct||0) >= 0
-  const strongDir = mom >= 1.2
-  const modDir    = mom >= 0.4
-  const hasDir    = modDir || strongDir
-  const m         = parseFloat(mid)||1       // mid premium value
+// ─── Structure decision engine ───────────────────────────────────────────────
+// Returns WHAT structure to trade + WHY. Prices come from calcTradeLegs()
+// which fetches actual bid/ask from both legs of the chain.
+const pickStructure = (ivRaw, chgPct, optType) => {
+  const iv     = (ivRaw||0) * 100
+  const mom    = Math.abs(chgPct||0)
+  const bull   = (chgPct||0) >= 0
+  const hasDir = mom >= 0.4
 
-  // ── HIGH IV (>55%) — sell premium ──────────────────────────────────────────
   if (iv > 55) {
     if (hasDir) {
-      const type  = bull ? 'Bull Put Spread' : 'Bear Call Spread'
-      const cred  = (m * 0.35).toFixed(2)
+      const type = bull ? 'Bull Put Spread' : 'Bear Call Spread'
       return {
         structure:'Credit Spread', type, icon:'📐',
-        color: bull ? '#00ff88' : '#ff4466',
-        why:`IV ${iv.toFixed(0)}% is elevated — selling premium beats buying it here. A ${type} collects credit and profits from the ${bull?'upside':'downside'} move while capping risk.`,
-        setup: bull
-          ? `Sell OTM put + buy lower-strike put, same expiry. Profit if stock stays above your short strike at expiry.`
-          : `Sell OTM call + buy higher-strike call, same expiry. Profit if stock stays below your short strike.`,
-        entry: `$${cred} credit received per spread`,
-        target:`Close at 50% of credit ($${(m*0.175).toFixed(2)} profit)`,
-        stop:  `Exit at 2× credit paid out ($${(m*0.70).toFixed(2)} debit to close)`,
-        note:  `Collects ~35% of ATM premium. Max risk = spread width − credit.`,
-        ivEnv: 'HIGH',
+        color: bull ? '#00ff88' : '#ff4466', ivEnv:'HIGH',
+        why:`IV ${iv.toFixed(0)}% is elevated — sell premium, don't buy it. A ${type} collects credit and profits if the stock stays ${bull?'above':'below'} your short strike.`,
+        setup: type==='Bull Put Spread'
+          ? `SELL OTM put + BUY lower-strike put, same expiry. Both legs from the live chain. Max profit = net credit received.`
+          : `SELL OTM call + BUY higher-strike call, same expiry. Both legs from the live chain. Max profit = net credit received.`,
+        note:`Max risk = spread width − credit. Close at 50% of max profit.`,
       }
     }
-    const cred = (m * 0.55).toFixed(2)
     return {
       structure:'Iron Condor', type:'Iron Condor', icon:'🦅',
-      color:'#ff9500',
-      why:`IV ${iv.toFixed(0)}% is high with only ${mom.toFixed(1)}% daily move — classic Iron Condor environment. Collect premium on both sides while stock stays in range.`,
-      setup:`Sell OTM call spread + sell OTM put spread, same expiry. Profit as long as stock stays between both short strikes.`,
-      entry: `$${cred} total credit (combined legs)`,
-      target:`Close at 50% of max profit`,
-      stop:  `Close if either short strike is breached`,
-      note:  `Max profit = total premium received. Ideal above IVR 50.`,
-      ivEnv: 'HIGH',
+      color:'#ff9500', ivEnv:'HIGH',
+      why:`IV ${iv.toFixed(0)}% is high + only ${mom.toFixed(1)}% daily move — textbook Iron Condor environment. Collect premium from both sides while stock stays range-bound.`,
+      setup:`SELL OTM put spread + SELL OTM call spread, same expiry (4 legs total). Max profit if stock stays between both short strikes.`,
+      note:`Close at 50% of max profit. Exit if either short strike is touched.`,
     }
   }
 
-  // ── MODERATE IV (28–55%) — spreads beat naked ──────────────────────────────
   if (iv >= 28) {
     if (hasDir) {
-      const type  = bull ? 'Bull Call Spread' : 'Bear Put Spread'
-      const deb   = (m * 0.55).toFixed(2)
+      const type = bull ? 'Bull Call Spread' : 'Bear Put Spread'
       return {
         structure:'Debit Spread', type, icon:'📊',
-        color: bull ? '#00ff88' : '#ff4466',
-        why:`IV ${iv.toFixed(0)}% is moderate. A debit spread is ~45% cheaper than a naked ${bull?'call':'put'} while keeping the full directional trade. Better risk/reward here.`,
-        setup: bull
-          ? `Buy ATM call + sell OTM call, same expiry. Max profit = spread width − debit paid.`
-          : `Buy ATM put + sell OTM put, same expiry. Max profit = spread width − debit paid.`,
-        entry: `~$${deb} debit (vs $${m.toFixed(2)} naked)`,
-        target:`75–85% of spread width`,
-        stop:  `50% loss on debit ($${(m*0.275).toFixed(2)})`,
-        note:  `Approx 45% cheaper entry. Max loss = debit paid. Cap profit at OTM strike.`,
-        ivEnv: 'MODERATE',
+        color: bull ? '#00ff88' : '#ff4466', ivEnv:'MODERATE',
+        why:`IV ${iv.toFixed(0)}% is moderate — a debit spread costs ~45% less than a naked ${bull?'call':'put'} while keeping full directional exposure. Better risk/reward here.`,
+        setup: type==='Bull Call Spread'
+          ? `BUY ATM call + SELL OTM call (higher strike), same expiry. Net debit = your max risk. Max profit = spread width − debit.`
+          : `BUY ATM put + SELL OTM put (lower strike), same expiry. Net debit = your max risk. Max profit = spread width − debit.`,
+        note:`Both strikes and net debit calculated from live chain. Target 75% of max profit.`,
       }
     }
-    const deb = (m * 0.28).toFixed(2)
     return {
-      structure:'Butterfly', type: bull ? 'Call Butterfly' : 'Put Butterfly', icon:'🦋',
-      color:'#00c8ff',
-      why:`IV ${iv.toFixed(0)}% moderate + low momentum (${chgPct.toFixed(1)}%). No strong directional edge — Butterfly is the cheapest way to profit if stock pins near current price.`,
-      setup:`Buy 1 lower-strike + sell 2 ATM + buy 1 higher-strike, same expiry. Max profit achieved exactly at the middle strike at expiry.`,
-      entry: `~$${deb} net debit (all 3 legs)`,
-      target:`50–80% of max profit as expiry approaches`,
-      stop:  `Full debit at risk (capped, defined loss)`,
-      note:  `Cheapest structure. Needs precision — works best if stock doesn't move much.`,
-      ivEnv: 'MODERATE',
+      structure:'Butterfly', type: optType==='call' ? 'Call Butterfly' : 'Put Butterfly',
+      icon:'🦋', color:'#00c8ff', ivEnv:'MODERATE',
+      why:`IV ${iv.toFixed(0)}% moderate + low momentum (${chgPct?.toFixed(1)}%). No strong directional edge — Butterfly is the cheapest structure, profits from a price pin at expiry.`,
+      setup:`BUY 1 lower-strike + SELL 2 ATM + BUY 1 upper-strike, same expiry. Net debit from all 3 legs. Max profit if stock closes exactly at middle strike.`,
+      note:`Cheapest structure. Full debit is max risk. Target 60% of max profit.`,
     }
   }
 
-  // ── LOW IV (<28%) — premium is cheap, buy it ──────────────────────────────
   if (hasDir) {
     return {
-      structure:'Naked Option', type: bull ? 'Long Call' : 'Long Put',
-      icon: bull ? '🟢' : '🔴',
-      color: bull ? '#00ff88' : '#ff4466',
-      why:`IV ${iv.toFixed(0)}% is LOW — options are cheap right now. Naked ${bull?'call':'put'} maximises leverage when premium is inexpensive. No need to spread here.`,
-      setup:`Buy single ${bull?'call':'put'} at ATM or slightly OTM. Full theta exposure but maximum profit potential on a move.`,
-      entry: `$${m.toFixed(2)} mid-market`,
-      target:`+${(tfCfg.profitTarget*100).toFixed(0)}% on premium ($${(m*(1+tfCfg.profitTarget)).toFixed(2)})`,
-      stop:  `-${(tfCfg.stopLoss*100).toFixed(0)}% on premium ($${(m*(1-tfCfg.stopLoss)).toFixed(2)})`,
-      note:  `Full premium at risk. Highest leverage when IV is suppressed. Best used with strong catalyst.`,
-      ivEnv: 'LOW',
+      structure:'Naked Option', type: optType==='call' ? 'Long Call' : 'Long Put',
+      icon: optType==='call' ? '🟢' : '🔴',
+      color: optType==='call' ? '#00ff88' : '#ff4466', ivEnv:'LOW',
+      why:`IV ${iv.toFixed(0)}% is LOW — premium is cheap. Naked ${optType==='call'?'call':'put'} gives maximum leverage when options are inexpensive. No need to spread.`,
+      setup:`BUY single ${optType==='call'?'call':'put'} at ATM or slightly OTM. Full premium at risk but maximum upside if the move comes.`,
+      note:`Full premium at risk. Highest leverage. Best when you have a clear catalyst.`,
     }
   }
-  // Low IV + no direction = long strangle
-  const total = (m * 1.9).toFixed(2)
   return {
     structure:'Strangle', type:'Long Strangle', icon:'🔀',
-    color:'#00c8ff',
-    why:`IV ${iv.toFixed(0)}% is very low + no clear direction (${chgPct.toFixed(1)}%). Premium is cheap on both sides — buy the move without committing to direction.`,
-    setup:`Buy OTM call + buy OTM put, same expiry, equidistant from current price. Profit from a large move in either direction.`,
-    entry: `~$${total} total (both legs combined)`,
-    target:`100%+ on the winning leg`,
-    stop:  `Exit if 50% of total premium lost`,
-    note:  `Needs a big move to overcome total premium paid. Ideal before catalysts when IV is suppressed.`,
-    ivEnv: 'LOW',
+    color:'#00c8ff', ivEnv:'LOW',
+    why:`IV ${iv.toFixed(0)}% very low + no clear direction (${chgPct?.toFixed(1)}%). Premium is cheap — buy both sides and profit from a big move in either direction.`,
+    setup:`BUY OTM call + BUY OTM put, same expiry, equidistant from current price. Total debit from both legs.`,
+    note:`Needs a large move to overcome total premium paid. Best before a known catalyst.`,
   }
+}
+
+// ─── Spread width lookup (drives short-leg strike distance) ──────────────────
+const swWidth = p => p>=2000?100 : p>=500?25 : p>=200?10 : p>=100?5 : p>=50?2.5 : 1
+
+// ─── Calculate actual spread legs from live chain data ────────────────────────
+// This is where real prices come from. Uses actual bid/ask on every leg.
+// Never falls back to mid % — if legs can't be found, returns naked result.
+const calcTradeLegs = (chain, struct, price, step, optType, tfCfg) => {
+  const calls = chain.filter(o=>o.option_type==='call').sort((a,b)=>a.strike-b.strike)
+  const puts  = chain.filter(o=>o.option_type==='put').sort((a,b)=>a.strike-b.strike)
+  const f2    = v => (Math.max(0,v)).toFixed(2)
+  const B     = o => Math.max(0, parseFloat(o?.bid||0))
+  const A     = o => Math.max(0, parseFloat(o?.ask||0))
+  const M     = o => (B(o)+A(o))/2
+  const at    = (arr,t) => arr.length ? arr.reduce((x,y)=>Math.abs(y.strike-t)<Math.abs(x.strike-t)?y:x) : null
+  const w     = swWidth(price)
+  const atm   = Math.round(price/step)*step
+  const suf   = optType==='call'?'C':'P'
+  const arr   = optType==='call'?calls:puts
+
+  // Long / primary leg (ATM or slightly OTM in direction)
+  const tgtStrike = optType==='call'
+    ? Math.round(price*tfCfg.strikePct/step)*step
+    : Math.round(price*(2-tfCfg.strikePct)/step)*step
+  const longLeg = at(arr, tgtStrike)
+  if (!longLeg || M(longLeg)===0) {
+    return { strikeStr:'N/A', entry:'No liquid options', target:'—', stop:'—', nakedMid:'—', legs:[] }
+  }
+  const lm = M(longLeg)
+
+  // Naked fallback (used when a second leg can't be found or has 0 bid)
+  const naked = {
+    strikeStr: `$${longLeg.strike}${suf}`,
+    entry:  `$${f2(lm*0.95)} – $${f2(lm*1.05)} mid`,
+    target: `$${f2(lm*(1+tfCfg.profitTarget))} (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
+    stop:   `$${f2(lm*(1-tfCfg.stopLoss))} (-${(tfCfg.stopLoss*100).toFixed(0)}%)`,
+    nakedMid: `$${f2(lm)}`,
+    legs: [`BUY  $${longLeg.strike}${suf} · bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))} / mid $${f2(lm)}`]
+  }
+
+  const s = struct.structure
+
+  // ── DEBIT SPREAD (Bull Call / Bear Put) ────────────────────────────────────
+  if (s === 'Debit Spread') {
+    const shortTgt = optType==='call' ? longLeg.strike+w : longLeg.strike-w
+    const shortLeg = at(arr, shortTgt)
+    if (!shortLeg || shortLeg.strike===longLeg.strike || B(shortLeg)===0) return naked
+    const nd  = Math.max(0.01, A(longLeg) - B(shortLeg))   // net debit
+    const sw  = Math.abs(shortLeg.strike - longLeg.strike)  // spread width
+    const mp  = Math.max(0, sw - nd)                        // max profit per share
+    const tgt = nd + mp*0.75
+    return {
+      strikeStr: optType==='call'
+        ? `$${longLeg.strike}C / $${shortLeg.strike}C`
+        : `$${longLeg.strike}P / $${shortLeg.strike}P`,
+      entry:  `$${f2(nd)} net debit`,
+      target: `$${f2(tgt)} spread value · 75% of max ($${(mp*100).toFixed(0)}/contract)`,
+      stop:   `$${f2(nd*0.50)} · exit if debit halved`,
+      nakedMid:`$${f2(lm)}`,
+      spreadWidth:sw, maxProfit:mp, netDebit:nd,
+      legs:[
+        `BUY  $${longLeg.strike}${suf}  · bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))}`,
+        `SELL $${shortLeg.strike}${suf} · bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))}`,
+        `NET DEBIT: $${f2(nd)} per spread ($${(nd*100).toFixed(0)} per contract)`,
+      ]
+    }
+  }
+
+  // ── CREDIT SPREAD (Bull Put / Bear Call) ──────────────────────────────────
+  if (s === 'Credit Spread') {
+    const isBullPut = struct.type === 'Bull Put Spread'
+    const creditArr = isBullPut ? puts : calls
+    // Short leg: slightly OTM (1 step away from ATM)
+    const shortTgt  = isBullPut ? atm - step : atm + step
+    // Long leg:  protection, further OTM (1 width away from short)
+    const longTgt   = isBullPut ? shortTgt - w : shortTgt + w
+    const shortLeg  = at(creditArr, shortTgt)
+    const longProt  = at(creditArr, longTgt)
+    if (!shortLeg||!longProt||shortLeg.strike===longProt.strike||B(shortLeg)===0) return naked
+    const nc  = Math.max(0.01, B(shortLeg) - A(longProt))   // net credit
+    const sw  = Math.abs(shortLeg.strike - longProt.strike)
+    const ml  = Math.max(0, sw - nc)                         // max loss
+    const suf2 = isBullPut ? 'P' : 'C'
+    return {
+      strikeStr: isBullPut
+        ? `$${shortLeg.strike}P / $${longProt.strike}P`
+        : `$${shortLeg.strike}C / $${longProt.strike}C`,
+      entry:  `$${f2(nc)} credit received`,
+      target: `$${f2(nc*0.50)} · close at 50% profit (keep $${(nc*50).toFixed(0)}/contract)`,
+      stop:   `$${f2(nc*2)} cost-to-close · 2× credit = max accepted loss`,
+      nakedMid:`$${f2(lm)}`,
+      netCredit:nc, spreadWidth:sw, maxLoss:ml,
+      legs:[
+        `SELL $${shortLeg.strike}${suf2} · bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))}`,
+        `BUY  $${longProt.strike}${suf2}  · bid $${f2(B(longProt))} / ask $${f2(A(longProt))}`,
+        `NET CREDIT: $${f2(nc)} per spread ($${(nc*100).toFixed(0)} per contract)`,
+      ]
+    }
+  }
+
+  // ── IRON CONDOR ────────────────────────────────────────────────────────────
+  if (s === 'Iron Condor') {
+    const ps  = at(puts,  Math.round(price*0.98/step)*step)
+    const pl  = at(puts,  Math.round(price*0.95/step)*step)
+    const cs  = at(calls, Math.round(price*1.02/step)*step)
+    const cl  = at(calls, Math.round(price*1.05/step)*step)
+    if (!ps||!pl||!cs||!cl) return naked
+    const pc  = Math.max(0, B(ps)-A(pl))
+    const cc  = Math.max(0, B(cs)-A(cl))
+    const tc  = pc+cc
+    if (tc<=0) return naked
+    return {
+      strikeStr:`$${ps.strike}P/$${pl.strike}P + $${cs.strike}C/$${cl.strike}C`,
+      entry:  `$${f2(tc)} total credit · $${f2(pc)} put side + $${f2(cc)} call side`,
+      target: `$${f2(tc*0.50)} · close at 50% of max profit`,
+      stop:   `Close immediately if either short strike ($${ps.strike}P or $${cs.strike}C) is breached`,
+      nakedMid:`$${f2(lm)}`,
+      totalCredit:tc,
+      legs:[
+        `SELL $${ps.strike}P  · bid $${f2(B(ps))} / ask $${f2(A(ps))}`,
+        `BUY  $${pl.strike}P  · bid $${f2(B(pl))} / ask $${f2(A(pl))}`,
+        `SELL $${cs.strike}C  · bid $${f2(B(cs))} / ask $${f2(A(cs))}`,
+        `BUY  $${cl.strike}C  · bid $${f2(B(cl))} / ask $${f2(A(cl))}`,
+        `NET CREDIT: $${f2(tc)} total ($${(tc*100).toFixed(0)} per contract)`,
+      ]
+    }
+  }
+
+  // ── BUTTERFLY ──────────────────────────────────────────────────────────────
+  if (s === 'Butterfly') {
+    const lo = at(arr, longLeg.strike - w)
+    const hi = at(arr, longLeg.strike + w)
+    if (!lo||!hi||lo.strike===longLeg.strike||hi.strike===longLeg.strike) return naked
+    const nd  = Math.max(0.01, A(lo) - 2*B(longLeg) + A(hi))
+    const mp  = Math.max(0, w - nd)
+    return {
+      strikeStr:`$${lo.strike}/${longLeg.strike}/${hi.strike}${suf}`,
+      entry:  `$${f2(nd)} net debit · 3 legs combined`,
+      target: `$${f2(nd + mp*0.60)} · 60% of max profit ($${(mp*100).toFixed(0)}/contract max)`,
+      stop:   `$${f2(nd*0.50)} · 50% of debit · full debit is your max risk`,
+      nakedMid:`$${f2(lm)}`,
+      netDebit:nd, maxProfit:mp,
+      legs:[
+        `BUY  1× $${lo.strike}${suf}         · ask $${f2(A(lo))}`,
+        `SELL 2× $${longLeg.strike}${suf} · bid $${f2(B(longLeg))}`,
+        `BUY  1× $${hi.strike}${suf}          · ask $${f2(A(hi))}`,
+        `NET DEBIT: $${f2(nd)} ($${(nd*100).toFixed(0)} per contract)`,
+      ]
+    }
+  }
+
+  // ── STRANGLE ───────────────────────────────────────────────────────────────
+  if (s === 'Strangle') {
+    const cLeg = at(calls, Math.round(price*1.02/step)*step)
+    const pLeg = at(puts,  Math.round(price*0.98/step)*step)
+    if (!cLeg||!pLeg||A(cLeg)===0||A(pLeg)===0) return naked
+    const td = A(cLeg) + A(pLeg)
+    return {
+      strikeStr:`$${pLeg.strike}P / $${cLeg.strike}C`,
+      entry:  `$${f2(td)} total debit · $${f2(A(pLeg))} put + $${f2(A(cLeg))} call`,
+      target: `$${f2(td*2)} · 100% gain on combined debit`,
+      stop:   `$${f2(td*0.50)} · exit if 50% of total debit lost`,
+      nakedMid:`$${f2(lm)}`,
+      totalDebit:td,
+      legs:[
+        `BUY $${pLeg.strike}P · bid $${f2(B(pLeg))} / ask $${f2(A(pLeg))}`,
+        `BUY $${cLeg.strike}C · bid $${f2(B(cLeg))} / ask $${f2(A(cLeg))}`,
+        `TOTAL DEBIT: $${f2(td)} ($${(td*100).toFixed(0)} per contract)`,
+      ]
+    }
+  }
+
+  // ── NAKED OPTION fallthrough ────────────────────────────────────────────────
+  return naked
 }
 
 const FUT_SYMBOLS = {
@@ -568,11 +710,7 @@ export default function App() {
       dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Bid: ${fmtP(bid)} | Ask: ${fmtP(ask)} | Mid: ${fmtP(mid)}`)
       dbg(`   ✓ IV: ${fmtPct(iv)} | Delta: ${delta?.toFixed(3)||'—'} | Theta: ${theta?.toFixed(3)||'—'}`)
 
-      const entry1=(mid*0.95).toFixed(2)
-      const entry2=(mid*1.05).toFixed(2)
-      const target=(mid*(1+tfCfg.profitTarget)).toFixed(2)
-      const stop=(mid*(1-tfCfg.stopLoss)).toFixed(2)
-      dbg(`   ✓ Entry: $${entry1}–$${entry2} | Target: $${target} | Stop: $${stop}`)
+      // entry1/entry2/target/stop removed — calcTradeLegs provides real spread prices
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
@@ -591,18 +729,21 @@ export default function App() {
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ All data from Tradier ${tradierMode}`)
 
-      const struct = pickStructure(iv, chgPct, mid, tfCfg)
+      const struct = pickStructure(iv, chgPct, optType)
+      const legs   = calcTradeLegs(chain, struct, price, step, optType, tfCfg)
+      dbg(`   ✓ Structure: ${struct.structure} — ${struct.type}`)
+      dbg(`   ✓ Legs: ${legs.legs?.join(' | ')||'N/A'}`)
       setScanResult({
         ticker,
         tradeType: struct.type,
         nakedType: tradeType,
         score, expiryDisplay, expiryRaw,
-        strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
-        entry:  struct.entry,
-        target: struct.target,
-        stop:   struct.stop,
-        nakedEntry:`$${entry1} – $${entry2}`,
-        nakedMid: fmtP(mid),
+        strikeStr: legs.strikeStr,
+        entry:     legs.entry,
+        target:    legs.target,
+        stop:      legs.stop,
+        nakedMid:  legs.nakedMid,
+        legsList:  legs.legs||[],
         grade:score>=80?'A':score>=65?'B':'C',
         confidence:score>=80?'High':score>=65?'Medium':'Low',
         price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
@@ -676,7 +817,7 @@ export default function App() {
           const mid=((bestCall_.bid||0)+(bestCall_.ask||0))/2
           if (mid>0) tradeSetups.push({
             type:'Call',strike:`$${bestCall_.strike}C`,expiry:expiryDisplay,
-            entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),target:fmtP(mid*1.8),stop:fmtP(mid*0.5),
+            entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),target:fmtP(mid*1.8),stop:fmtP(mid*0.5), // futures tool — single-leg reference only
             iv:bestCall_.greeks?.mid_iv?(bestCall_.greeks.mid_iv*100).toFixed(1)+'%':'—',
             delta:bestCall_.greeks?.delta?bestCall_.greeks.delta.toFixed(3):'—',
             oi:bestCall_.open_interest||0,conviction:bias_==='bull'?'High':'Medium',color:C.green,
@@ -686,7 +827,7 @@ export default function App() {
           const mid=((bestPut_.bid||0)+(bestPut_.ask||0))/2
           if (mid>0) tradeSetups.push({
             type:'Put',strike:`$${bestPut_.strike}P`,expiry:expiryDisplay,
-            entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),target:fmtP(mid*1.8),stop:fmtP(mid*0.5),
+            entry:fmtP(mid*0.95)+' – '+fmtP(mid*1.05),target:fmtP(mid*1.8),stop:fmtP(mid*0.5), // futures tool — single-leg reference only
             iv:bestPut_.greeks?.mid_iv?(bestPut_.greeks.mid_iv*100).toFixed(1)+'%':'—',
             delta:bestPut_.greeks?.delta?bestPut_.greeks.delta.toFixed(3):'—',
             oi:bestPut_.open_interest||0,conviction:bias_==='bear'?'High':'Medium',color:C.red,
@@ -825,14 +966,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
         iv:fmtPct(iv),delta:delta?delta.toFixed(3):'—',
         volume:best.volume||0,oi:best.open_interest||0,
-        strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
         expiryDisplay,
-        nakedEntry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
-        nakedMid: fmtP(mid),
-        struct: pickStructure(iv, chgPct, mid, tfCfg2),
-        get entry()     { return this.struct.entry },
-        get target()    { return this.struct.target },
-        get stop()      { return this.struct.stop },
+        struct: pickStructure(iv, chgPct, optType),
+        get _legs()     { return calcTradeLegs(chain, this.struct, price, step, optType, tfCfg2) },
+        get strikeStr() { return this._legs.strikeStr },
+        get entry()     { return this._legs.entry },
+        get target()    { return this._legs.target },
+        get stop()      { return this._legs.stop },
+        get nakedMid()  { return this._legs.nakedMid },
+        get legsList()  { return this._legs.legs||[] },
         get tradeType() { return this.struct.type },
         tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
         grade:score>=80?'A':score>=65?'B':'C',
@@ -952,17 +1094,23 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             score=Math.min(96,Math.max(30,score))
 
             const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+            const struct_ia  = pickStructure(iv, chgPct, optType)
+            const legs_ia    = calcTradeLegs(chain, struct_ia, price, step, optType, tfCfg)
             results.push({
               sym, tfKey, tfLabel:tfCfg.label, tfBadge:tfCfg.badge, tfColor:tfCfg.color,
-              tradeType: optType==='call'?'Call':'Put',
-              strikeStr:`$${best.strike}${optType==='call'?'C':'P'}`,
+              tradeType:   struct_ia.type,
+              nakedType:   optType==='call'?'Call':'Put',
+              strikeStr:   legs_ia.strikeStr,
               expiryDisplay, score,
               grade:score>=90?'A+':score>=80?'A':score>=70?'B':'C',
               price:fmtP(price), bid:fmtP(bid), ask:fmtP(ask), mid:fmtP(mid),
               iv:fmtPct(iv), delta:delta?delta.toFixed(3):'—',
-              entry:`$${(mid*0.95).toFixed(2)} – $${(mid*1.05).toFixed(2)}`,
-              target:`$${(mid*(1+tfCfg.profitTarget)).toFixed(2)} (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
-              stop:`$${(mid*(1-tfCfg.stopLoss)).toFixed(2)} (-${(tfCfg.stopLoss*100).toFixed(0)}%)`,
+              entry:   legs_ia.entry,
+              target:  legs_ia.target,
+              stop:    legs_ia.stop,
+              nakedMid:legs_ia.nakedMid,
+              legsList:legs_ia.legs||[],
+              struct:  struct_ia,
               reasons, warnings, chgPct:chgPct.toFixed(2)+'%',
             })
           } catch {}
@@ -1371,6 +1519,30 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{fontSize:9,color:'#3a6a7a',lineHeight:1.7,marginTop:4}}>
                       <span style={{color:scanResult.struct.color}}>◈ </span>{scanResult.struct.note}
                     </div>
+                  </div>
+                )}
+
+                {/* ── Leg-by-leg execution breakdown ── */}
+                {scanResult.legsList?.length>0&&(
+                  <div style={{background:'#020c18',border:`1px solid #1a3e5a`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
+                    <div style={{fontSize:8,color:'#00c8ff',letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
+                    {scanResult.legsList.map((leg,i)=>{
+                      const isNet  = leg.startsWith('NET')
+                      const isBuy  = leg.startsWith('BUY')
+                      const isSell = leg.startsWith('SELL')
+                      return (
+                        <div key={i} style={{
+                          display:'flex',alignItems:'flex-start',gap:8,padding:'5px 8px',borderRadius:3,marginBottom:3,
+                          background: isNet?'#04080e':isBuy?'#021006':isSell?'#100202':'#04080e',
+                          border:`1px solid ${isNet?'#1a3e5a':isBuy?'#00ff8830':isSell?'#ff446630':'#1a2e3e'}`,
+                        }}>
+                          <span style={{fontSize:10,color:isNet?'#00c8ff':isBuy?'#00ff88':isSell?'#ff4466':'#c8d8e8',fontFamily:'monospace',whiteSpace:'pre',flexShrink:0,minWidth:32}}>
+                            {isNet?'💰':isBuy?'↑':isSell?'↓':''}
+                          </span>
+                          <span style={{fontSize:10,color:isNet?'#00c8ff':isBuy?'#8ae0a0':isSell?'#e08080':'#8ab0c0',fontFamily:'monospace',lineHeight:1.6}}>{leg}</span>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 
