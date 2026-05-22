@@ -6,10 +6,17 @@ const ls = (key, fallback='') => {
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
-const C = {
+const DARK_THEME = {
   green:'#00ff88', blue:'#00c8ff', orange:'#ff9500',
   red:'#ff4466',   dim:'#4a7a8a',  card:'#0d1a26',
   bg:'#090e14',    border:'#1a2e3e',
+  text:'#c8d8e8',  subtext:'#6a9aaa', isDark:true,
+}
+const LIGHT_THEME = {
+  green:'#007a3d', blue:'#0066cc', orange:'#c05800',
+  red:'#cc1133',   dim:'#5a7a8a',  card:'#f0f4f8',
+  bg:'#ffffff',    border:'#cbd5e0',
+  text:'#1a2e3e',  subtext:'#4a6070', isDark:false,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -71,251 +78,310 @@ const pickExpiry = (dates, minDTE, maxDTE) => {
 //   IV < 28%  + direction   → Naked Option   (premium cheap, max leverage)
 //   IV < 28%  + no dir      → Strangle       (cheap to buy both sides)
 
-// ─── Structure decision engine ───────────────────────────────────────────────
-// Returns WHAT structure to trade + WHY. Prices come from calcTradeLegs()
-// which fetches actual bid/ask from both legs of the chain.
-const pickStructure = (ivRaw, chgPct, optType) => {
-  const iv     = (ivRaw||0) * 100
-  const mom    = Math.abs(chgPct||0)
-  const bull   = (chgPct||0) >= 0
-  const hasDir = mom >= 0.4
+// ─── Structure + GEX helpers ─────────────────────────────────────────────────
 
-  if (iv > 55) {
-    if (hasDir) {
-      const type = bull ? 'Bull Put Spread' : 'Bear Call Spread'
-      return {
-        structure:'Credit Spread', type, icon:'📐',
-        color: bull ? '#00ff88' : '#ff4466', ivEnv:'HIGH',
-        why:`IV ${iv.toFixed(0)}% is elevated — sell premium, don't buy it. A ${type} collects credit and profits if the stock stays ${bull?'above':'below'} your short strike.`,
-        setup: type==='Bull Put Spread'
-          ? `SELL OTM put + BUY lower-strike put, same expiry. Both legs from the live chain. Max profit = net credit received.`
-          : `SELL OTM call + BUY higher-strike call, same expiry. Both legs from the live chain. Max profit = net credit received.`,
-        note:`Max risk = spread width − credit. Close at 50% of max profit.`,
-      }
-    }
-    return {
-      structure:'Iron Condor', type:'Iron Condor', icon:'🦅',
-      color:'#ff9500', ivEnv:'HIGH',
-      why:`IV ${iv.toFixed(0)}% is high + only ${mom.toFixed(1)}% daily move — textbook Iron Condor environment. Collect premium from both sides while stock stays range-bound.`,
-      setup:`SELL OTM put spread + SELL OTM call spread, same expiry (4 legs total). Max profit if stock stays between both short strikes.`,
-      note:`Close at 50% of max profit. Exit if either short strike is touched.`,
-    }
-  }
+// spreadWidth: distance between spread legs, scaled to stock price
+// Ensures realistic bid/ask spreads and meaningful risk/reward
+const spreadWidth = p => p>=3000?100 : p>=500?25 : p>=200?10 : p>=50?5 : 2.5
 
-  if (iv >= 28) {
-    if (hasDir) {
-      const type = bull ? 'Bull Call Spread' : 'Bear Put Spread'
-      return {
-        structure:'Debit Spread', type, icon:'📊',
-        color: bull ? '#00ff88' : '#ff4466', ivEnv:'MODERATE',
-        why:`IV ${iv.toFixed(0)}% is moderate — a debit spread costs ~45% less than a naked ${bull?'call':'put'} while keeping full directional exposure. Better risk/reward here.`,
-        setup: type==='Bull Call Spread'
-          ? `BUY ATM call + SELL OTM call (higher strike), same expiry. Net debit = your max risk. Max profit = spread width − debit.`
-          : `BUY ATM put + SELL OTM put (lower strike), same expiry. Net debit = your max risk. Max profit = spread width − debit.`,
-        note:`Both strikes and net debit calculated from live chain. Target 75% of max profit.`,
-      }
-    }
-    return {
-      structure:'Butterfly', type: optType==='call' ? 'Call Butterfly' : 'Put Butterfly',
-      icon:'🦋', color:'#00c8ff', ivEnv:'MODERATE',
-      why:`IV ${iv.toFixed(0)}% moderate + low momentum (${chgPct?.toFixed(1)}%). No strong directional edge — Butterfly is the cheapest structure, profits from a price pin at expiry.`,
-      setup:`BUY 1 lower-strike + SELL 2 ATM + BUY 1 upper-strike, same expiry. Net debit from all 3 legs. Max profit if stock closes exactly at middle strike.`,
-      note:`Cheapest structure. Full debit is max risk. Target 60% of max profit.`,
-    }
-  }
+// findLeg: contract in arr closest to target strike
+const findLeg = (arr, tgt) =>
+  arr.length ? arr.reduce((a,b)=>Math.abs(b.strike-tgt)<Math.abs(a.strike-tgt)?b:a) : null
 
-  if (hasDir) {
-    return {
-      structure:'Naked Option', type: optType==='call' ? 'Long Call' : 'Long Put',
-      icon: optType==='call' ? '🟢' : '🔴',
-      color: optType==='call' ? '#00ff88' : '#ff4466', ivEnv:'LOW',
-      why:`IV ${iv.toFixed(0)}% is LOW — premium is cheap. Naked ${optType==='call'?'call':'put'} gives maximum leverage when options are inexpensive. No need to spread.`,
-      setup:`BUY single ${optType==='call'?'call':'put'} at ATM or slightly OTM. Full premium at risk but maximum upside if the move comes.`,
-      note:`Full premium at risk. Highest leverage. Best when you have a clear catalyst.`,
-    }
-  }
+// approxGEX: proxy Gamma Exposure from chain data.
+// Real GEX = gamma × OI × 100 × price². We don't have gamma directly from
+// Tradier greeks names, but mid_iv + delta let us approximate it via
+// Black-Scholes approximation: gamma ≈ delta(1-delta)/(price × iv × √(dte/365))
+// Since dte isn't per-contract, we use a constant 30-day proxy. The relative
+// ranking across strikes is what matters, not the absolute value.
+const approxGEX = (o, price) => {
+  const oi    = parseFloat(o.open_interest||0)
+  const iv    = parseFloat(o.greeks?.mid_iv||o.implied_volatility||0.3)
+  const delta = Math.abs(parseFloat(o.greeks?.delta||0.5))
+  if (!oi || iv===0) return 0
+  // gamma proxy: bell-shaped, peaks at delta=0.5
+  const gammaPx = delta*(1-delta) / (price * iv * Math.sqrt(30/365))
+  // For calls: positive GEX (dealers long gamma → pinning)
+  // For puts: negative GEX (dealers short gamma → acceleration)
+  const sign = o.option_type==='call' ? 1 : -1
+  return sign * gammaPx * oi * 100
+}
+
+// scoreStrike: composite score for a single option contract
+// Weights: OI 35% | Volume 30% | Delta quality 25% | GEX 10%
+// Higher score = better liquidity + positioning for profitable trades
+const scoreStrike = (o, price, allOI, allVol) => {
+  if (!o) return 0
+  const oi      = parseFloat(o.open_interest||0)
+  const vol     = parseFloat(o.volume||0)
+  const delta   = Math.abs(parseFloat(o.greeks?.delta||0))
+  const bid     = parseFloat(o.bid||0)
+  const ask     = parseFloat(o.ask||0)
+  const mid     = (bid+ask)/2
+
+  if (mid === 0 || bid === 0) return 0           // no liquidity = skip
+
+  // Normalise OI and volume (0–1) against max in chain
+  const oiScore  = allOI  > 0 ? oi  / allOI  : 0
+  const volScore = allVol > 0 ? vol / allVol  : 0
+
+  // Delta quality: reward 0.30–0.55 range (enough premium, not too deep ITM)
+  const dScore = delta>=0.30 && delta<=0.55 ? 1.0
+               : delta>=0.20 && delta<=0.65 ? 0.6
+               : delta>=0.10                ? 0.2 : 0
+
+  // Bid-ask spread penalty: wide spread = less liquid
+  const spread = ask > 0 ? (ask-bid)/ask : 1
+  const liqPen = 1 - Math.min(spread, 0.5)*0.6   // max 30% penalty
+
+  // GEX alignment bonus (high GEX absolute = important price level)
+  const gex     = Math.abs(approxGEX(o, price))
+  const gexNorm = Math.min(gex / (allOI * 0.01 + 1), 1)
+
+  return (oiScore*0.35 + volScore*0.30 + dScore*0.25 + gexNorm*0.10) * liqPen
+}
+
+// findBestStrike: score the full side of the chain and return the highest-scoring
+// contract within ±2 strikes of the target DTE-adjusted strike.
+// Falls back to closest-to-target if no scored results found.
+const findBestStrike = (side, tgtStrike, price) => {
+  if (!side.length) return null
+  const allOI  = Math.max(...side.map(o=>parseFloat(o.open_interest||0)), 1)
+  const allVol = Math.max(...side.map(o=>parseFloat(o.volume||0)), 1)
+
+  // Candidates: strikes within ±3 steps of tgtStrike that have liquidity
+  const step   = autoStep(price)
+  const window = step * 3
+  const cands  = side.filter(o =>
+    Math.abs(o.strike - tgtStrike) <= window &&
+    parseFloat(o.bid||0) > 0
+  )
+
+  if (cands.length === 0) return findLeg(side, tgtStrike)  // fallback
+
+  // Score each candidate
+  const scored = cands.map(o => ({ o, s: scoreStrike(o, price, allOI, allVol) }))
+  scored.sort((a,b)=>b.s-a.s)
+  return scored[0].o
+}
+
+// findGEXWall: finds the nearest high-OI strike above/below price (resistance/support)
+// Used for the SHORT leg of spreads — placing it at a natural wall improves success rate
+const findGEXWall = (side, price, direction) => {
+  // direction: 'above' for calls (resistance), 'below' for puts (support)
+  const filtered = direction==='above'
+    ? side.filter(o=>o.strike>price).sort((a,b)=>a.strike-b.strike)
+    : side.filter(o=>o.strike<price).sort((a,b)=>b.strike-a.strike)
+  if (!filtered.length) return null
+  const maxOI = Math.max(...filtered.slice(0,8).map(o=>parseFloat(o.open_interest||0)),1)
+  const scored = filtered.slice(0,8).map(o=>({
+    o, score: parseFloat(o.open_interest||0)/maxOI * (parseFloat(o.volume||0)>0?1.2:1)
+  }))
+  scored.sort((a,b)=>b.score-a.score)
+  return scored[0]?.o || filtered[0]
+}
+
+// ─── buildNakedResult ─────────────────────────────────────────────────────────
+// Finds the highest-conviction single strike using GEX + OI + Volume scoring.
+// The target strike from tfCfg is the starting point; findBestStrike picks the
+// highest-scoring contract within ±3 steps of that target.
+const buildNakedResult = (chain, price, step, optType, tfCfg) => {
+  const suf  = optType==='call' ? 'C' : 'P'
+  const pct  = optType==='call' ? tfCfg.strikePct : (2-tfCfg.strikePct)
+  const tgt  = Math.round(price*pct/step)*step
+  const side = chain.filter(o=>o.option_type===optType)
+
+  // Use GEX+OI+Volume scoring to find the best strike
+  const best = findBestStrike(side, tgt, price)
+  if (!best) return null
+  const b=parseFloat(best.bid||0), a=parseFloat(best.ask||0), m=(b+a)/2
+  if (m===0) return null
+  const f2 = v => Math.max(0,v).toFixed(2)
+
+  // Strike quality signals for display
+  const allOI  = Math.max(...side.map(o=>parseFloat(o.open_interest||0)),1)
+  const allVol = Math.max(...side.map(o=>parseFloat(o.volume||0)),1)
+  const sc     = scoreStrike(best, price, allOI, allVol)
+  const gex    = approxGEX(best, price)
+  const strikeQuality = sc>=0.60?'⭐ HIGH CONVICTION':sc>=0.35?'MODERATE':'LOW — check liquidity'
+
   return {
-    structure:'Strangle', type:'Long Strangle', icon:'🔀',
-    color:'#00c8ff', ivEnv:'LOW',
-    why:`IV ${iv.toFixed(0)}% very low + no clear direction (${chgPct?.toFixed(1)}%). Premium is cheap — buy both sides and profit from a big move in either direction.`,
-    setup:`BUY OTM call + BUY OTM put, same expiry, equidistant from current price. Total debit from both legs.`,
-    note:`Needs a large move to overcome total premium paid. Best before a known catalyst.`,
+    strikeStr:     `$${best.strike}${suf}`,
+    bid:b, ask:a, mid:m,
+    entry:         `$${f2(m*0.95)} – $${f2(m*1.05)}  (mid $${f2(m)})`,
+    target:        `$${f2(m*(1+tfCfg.profitTarget))}  (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
+    stop:          `$${f2(m*(1-tfCfg.stopLoss))}  (−${(tfCfg.stopLoss*100).toFixed(0)}%)`,
+    structureType: optType==='call' ? 'Long Call' : 'Long Put',
+    legs:          null,
+    iv:            best.greeks?.mid_iv||best.implied_volatility||0,
+    delta:         best.greeks?.delta||null,
+    theta:         best.greeks?.theta||null,
+    volume:        best.volume||0,
+    oi:            best.open_interest||0,
+    primaryStrike: best.strike,
+    strikeScore:   sc,
+    strikeQuality,
+    gexSign:       gex>=0?'positive':'negative',
+    gexNote:       gex>=0
+      ? `Dealers long gamma at $${best.strike} — price pinning / support zone`
+      : `Dealers short gamma at $${best.strike} — momentum accelerator / breakout zone`,
   }
 }
 
-// ─── Spread width lookup (drives short-leg strike distance) ──────────────────
-const swWidth = p => p>=2000?100 : p>=500?25 : p>=200?10 : p>=100?5 : p>=50?2.5 : 1
-
-// ─── Calculate actual spread legs from live chain data ────────────────────────
-// This is where real prices come from. Uses actual bid/ask on every leg.
-// Never falls back to mid % — if legs can't be found, returns naked result.
-const calcTradeLegs = (chain, struct, price, step, optType, tfCfg) => {
+// ─── buildSpreadResult ────────────────────────────────────────────────────────
+// Only called when user explicitly picks a multi-leg structure from the dropdown.
+// ALL prices from real chain bid/ask — zero percentage guessing.
+const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
   const calls = chain.filter(o=>o.option_type==='call').sort((a,b)=>a.strike-b.strike)
-  const puts  = chain.filter(o=>o.option_type==='put').sort((a,b)=>a.strike-b.strike)
-  const f2    = v => (Math.max(0,v)).toFixed(2)
-  const B     = o => Math.max(0, parseFloat(o?.bid||0))
-  const A     = o => Math.max(0, parseFloat(o?.ask||0))
-  const M     = o => (B(o)+A(o))/2
-  const at    = (arr,t) => arr.length ? arr.reduce((x,y)=>Math.abs(y.strike-t)<Math.abs(x.strike-t)?y:x) : null
-  const w     = swWidth(price)
+  const puts  = chain.filter(o=>o.option_type==='put' ).sort((a,b)=>a.strike-b.strike)
+  const w     = spreadWidth(price)
   const atm   = Math.round(price/step)*step
-  const suf   = optType==='call'?'C':'P'
-  const arr   = optType==='call'?calls:puts
+  const f2    = v => Math.max(0,v).toFixed(2)
+  const B     = o => Math.max(0,parseFloat(o?.bid||0))
+  const A     = o => Math.max(0,parseFloat(o?.ask||0))
+  const M     = o => (B(o)+A(o))/2
 
-  // Long / primary leg (ATM or slightly OTM in direction)
-  const tgtStrike = optType==='call'
-    ? Math.round(price*tfCfg.strikePct/step)*step
-    : Math.round(price*(2-tfCfg.strikePct)/step)*step
-  const longLeg = at(arr, tgtStrike)
-  if (!longLeg || M(longLeg)===0) {
-    return { strikeStr:'N/A', entry:'No liquid options', target:'—', stop:'—', nakedMid:'—', legs:[] }
-  }
-  const lm = M(longLeg)
-
-  // Naked fallback (used when a second leg can't be found or has 0 bid)
-  const naked = {
-    strikeStr: `$${longLeg.strike}${suf}`,
-    entry:  `$${f2(lm*0.95)} – $${f2(lm*1.05)} mid`,
-    target: `$${f2(lm*(1+tfCfg.profitTarget))} (+${(tfCfg.profitTarget*100).toFixed(0)}%)`,
-    stop:   `$${f2(lm*(1-tfCfg.stopLoss))} (-${(tfCfg.stopLoss*100).toFixed(0)}%)`,
-    nakedMid: `$${f2(lm)}`,
-    legs: [`BUY  $${longLeg.strike}${suf} · bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))} / mid $${f2(lm)}`]
-  }
-
-  const s = struct.structure
-
-  // ── DEBIT SPREAD (Bull Call / Bear Put) ────────────────────────────────────
-  if (s === 'Debit Spread') {
-    const shortTgt = optType==='call' ? longLeg.strike+w : longLeg.strike-w
-    const shortLeg = at(arr, shortTgt)
-    if (!shortLeg || shortLeg.strike===longLeg.strike || B(shortLeg)===0) return naked
-    const nd  = Math.max(0.01, A(longLeg) - B(shortLeg))   // net debit
-    const sw  = Math.abs(shortLeg.strike - longLeg.strike)  // spread width
-    const mp  = Math.max(0, sw - nd)                        // max profit per share
-    const tgt = nd + mp*0.75
+  if (scanType==='Call Spread') {
+    const longTgt  = Math.round(price*tfCfg.strikePct/step)*step
+    // Long leg: GEX+OI+Volume best strike near target
+    const longLeg  = findBestStrike(calls, longTgt, price)
+    if (!longLeg) return null
+    // Short leg: nearest GEX wall above price (high-OI resistance) within spread width
+    const gexWall  = findGEXWall(calls, price, 'above')
+    const shortTgt = gexWall && Math.abs(gexWall.strike-longLeg.strike)<=w*2 && gexWall.strike>longLeg.strike
+                   ? gexWall.strike : longLeg.strike+w
+    const shortLeg = findLeg(calls, shortTgt)
+    if (!shortLeg||shortLeg.strike===longLeg.strike||B(shortLeg)===0) return null
+    const nd = Math.max(0.01, A(longLeg)-B(shortLeg))
+    const sw = Math.abs(shortLeg.strike-longLeg.strike)
+    const mp = Math.max(0, sw-nd)
     return {
-      strikeStr: optType==='call'
-        ? `$${longLeg.strike}C / $${shortLeg.strike}C`
-        : `$${longLeg.strike}P / $${shortLeg.strike}P`,
-      entry:  `$${f2(nd)} net debit`,
-      target: `$${f2(tgt)} spread value · 75% of max ($${(mp*100).toFixed(0)}/contract)`,
-      stop:   `$${f2(nd*0.50)} · exit if debit halved`,
-      nakedMid:`$${f2(lm)}`,
-      spreadWidth:sw, maxProfit:mp, netDebit:nd,
+      strikeStr:`$${longLeg.strike}C / $${shortLeg.strike}C`,
+      bid:nd, ask:nd, mid:nd,
+      entry:  `$${f2(nd)} net debit  ($${(nd*100).toFixed(0)}/contract)`,
+      target: `$${f2(nd+mp*0.75)} spread value  (75% of max profit $${(mp*100).toFixed(0)}/contract)`,
+      stop:   `$${f2(nd*0.50)}  (−50% of debit paid)`,
+      structureType:'Bull Call Spread',
       legs:[
-        `BUY  $${longLeg.strike}${suf}  · bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))}`,
-        `SELL $${shortLeg.strike}${suf} · bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))}`,
-        `NET DEBIT: $${f2(nd)} per spread ($${(nd*100).toFixed(0)} per contract)`,
-      ]
+        `BUY  $${longLeg.strike}C    bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))} / mid $${f2(M(longLeg))}`,
+        `SELL $${shortLeg.strike}C   bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))} / mid $${f2(M(shortLeg))}`,
+        `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract  ·  max loss $${(nd*100).toFixed(0)}/contract`,
+      ],
+      iv:longLeg.greeks?.mid_iv||0, delta:longLeg.greeks?.delta||null,
+      theta:longLeg.greeks?.theta||null,
+      volume:longLeg.volume||0, oi:longLeg.open_interest||0, primaryStrike:longLeg.strike,
     }
   }
 
-  // ── CREDIT SPREAD (Bull Put / Bear Call) ──────────────────────────────────
-  if (s === 'Credit Spread') {
-    const isBullPut = struct.type === 'Bull Put Spread'
-    const creditArr = isBullPut ? puts : calls
-    // Short leg: slightly OTM (1 step away from ATM)
-    const shortTgt  = isBullPut ? atm - step : atm + step
-    // Long leg:  protection, further OTM (1 width away from short)
-    const longTgt   = isBullPut ? shortTgt - w : shortTgt + w
-    const shortLeg  = at(creditArr, shortTgt)
-    const longProt  = at(creditArr, longTgt)
-    if (!shortLeg||!longProt||shortLeg.strike===longProt.strike||B(shortLeg)===0) return naked
-    const nc  = Math.max(0.01, B(shortLeg) - A(longProt))   // net credit
-    const sw  = Math.abs(shortLeg.strike - longProt.strike)
-    const ml  = Math.max(0, sw - nc)                         // max loss
-    const suf2 = isBullPut ? 'P' : 'C'
+  if (scanType==='Put Spread') {
+    const longTgt  = Math.round(price*(2-tfCfg.strikePct)/step)*step
+    // Long leg: GEX+OI+Volume best strike near target
+    const longLeg  = findBestStrike(puts, longTgt, price)
+    if (!longLeg) return null
+    // Short leg: nearest GEX wall below price (high-OI support) within spread width
+    const gexWall  = findGEXWall(puts, price, 'below')
+    const shortTgt = gexWall && Math.abs(gexWall.strike-longLeg.strike)<=w*2 && gexWall.strike<longLeg.strike
+                   ? gexWall.strike : longLeg.strike-w
+    const shortLeg = findLeg(puts, shortTgt)
+    if (!shortLeg||shortLeg.strike===longLeg.strike||B(shortLeg)===0) return null
+    const nd = Math.max(0.01, A(longLeg)-B(shortLeg))
+    const sw = Math.abs(longLeg.strike-shortLeg.strike)
+    const mp = Math.max(0, sw-nd)
     return {
-      strikeStr: isBullPut
-        ? `$${shortLeg.strike}P / $${longProt.strike}P`
-        : `$${shortLeg.strike}C / $${longProt.strike}C`,
-      entry:  `$${f2(nc)} credit received`,
-      target: `$${f2(nc*0.50)} · close at 50% profit (keep $${(nc*50).toFixed(0)}/contract)`,
-      stop:   `$${f2(nc*2)} cost-to-close · 2× credit = max accepted loss`,
-      nakedMid:`$${f2(lm)}`,
-      netCredit:nc, spreadWidth:sw, maxLoss:ml,
+      strikeStr:`$${longLeg.strike}P / $${shortLeg.strike}P`,
+      bid:nd, ask:nd, mid:nd,
+      entry:  `$${f2(nd)} net debit  ($${(nd*100).toFixed(0)}/contract)`,
+      target: `$${f2(nd+mp*0.75)} spread value  (75% of max profit $${(mp*100).toFixed(0)}/contract)`,
+      stop:   `$${f2(nd*0.50)}  (−50% of debit paid)`,
+      structureType:'Bear Put Spread',
       legs:[
-        `SELL $${shortLeg.strike}${suf2} · bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))}`,
-        `BUY  $${longProt.strike}${suf2}  · bid $${f2(B(longProt))} / ask $${f2(A(longProt))}`,
-        `NET CREDIT: $${f2(nc)} per spread ($${(nc*100).toFixed(0)} per contract)`,
-      ]
+        `BUY  $${longLeg.strike}P    bid $${f2(B(longLeg))} / ask $${f2(A(longLeg))} / mid $${f2(M(longLeg))}`,
+        `SELL $${shortLeg.strike}P   bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))} / mid $${f2(M(shortLeg))}`,
+        `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract  ·  max loss $${(nd*100).toFixed(0)}/contract`,
+      ],
+      iv:longLeg.greeks?.mid_iv||0, delta:longLeg.greeks?.delta||null,
+      theta:longLeg.greeks?.theta||null,
+      volume:longLeg.volume||0, oi:longLeg.open_interest||0, primaryStrike:longLeg.strike,
     }
   }
 
-  // ── IRON CONDOR ────────────────────────────────────────────────────────────
-  if (s === 'Iron Condor') {
-    const ps  = at(puts,  Math.round(price*0.98/step)*step)
-    const pl  = at(puts,  Math.round(price*0.95/step)*step)
-    const cs  = at(calls, Math.round(price*1.02/step)*step)
-    const cl  = at(calls, Math.round(price*1.05/step)*step)
-    if (!ps||!pl||!cs||!cl) return naked
-    const pc  = Math.max(0, B(ps)-A(pl))
-    const cc  = Math.max(0, B(cs)-A(cl))
-    const tc  = pc+cc
-    if (tc<=0) return naked
+  if (scanType==='Iron Condor') {
+    const ps=findLeg(puts, Math.round(price*0.97/step)*step)
+    const pl=findLeg(puts, Math.round(price*0.94/step)*step)
+    const cs=findLeg(calls,Math.round(price*1.03/step)*step)
+    const cl=findLeg(calls,Math.round(price*1.06/step)*step)
+    if (!ps||!pl||!cs||!cl) return null
+    const pc=Math.max(0,B(ps)-A(pl)), cc=Math.max(0,B(cs)-A(cl)), tc=pc+cc
+    if (tc<=0) return null
     return {
-      strikeStr:`$${ps.strike}P/$${pl.strike}P + $${cs.strike}C/$${cl.strike}C`,
-      entry:  `$${f2(tc)} total credit · $${f2(pc)} put side + $${f2(cc)} call side`,
-      target: `$${f2(tc*0.50)} · close at 50% of max profit`,
-      stop:   `Close immediately if either short strike ($${ps.strike}P or $${cs.strike}C) is breached`,
-      nakedMid:`$${f2(lm)}`,
-      totalCredit:tc,
+      strikeStr:`$${ps.strike}P-$${pl.strike}P / $${cs.strike}C-$${cl.strike}C`,
+      bid:tc, ask:tc, mid:tc,
+      entry:  `$${f2(tc)} total credit  ($${(tc*100).toFixed(0)}/contract)`,
+      target: `Close at 50% profit — buy back for $${f2(tc*0.50)}`,
+      stop:   `Exit if either short strike ($${ps.strike}P or $${cs.strike}C) is breached`,
+      structureType:'Iron Condor',
       legs:[
-        `SELL $${ps.strike}P  · bid $${f2(B(ps))} / ask $${f2(A(ps))}`,
-        `BUY  $${pl.strike}P  · bid $${f2(B(pl))} / ask $${f2(A(pl))}`,
-        `SELL $${cs.strike}C  · bid $${f2(B(cs))} / ask $${f2(A(cs))}`,
-        `BUY  $${cl.strike}C  · bid $${f2(B(cl))} / ask $${f2(A(cl))}`,
-        `NET CREDIT: $${f2(tc)} total ($${(tc*100).toFixed(0)} per contract)`,
-      ]
+        `SELL $${ps.strike}P   bid $${f2(B(ps))} / ask $${f2(A(ps))}`,
+        `BUY  $${pl.strike}P   bid $${f2(B(pl))} / ask $${f2(A(pl))}`,
+        `SELL $${cs.strike}C   bid $${f2(B(cs))} / ask $${f2(A(cs))}`,
+        `BUY  $${cl.strike}C   bid $${f2(B(cl))} / ask $${f2(A(cl))}`,
+        `TOTAL CREDIT $${f2(tc)}  ($${(tc*100).toFixed(0)}/contract)  ·  max loss = spread width − credit`,
+      ],
+      iv:cs.greeks?.mid_iv||0, delta:cs.greeks?.delta||null,
+      theta:null, volume:cs.volume||0, oi:cs.open_interest||0, primaryStrike:cs.strike,
     }
   }
 
-  // ── BUTTERFLY ──────────────────────────────────────────────────────────────
-  if (s === 'Butterfly') {
-    const lo = at(arr, longLeg.strike - w)
-    const hi = at(arr, longLeg.strike + w)
-    if (!lo||!hi||lo.strike===longLeg.strike||hi.strike===longLeg.strike) return naked
-    const nd  = Math.max(0.01, A(lo) - 2*B(longLeg) + A(hi))
-    const mp  = Math.max(0, w - nd)
+  if (scanType==='Butterfly') {
+    const mid_=findLeg(calls,atm)
+    if (!mid_) return null
+    const lo=findLeg(calls,atm-w), hi=findLeg(calls,atm+w)
+    if (!lo||!hi||lo.strike===mid_.strike||hi.strike===mid_.strike) return null
+    const nd=Math.max(0.01, A(lo)-2*B(mid_)+A(hi))
+    const mp=Math.max(0,w-nd)
     return {
-      strikeStr:`$${lo.strike}/${longLeg.strike}/${hi.strike}${suf}`,
-      entry:  `$${f2(nd)} net debit · 3 legs combined`,
-      target: `$${f2(nd + mp*0.60)} · 60% of max profit ($${(mp*100).toFixed(0)}/contract max)`,
-      stop:   `$${f2(nd*0.50)} · 50% of debit · full debit is your max risk`,
-      nakedMid:`$${f2(lm)}`,
-      netDebit:nd, maxProfit:mp,
+      strikeStr:`$${lo.strike}/$${mid_.strike}/$${hi.strike}C`,
+      bid:nd, ask:nd, mid:nd,
+      entry:  `$${f2(nd)} net debit  ($${(nd*100).toFixed(0)}/contract)`,
+      target: `$${f2(nd+mp*0.60)} spread value  (60% of max profit $${(mp*100).toFixed(0)}/contract)`,
+      stop:   `$${f2(nd*0.50)}  (−50% of debit)`,
+      structureType:'Butterfly',
       legs:[
-        `BUY  1× $${lo.strike}${suf}         · ask $${f2(A(lo))}`,
-        `SELL 2× $${longLeg.strike}${suf} · bid $${f2(B(longLeg))}`,
-        `BUY  1× $${hi.strike}${suf}          · ask $${f2(A(hi))}`,
-        `NET DEBIT: $${f2(nd)} ($${(nd*100).toFixed(0)} per contract)`,
-      ]
+        `BUY  1× $${lo.strike}C    bid $${f2(B(lo))} / ask $${f2(A(lo))}`,
+        `SELL 2× $${mid_.strike}C  bid $${f2(B(mid_))} / ask $${f2(A(mid_))}`,
+        `BUY  1× $${hi.strike}C    bid $${f2(B(hi))} / ask $${f2(A(hi))}`,
+        `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract if stock pins $${mid_.strike} at expiry`,
+      ],
+      iv:mid_.greeks?.mid_iv||0, delta:mid_.greeks?.delta||null,
+      theta:mid_.greeks?.theta||null,
+      volume:mid_.volume||0, oi:mid_.open_interest||0, primaryStrike:mid_.strike,
     }
   }
 
-  // ── STRANGLE ───────────────────────────────────────────────────────────────
-  if (s === 'Strangle') {
-    const cLeg = at(calls, Math.round(price*1.02/step)*step)
-    const pLeg = at(puts,  Math.round(price*0.98/step)*step)
-    if (!cLeg||!pLeg||A(cLeg)===0||A(pLeg)===0) return naked
-    const td = A(cLeg) + A(pLeg)
+  if (scanType==='Strangle') {
+    const cLeg=findLeg(calls,Math.round(price*1.02/step)*step)
+    const pLeg=findLeg(puts, Math.round(price*0.98/step)*step)
+    if (!cLeg||!pLeg||A(cLeg)===0||A(pLeg)===0) return null
+    const td=A(cLeg)+A(pLeg)
     return {
       strikeStr:`$${pLeg.strike}P / $${cLeg.strike}C`,
-      entry:  `$${f2(td)} total debit · $${f2(A(pLeg))} put + $${f2(A(cLeg))} call`,
-      target: `$${f2(td*2)} · 100% gain on combined debit`,
-      stop:   `$${f2(td*0.50)} · exit if 50% of total debit lost`,
-      nakedMid:`$${f2(lm)}`,
-      totalDebit:td,
+      bid:td, ask:td, mid:td,
+      entry:  `$${f2(td)} total debit  ($${(td*100).toFixed(0)}/contract)`,
+      target: `$${f2(td*2.0)}  (+100% on combined debit)`,
+      stop:   `$${f2(td*0.50)}  (−50% of total debit)`,
+      structureType:'Long Strangle',
       legs:[
-        `BUY $${pLeg.strike}P · bid $${f2(B(pLeg))} / ask $${f2(A(pLeg))}`,
-        `BUY $${cLeg.strike}C · bid $${f2(B(cLeg))} / ask $${f2(A(cLeg))}`,
-        `TOTAL DEBIT: $${f2(td)} ($${(td*100).toFixed(0)} per contract)`,
-      ]
+        `BUY $${pLeg.strike}P   bid $${f2(B(pLeg))} / ask $${f2(A(pLeg))} / mid $${f2(M(pLeg))}`,
+        `BUY $${cLeg.strike}C   bid $${f2(B(cLeg))} / ask $${f2(A(cLeg))} / mid $${f2(M(cLeg))}`,
+        `TOTAL DEBIT $${f2(td)}  ($${(td*100).toFixed(0)}/contract)`,
+      ],
+      iv:cLeg.greeks?.mid_iv||0, delta:null,
+      theta:cLeg.greeks?.theta||null,
+      volume:cLeg.volume||0, oi:cLeg.open_interest||0, primaryStrike:cLeg.strike,
     }
   }
 
-  // ── NAKED OPTION fallthrough ────────────────────────────────────────────────
-  return naked
+  return null  // unknown scanType
 }
 
 const FUT_SYMBOLS = {
@@ -411,7 +477,7 @@ const EXIT_RULES = [
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 const iSt = {
   width:'100%', background:C.card, border:`1px solid ${C.border}`,
-  borderRadius:4, color:'#c8d8e8', padding:'9px 12px',
+  borderRadius:4, color:C.text, padding:'9px 12px',
   fontSize:12, fontFamily:'inherit',
 }
 
@@ -517,6 +583,11 @@ async function sendTelegram(message, token, chatId) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
+
+  // ── theme ──
+  const [isDark, setIsDark] = useState(()=>ls('isDark','1')==='1')
+  useEffect(()=>{try{localStorage.setItem('isDark',isDark?'1':'0')}catch{}},[isDark])
+  const C = isDark ? DARK_THEME : LIGHT_THEME
 
   // ── main tab & tools panel ──
   const [tab,        setTab]        = useState('dash')
@@ -710,8 +781,6 @@ export default function App() {
       dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Bid: ${fmtP(bid)} | Ask: ${fmtP(ask)} | Mid: ${fmtP(mid)}`)
       dbg(`   ✓ IV: ${fmtPct(iv)} | Delta: ${delta?.toFixed(3)||'—'} | Theta: ${theta?.toFixed(3)||'—'}`)
 
-      // entry1/entry2/target/stop removed — calcTradeLegs provides real spread prices
-
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
       let score=50;const reasons=[],warnings=[]
@@ -729,35 +798,47 @@ export default function App() {
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ All data from Tradier ${tradierMode}`)
 
-      const struct = pickStructure(iv, chgPct, optType)
-      const legs   = calcTradeLegs(chain, struct, price, step, optType, tfCfg)
-      dbg(`   ✓ Structure: ${struct.structure} — ${struct.type}`)
-      dbg(`   ✓ Legs: ${legs.legs?.join(' | ')||'N/A'}`)
+      // Build result: spread if explicitly selected, else naked option
+      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
+      const isSpread = SPREAD_TYPES.includes(scanType)
+      const tradeData = isSpread
+        ? buildSpreadResult(chain, price, step, scanType, tfCfg)
+        : buildNakedResult (chain, price, step, optType, tfCfg)
+      if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
+      dbg(`   ✓ Structure: ${tradeData.structureType}`)
+      dbg(`   ✓ Strike: ${tradeData.strikeStr} | Entry: ${tradeData.entry}`)
+      if (tradeData.legs) tradeData.legs.forEach(l=>dbg(`      ${l}`))
       setScanResult({
         ticker,
-        tradeType: struct.type,
-        nakedType: tradeType,
+        tradeType:     tradeData.structureType,
         score, expiryDisplay, expiryRaw,
-        strikeStr: legs.strikeStr,
-        entry:     legs.entry,
-        target:    legs.target,
-        stop:      legs.stop,
-        nakedMid:  legs.nakedMid,
-        legsList:  legs.legs||[],
+        strikeStr:     tradeData.strikeStr,
+        strikeScore:   tradeData.strikeScore||0,
+        strikeQuality: tradeData.strikeQuality||'',
+        gexNote:       tradeData.gexNote||'',
+        gexSign:       tradeData.gexSign||'',
+        bid:           isSpread ? tradeData.bid : tradeData.bid,
+        ask:           isSpread ? tradeData.ask : tradeData.ask,
+        mid:           isSpread ? tradeData.mid : tradeData.mid,
+        entry:         tradeData.entry,
+        target:        tradeData.target,
+        stop:          tradeData.stop,
+        isSpread,
+        legsList:      tradeData.legs||[],
         grade:score>=80?'A':score>=65?'B':'C',
         confidence:score>=80?'High':score>=65?'Medium':'Low',
-        price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
-        iv:fmtPct(iv),ivRaw:iv,
-        delta:delta?delta.toFixed(3):'—',
-        theta:theta?theta.toFixed(3):'—',
-        volume:best.volume||0,
-        oi:best.open_interest||0,
+        price:fmtP(price),
+        bid:fmtP(tradeData.bid), ask:fmtP(tradeData.ask), mid:fmtP(tradeData.mid),
+        iv:fmtPct(tradeData.iv||iv),ivRaw:tradeData.iv||iv,
+        delta:(tradeData.delta||delta)?((tradeData.delta||delta)).toFixed(3):'—',
+        theta:(tradeData.theta||theta)?((tradeData.theta||theta)).toFixed(3):'—',
+        volume:tradeData.volume||best.volume||0,
+        oi:tradeData.oi||best.open_interest||0,
         chgPct:chgPct.toFixed(2)+'%',
         volRatio:volRatio.toFixed(1)+'x',
         reasons,warnings,
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:`Tradier ${tradierMode}`,
-        struct,
       })
     } catch(e) {
       setScanErr('❌ '+e.message)
@@ -881,28 +962,22 @@ _Not financial advice. Trade at your own risk._`
   }
 
   const buildScanAlert = r => {
-  const sym      = r.ticker||r.sym||'—'
-  const struct   = r.struct
-  const isBear   = (r.nakedType||r.tradeType||'').toLowerCase()==='put'||
-                   (struct?.type||'').toLowerCase().includes('bear')||
-                   (struct?.type||'').toLowerCase().includes('put')
-  const em       = isBear?'🔴📉':'🟢📈'
-  const typeLine = struct ? `${struct.structure} — ${struct.type}` : r.tradeType
-  const whyLine  = struct ? struct.why.slice(0,100)+'...' : ''
-  const howLine  = struct ? struct.setup.slice(0,120)+'...' : ''
-  const nakRef   = r.nakedMid ? `\n📊 *Underlying option mid:* ${r.nakedMid} (${r.nakedType||''})` : ''
-  return `${em} *${typeLine.toUpperCase()} — $${sym}*
+  const sym    = r.ticker||r.sym||'—'
+  const isBear = (r.tradeType||'').toLowerCase().includes('put')||
+                 (r.tradeType||'').toLowerCase().includes('bear')
+  const em     = isBear?'🔴📉':'🟢📈'
+  const legsBlock = r.legsList?.length
+    ? `\n🔧 *Legs:*\n${r.legsList.map(l=>'  '+l).join('\n')}`
+    : ''
+  return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
 🎯 *Conviction: ${r.score}%* | Grade: ${r.grade||'—'}
 💰 *Stock:* ${r.price} (${r.chgPct} today)
 📌 *Strike:* ${r.strikeStr} | Expiry: ${r.expiryDisplay}
 
-📐 *Structure:* ${whyLine}
-🔧 *Build:* ${howLine}
-
 📊 *Entry:* ${r.entry}
 🎯 *Target:* ${r.target}
-🛑 *Stop:* ${r.stop}${nakRef}
+🛑 *Stop:* ${r.stop}${legsBlock}
 
 📡 *Chain:* IV: ${r.iv} | Δ ${r.delta} | Bid: ${r.bid} | Ask: ${r.ask}
 
@@ -915,7 +990,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const pushToAlert = r=>{
     setAlert(p=>({...p,
       ticker: r.ticker||r.sym||p.ticker,
-      type:   r.struct?.type||r.tradeType||p.type,
+      type:   r.tradeType||p.type,
       expiry: r.expiryDisplay||p.expiry,
       strike: r.strikeStr||p.strike,
       entry:  r.entry||p.entry,
@@ -967,15 +1042,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         iv:fmtPct(iv),delta:delta?delta.toFixed(3):'—',
         volume:best.volume||0,oi:best.open_interest||0,
         expiryDisplay,
-        struct: pickStructure(iv, chgPct, optType),
-        get _legs()     { return calcTradeLegs(chain, this.struct, price, step, optType, tfCfg2) },
-        get strikeStr() { return this._legs.strikeStr },
-        get entry()     { return this._legs.entry },
-        get target()    { return this._legs.target },
-        get stop()      { return this._legs.stop },
-        get nakedMid()  { return this._legs.nakedMid },
-        get legsList()  { return this._legs.legs||[] },
-        get tradeType() { return this.struct.type },
+        // Auto-scanner always uses naked option (single best strike)
+        ...(() => {
+          const td = buildNakedResult(chain, price, step, optType, tfCfg2)
+          if (!td) return { strikeStr:'—', entry:'—', target:'—', stop:'—', mid:fmtP(mid), legsList:[] }
+          return {
+            strikeStr: td.strikeStr,
+            entry:     td.entry,
+            target:    td.target,
+            stop:      td.stop,
+            mid:       fmtP(td.mid),
+            legsList:  [],
+            tradeType: td.structureType,
+          }
+        })(),
         tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
@@ -1002,7 +1082,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         setLastAlert(r)
         if (tgToken&&tgChatId) {
           const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId)
-          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.struct?.icon||''} ${r.struct?.structure||r.tradeType} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
+          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.tradeType} ${r.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
         } else {
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% hits threshold`,...p.slice(0,99)])
         }
@@ -1094,23 +1174,21 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             score=Math.min(96,Math.max(30,score))
 
             const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-            const struct_ia  = pickStructure(iv, chgPct, optType)
-            const legs_ia    = calcTradeLegs(chain, struct_ia, price, step, optType, tfCfg)
+            const td_ia = buildNakedResult(chain, price, step, optType, tfCfg)
+            if (!td_ia) continue
             results.push({
               sym, tfKey, tfLabel:tfCfg.label, tfBadge:tfCfg.badge, tfColor:tfCfg.color,
-              tradeType:   struct_ia.type,
-              nakedType:   optType==='call'?'Call':'Put',
-              strikeStr:   legs_ia.strikeStr,
+              tradeType:    td_ia.structureType,
+              strikeStr:    td_ia.strikeStr,
               expiryDisplay, score,
               grade:score>=90?'A+':score>=80?'A':score>=70?'B':'C',
-              price:fmtP(price), bid:fmtP(bid), ask:fmtP(ask), mid:fmtP(mid),
-              iv:fmtPct(iv), delta:delta?delta.toFixed(3):'—',
-              entry:   legs_ia.entry,
-              target:  legs_ia.target,
-              stop:    legs_ia.stop,
-              nakedMid:legs_ia.nakedMid,
-              legsList:legs_ia.legs||[],
-              struct:  struct_ia,
+              price:fmtP(price),
+              bid:fmtP(td_ia.bid), ask:fmtP(td_ia.ask), mid:fmtP(td_ia.mid),
+              iv:fmtPct(td_ia.iv), delta:td_ia.delta?td_ia.delta.toFixed(3):'—',
+              entry:   td_ia.entry,
+              target:  td_ia.target,
+              stop:    td_ia.stop,
+              legsList:[],
               reasons, warnings, chgPct:chgPct.toFixed(2)+'%',
             })
           } catch {}
@@ -1155,7 +1233,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
-    <div style={{background:C.bg,minHeight:'100vh',fontFamily:"'IBM Plex Mono',monospace",color:'#c8d8e8',paddingBottom:68}}>
+    <div style={{background:C.bg,minHeight:'100vh',fontFamily:"'IBM Plex Mono',monospace",color:C.text,paddingBottom:68,transition:'background .25s, color .25s'}}>
       <style>{`
         *{box-sizing:border-box}
         .hv{cursor:pointer;transition:opacity .15s}.hv:hover{opacity:.8}
@@ -1184,6 +1262,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               </span>
             )}
             {tradierToken && <span style={{fontSize:9,color:C.dim,letterSpacing:1}}>{tradierMode.toUpperCase()}</span>}
+            <button className="hv" onClick={()=>setIsDark(p=>!p)} title={isDark?'Switch to light mode':'Switch to dark mode'} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:4,padding:'5px 9px',fontSize:13,cursor:'pointer',lineHeight:1}}>
+              {isDark?'☀':'🌙'}
+            </button>
             <button className="hv" onClick={()=>{setShowTools(p=>!p);if(!showTools)setToolsTab('settings')}} style={{background:showTools?`${C.green}18`:'transparent',border:`1px solid ${showTools?C.green:C.border}`,color:showTools?C.green:C.dim,borderRadius:4,padding:'5px 11px',fontSize:11,letterSpacing:.5}}>
               {showTools ? '✕ CLOSE' : '⚙ TOOLS'}
             </button>
@@ -1191,7 +1272,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         </div>
 
         {/* /ES /NQ price bar */}
-        <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:'#070c12'}}>
+        <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:isDark?'#070c12':'#eef2f7'}}>
           {[
             {sym:esBar?.label||'SPX',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
             {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
@@ -1200,7 +1281,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:2,color:C.dim}}>{sym}</span>
               {data ? (
                 <>
-                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:1,color:'#c8d8e8'}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:1,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                   <span style={{fontSize:10,color,fontWeight:600}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
                   <span style={{fontSize:10,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
                 </>
@@ -1236,7 +1317,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,color:bc}}>{sym}</span>
                       {data && <span style={{fontSize:8,color:bc,border:`1px solid ${bc}40`,padding:'1px 5px',borderRadius:3}}>{up?'▲ BULL':'▼ BEAR'}</span>}
                     </div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:'#c8d8e8',letterSpacing:1,lineHeight:1.1}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,letterSpacing:1,lineHeight:1.1}}>
                       {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
                     </div>
                     {data && <div style={{fontSize:10,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}% ({data.chg>=0?'+':''}{data.chg.toFixed(2)})</div>}
@@ -1314,7 +1395,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div key={i} style={{background:'#06101a',border:`1px solid ${cardC}30`,borderRadius:4,padding:'9px 11px',marginBottom:6}}>
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:cardC,letterSpacing:2}}>{al.sym}</span>
-                      <span style={{fontSize:10,color:'#c8d8e8'}}>{al.tradeType} {al.strikeStr}</span>
+                      <span style={{fontSize:10,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
                       <span style={{fontSize:8,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 5px',borderRadius:2}}>{al.tfBadge} {al.tfLabel}</span>
                       {high&&<span style={{fontSize:8,color:C.green,border:`1px solid ${C.green}40`,padding:'1px 5px',borderRadius:2}}>90%+ HIGH CONVICTION</span>}
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
@@ -1420,7 +1501,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     }}>
                       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2}}>
                         <span style={{fontSize:13}}>{cfg.badge}</span>
-                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:12,letterSpacing:1.5,color:active?cfg.color:'#c8d8e8'}}>{cfg.label}</span>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:12,letterSpacing:1.5,color:active?cfg.color:C.text}}>{cfg.label}</span>
                         {active&&<span style={{marginLeft:'auto',fontSize:8,color:cfg.color,border:`1px solid ${cfg.color}`,padding:'1px 4px',borderRadius:2}}>ACTIVE</span>}
                       </div>
                       <div style={{fontSize:10,color:active?cfg.color+'cc':C.dim}}>{cfg.desc}</div>
@@ -1462,19 +1543,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               </div>
             )}
 
-            {/* Scan result */}
+            {/* ═══ SCAN RESULT CARD ═══════════════════════════════════════════ */}
             {scanResult&&(
               <div className="si">
-                {/* Grade + ticker header */}
+
+                {/* ── Header: grade + ticker + structure ── */}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:11,flexWrap:'wrap',gap:8}}>
-                  <div style={{display:'flex',gap:11,alignItems:'center'}}>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:54,color:gradeCol(scanResult.grade),lineHeight:1,textShadow:`0 0 30px ${gradeCol(scanResult.grade)}55`}}>{scanResult.grade}</div>
+                  <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,color:gradeCol(scanResult.grade),lineHeight:1,textShadow:`0 0 28px ${gradeCol(scanResult.grade)}55`}}>{scanResult.grade}</div>
                     <div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:'#c8d8e8',letterSpacing:2}}>${scanResult.ticker} — {scanResult.struct?.structure||scanResult.tradeType}</div>
-                      <div style={{fontSize:10,color:'#5a8aaa',marginBottom:2}}>{scanResult.tradeType} · {scanResult.strikeStr} · {scanResult.expiryDisplay}</div>
-                      <div style={{fontSize:11,color:C.dim}}>Conviction: <span style={{color:scanResult.score>=80?C.green:C.orange}}>{scanResult.score}%</span> · {scanResult.confidence}</div>
-                      <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:4,padding:'2px 7px',borderRadius:4,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
-                        <span style={{fontSize:11}}>{scanResult.tfBadge}</span>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:C.text,letterSpacing:2}}>${scanResult.ticker}</div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:gradeCol(scanResult.grade),letterSpacing:1.5,marginBottom:1}}>{scanResult.tradeType}</div>
+                      <div style={{fontSize:11,color:C.dim}}>Conviction: <span style={{color:scanResult.score>=80?C.green:C.orange,fontWeight:600}}>{scanResult.score}%</span> · {scanResult.confidence}</div>
+                      <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:3,padding:'2px 6px',borderRadius:3,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
+                        <span style={{fontSize:10}}>{scanResult.tfBadge}</span>
                         <span style={{fontSize:9,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
                       </div>
                     </div>
@@ -1482,85 +1564,108 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
                     <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT BUILDER</button>
                     {tgToken&&tgChatId&&(
-                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent to TG!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 SEND TG</button>
+                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 SEND TG</button>
                     )}
                     {tgStatus&&<span style={{fontSize:10,color:C.green}}>{tgStatus}</span>}
                   </div>
                 </div>
 
-                {/* ── Structure Recommendation ── */}
-                {scanResult.struct&&(
-                  <div style={{background:`${scanResult.struct.color}0d`,border:`1px solid ${scanResult.struct.color}50`,borderRadius:6,padding:'11px 13px',marginBottom:11}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
-                      <span style={{fontSize:16}}>{scanResult.struct.icon}</span>
-                      <div>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scanResult.struct.color,letterSpacing:2}}>{scanResult.struct.structure}</div>
-                        <div style={{fontSize:10,color:'#8ab0c0'}}>{scanResult.struct.type}</div>
-                      </div>
-                      <div style={{marginLeft:'auto',display:'flex',gap:5,alignItems:'center'}}>
-                        <span style={{
-                          fontSize:9,letterSpacing:1,padding:'2px 7px',borderRadius:3,
-                          color: scanResult.struct.ivEnv==='HIGH'?'#ff9500':scanResult.struct.ivEnv==='LOW'?'#00ff88':'#00c8ff',
-                          border:`1px solid ${scanResult.struct.ivEnv==='HIGH'?'#ff950040':scanResult.struct.ivEnv==='LOW'?'#00ff8840':'#00c8ff40'}`,
-                          background: scanResult.struct.ivEnv==='HIGH'?'#ff950015':scanResult.struct.ivEnv==='LOW'?'#00ff8815':'#00c8ff15',
-                        }}>IV {scanResult.struct.ivEnv}</span>
-                      </div>
-                    </div>
-
-                    <div style={{fontSize:11,color:'#8ab0c0',lineHeight:1.75,marginBottom:9}}>
-                      {scanResult.struct.why}
-                    </div>
-
-                    <div style={{background:'#020810',borderRadius:4,padding:'8px 10px',marginBottom:9,fontSize:10,color:'#5a8aaa',lineHeight:1.8}}>
-                      <span style={{fontSize:8,color:scanResult.struct.color,letterSpacing:2}}>HOW TO BUILD IT — </span>
-                      {scanResult.struct.setup}
-                    </div>
-
-                    <div style={{fontSize:9,color:'#3a6a7a',lineHeight:1.7,marginTop:4}}>
-                      <span style={{color:scanResult.struct.color}}>◈ </span>{scanResult.struct.note}
-                    </div>
+                {/* ── PRIMARY TRADE BOX: strike + real option prices ── */}
+                <div style={{background:'#030e06',border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11}}>
+                  <div style={{fontSize:8,color:C.green,letterSpacing:2,marginBottom:8}}>
+                    {scanResult.isSpread ? 'SPREAD EXECUTION' : 'OPTION TRADE'}
+                    {' — '}{scanResult.tradeType}
                   </div>
-                )}
 
-                {/* ── Leg-by-leg execution breakdown ── */}
-                {scanResult.legsList?.length>0&&(
-                  <div style={{background:'#020c18',border:`1px solid #1a3e5a`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
-                    <div style={{fontSize:8,color:'#00c8ff',letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
+                  {/* Strike + Expiry prominently */}
+                  <div style={{display:'flex',gap:14,alignItems:'baseline',marginBottom:10,flexWrap:'wrap'}}>
+                    <div>
+                      <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>STRIKE</div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,letterSpacing:2,lineHeight:1}}>{scanResult.strikeStr}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>EXPIRY</div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text,letterSpacing:1}}>{scanResult.expiryDisplay}</div>
+                    </div>
+                    {!scanResult.isSpread&&(
+                      <div>
+                        <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>OPTION PRICE (MID)</div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.green,letterSpacing:1}}>{scanResult.mid}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Bid / Ask / Mid for naked; or Net Cost for spreads */}
+                  {!scanResult.isSpread ? (
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:5,marginBottom:10}}>
+                      {[
+                        {l:'BID',  v:scanResult.bid, c:C.red},
+                        {l:'ASK',  v:scanResult.ask, c:C.green},
+                        {l:'MID',  v:scanResult.mid, c:C.blue},
+                      ].map((f,i)=>(
+                        <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'6px 8px',textAlign:'center'}}>
+                          <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
+                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:f.c}}>{safe(f.v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{background:'#020810',borderRadius:4,padding:'8px 10px',marginBottom:10,fontSize:9,color:'#4a7a8a',lineHeight:1.5}}>
+                      <span style={{color:C.blue,letterSpacing:1}}>NET COST — </span>
+                      Debit/credit shown per leg below. Buy the spread at net debit or collect net credit.
+                    </div>
+                  )}
+
+                  {/* Entry / Target / Stop */}
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:5}}>
+                    {[
+                      {l:'ENTRY',  v:scanResult.entry,  c:C.blue},
+                      {l:'TARGET', v:scanResult.target, c:C.green},
+                      {l:'STOP',   v:scanResult.stop,   c:C.red},
+                    ].map((f,i)=>(
+                      <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'7px 9px'}}>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
+                        <div style={{fontSize:10,color:f.c,fontWeight:600,lineHeight:1.5}}>{f.v}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── Legs breakdown (only for spreads) ── */}
+                {scanResult.isSpread&&scanResult.legsList?.length>0&&(
+                  <div style={{background:'#020c18',border:`1px solid ${C.blue}40`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
+                    <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
                     {scanResult.legsList.map((leg,i)=>{
-                      const isNet  = leg.startsWith('NET')
+                      const isNet  = leg.startsWith('NET')||leg.startsWith('TOTAL')
                       const isBuy  = leg.startsWith('BUY')
                       const isSell = leg.startsWith('SELL')
                       return (
                         <div key={i} style={{
-                          display:'flex',alignItems:'flex-start',gap:8,padding:'5px 8px',borderRadius:3,marginBottom:3,
-                          background: isNet?'#04080e':isBuy?'#021006':isSell?'#100202':'#04080e',
-                          border:`1px solid ${isNet?'#1a3e5a':isBuy?'#00ff8830':isSell?'#ff446630':'#1a2e3e'}`,
+                          display:'flex',alignItems:'flex-start',gap:8,padding:'6px 9px',borderRadius:3,marginBottom:4,
+                          background:isNet?'#02080e':isBuy?'#021006':isSell?'#100202':'transparent',
+                          border:`1px solid ${isNet?C.blue+'40':isBuy?C.green+'30':isSell?C.red+'30':C.border}`,
                         }}>
-                          <span style={{fontSize:10,color:isNet?'#00c8ff':isBuy?'#00ff88':isSell?'#ff4466':'#c8d8e8',fontFamily:'monospace',whiteSpace:'pre',flexShrink:0,minWidth:32}}>
-                            {isNet?'💰':isBuy?'↑':isSell?'↓':''}
+                          <span style={{fontSize:11,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.dim,flexShrink:0,width:16}}>
+                            {isNet?'$':isBuy?'↑':isSell?'↓':'·'}
                           </span>
-                          <span style={{fontSize:10,color:isNet?'#00c8ff':isBuy?'#8ae0a0':isSell?'#e08080':'#8ab0c0',fontFamily:'monospace',lineHeight:1.6}}>{leg}</span>
+                          <span style={{fontSize:10,color:isNet?C.blue:isBuy?'#8ae0a0':isSell?'#e08080':'#8ab0c0',fontFamily:'monospace',lineHeight:1.7,wordBreak:'break-all'}}>{leg}</span>
                         </div>
                       )
                     })}
                   </div>
                 )}
 
-                {/* Live chain stats */}
-                <div style={{background:'#030d18',border:`1px solid ${C.blue}50`,borderRadius:6,padding:11,marginBottom:11}}>
-                  <Lbl color={C.blue}>📡 Live Options Chain — Tradier {tradierMode}</Lbl>
+                {/* ── Chain stats grid ── */}
+                <div style={{background:'#030d18',border:`1px solid ${C.blue}40`,borderRadius:6,padding:11,marginBottom:11}}>
+                  <Lbl color={C.blue}>📡 Live Chain — Tradier {tradierMode} · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
                   <div className="scanrow">
                     {[
-                      {l:'STOCK',v:scanResult.price,  c:'#c8d8e8'},
-                      {l:'BID',  v:scanResult.bid,    c:C.red},
-                      {l:'ASK',  v:scanResult.ask,    c:C.green},
-                      {l:'OPT MID',v:scanResult.mid,  c:C.blue},
-                      {l:'IV',   v:scanResult.iv,     c:C.orange},
-                      {l:'DELTA',v:scanResult.delta,  c:'#c8d8e8'},
-                      {l:'THETA',v:scanResult.theta,  c:C.red},
-                      {l:'VOL',  v:scanResult.volume, c:C.dim},
-                      {l:'O.I.', v:scanResult.oi,     c:C.dim},
-                      {l:'CHG',  v:scanResult.chgPct, c:scanResult.chgPct?.startsWith('-')?C.red:C.green},
+                      {l:'IV',     v:scanResult.iv,     c:C.orange},
+                      {l:'DELTA',  v:scanResult.delta,  c:'#c8d8e8'},
+                      {l:'THETA',  v:scanResult.theta,  c:C.red},
+                      {l:'VOL',    v:scanResult.volume, c:C.dim},
+                      {l:'O.I.',   v:scanResult.oi,     c:C.dim},
+                      {l:'VOL/AV', v:scanResult.volRatio,c:C.dim},
                     ].map((f,i)=>(
                       <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'6px 8px'}}>
                         <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>{f.l}</div>
@@ -1570,26 +1675,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </div>
                 </div>
 
-                {/* Trade setup — struct prices are canonical */}
-                <div style={{marginBottom:10}}>
-                  <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:5}}>
-                    TRADE EXECUTION — {scanResult.struct?.type||scanResult.tradeType}
-                    {scanResult.nakedMid&&<span style={{color:'#2a5060',marginLeft:8}}>· underlying option mid: {scanResult.nakedMid}</span>}
-                  </div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6}}>
-                    {[
-                      {l:'ENTRY',  v:scanResult.entry,  c:C.blue},
-                      {l:'TARGET', v:scanResult.target, c:C.green},
-                      {l:'STOP',   v:scanResult.stop,   c:C.red},
-                    ].map((f,i)=>(
-                      <Card key={i}>
-                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
-                        <div style={{fontSize:11,color:f.c,fontWeight:600,lineHeight:1.4}}>{f.v}</div>
-                      </Card>
-                    ))}
-                  </div>
-                </div>
-
+                {/* ── Why / Warnings ── */}
                 {scanResult.reasons?.length>0&&(
                   <Card style={{marginBottom:7}}>
                     <Lbl color={C.green}>✅ WHY THIS TRADE</Lbl>
@@ -1597,7 +1683,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
                 )}
                 {scanResult.warnings?.length>0&&(
-                  <Card color={`${C.orange}40`}>
+                  <Card color={`${C.orange}40`} style={{marginBottom:7}}>
                     <Lbl color={C.orange}>⚠️ WATCH</Lbl>
                     {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:12,color:'#8a7060',lineHeight:1.7}}>• {w}</div>)}
                   </Card>
@@ -1658,18 +1744,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </div>
                   <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                     <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.green,letterSpacing:2}}>${lastAlert.ticker}</span>
-                    <span style={{fontSize:12,color:'#c8d8e8'}}>{lastAlert.tradeType} {lastAlert.strikeStr}</span>
+                    <span style={{fontSize:12,color:C.text}}>{lastAlert.tradeType} {lastAlert.strikeStr}</span>
                     <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.green}}>{lastAlert.score}%</span>
                   </div>
                   <div style={{fontSize:10,color:C.dim,marginTop:3}}>Entry: {lastAlert.entry} · Target: {lastAlert.target} · Stop: {lastAlert.stop}</div>
-                  {lastAlert.struct&&(
-                    <div style={{display:'flex',alignItems:'center',gap:7,marginTop:6,padding:'4px 9px',borderRadius:4,background:`${lastAlert.struct.color}10`,border:`1px solid ${lastAlert.struct.color}30`}}>
-                      <span style={{fontSize:12}}>{lastAlert.struct.icon}</span>
-                      <span style={{fontSize:10,color:lastAlert.struct.color,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:1}}>{lastAlert.struct.structure}</span>
-                      <span style={{fontSize:9,color:'#5a8aaa'}}>{' — '}{lastAlert.struct.type}</span>
-                      <span style={{marginLeft:'auto',fontSize:8,color:'#3a6a7a',letterSpacing:.5}}>IV {lastAlert.struct.ivEnv}</span>
-                    </div>
-                  )}
+  
                   {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:4}}>{tgStatus}</div>}
                 </div>
               )}
@@ -1754,7 +1833,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div key={t.id} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${stC}`,borderRadius:4,padding:'10px 13px',marginBottom:6}}>
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:6}}>
                         <div style={{display:'flex',gap:9,alignItems:'center',flexWrap:'wrap'}}>
-                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:'#c8d8e8',letterSpacing:2}}>${t.ticker}</span>
+                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:C.text,letterSpacing:2}}>${t.ticker}</span>
                           <span style={{fontSize:9,color:stC,border:`1px solid ${stC}40`,padding:'2px 6px',borderRadius:3}}>{t.status.toUpperCase()}</span>
                           <span style={{fontSize:11,color:C.dim}}>{t.type}</span>
                           {t.expiry&&<span style={{fontSize:10,color:C.dim}}>{t.expiry}</span>}
@@ -1784,7 +1863,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       {/* ═══════════════ BOTTOM TAB BAR ══════════════════════════════════════ */}
       <div style={{
         position:'fixed',bottom:0,left:0,right:0,zIndex:90,
-        background:'#06090f',borderTop:`1px solid ${C.border}`,
+        background:isDark?'#06090f':'#eef2f7',borderTop:`1px solid ${C.border}`,
         display:'grid',gridTemplateColumns:'1fr 1fr 1fr',
       }}>
         {[
@@ -1816,20 +1895,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           <div style={{
             position:'absolute',right:0,top:0,bottom:0,
             width:'min(480px,100vw)',
-            background:C.bg,borderLeft:`1px solid ${C.border}`,
+            background:C.bg,borderLeft:`1px solid ${C.border}`,transition:'background .25s',
             display:'flex',flexDirection:'column',
             animation:'slideIn .22s ease',
           }}>
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
             {/* Panel header */}
-            <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:'#06090f',flexShrink:0}}>
+            <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:isDark?'#06090f':'#eef2f7',flexShrink:0}}>
               <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,color:C.green}}>TOOLS</span>
               <button className="hv" onClick={()=>setShowTools(false)} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'4px 10px',borderRadius:3,fontSize:11,cursor:'pointer'}}>✕ CLOSE</button>
             </div>
 
             {/* Panel sub-tabs */}
-            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:'#070c12'}}>
+            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:isDark?'#070c12':'#eef2f7'}}>
               {[
                 {id:'settings',l:'Settings'},
                 {id:'alert',   l:'Alert'},
@@ -2070,7 +2149,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{marginBottom:10}}>
                         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
                           <div>
-                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:'#c8d8e8',letterSpacing:2}}>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text,letterSpacing:2}}>
                               {futData.cfg.display} <span style={{fontSize:11,color:futData.usingFutures?C.green:C.orange}}>{futData.usingFutures?'● LIVE':'● INDEX'}</span>
                             </div>
                             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:futData.biasColor,letterSpacing:1}}>${futData.price.toFixed(2)}</div>
@@ -2134,7 +2213,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                                   <div style={{display:'flex',gap:7,alignItems:'center'}}>
                                     <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:s.color,letterSpacing:1}}>{s.type}</span>
-                                    <span style={{fontSize:11,color:'#c8d8e8'}}>{s.strike}</span>
+                                    <span style={{fontSize:11,color:C.text}}>{s.strike}</span>
                                     <span style={{fontSize:9,color:s.color,border:`1px solid ${s.color}40`,padding:'1px 5px',borderRadius:2}}>{s.conviction}</span>
                                   </div>
                                 </div>
