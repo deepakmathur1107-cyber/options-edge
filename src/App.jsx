@@ -442,18 +442,22 @@ const SP500 = [
 const CHECKLIST = [
   {id:'trend',cat:'TA',   l:'Trend Direction Confirmed', d:'20/50/200 EMA alignment checked'},
   {id:'rsi',  cat:'TA',   l:'RSI Not Extreme',           d:'RSI between 30–70 or confirmed reversal'},
-  {id:'vol',  cat:'TA',   l:'Volume Above Average',      d:'At least 1.2x the 20-day avg'},
+  {id:'vol',  cat:'TA',   l:'Volume Above Average',      d:'At least 1.2x the 20-day avg — NOT first 30 min'},
   {id:'macd', cat:'TA',   l:'MACD Confirmation',         d:'Crossover in trade direction'},
   {id:'lvl',  cat:'TA',   l:'Key Level Identified',      d:'Clear S/R, trendline, or breakout'},
+  {id:'notch',cat:'TA',   l:'Stock NOT already moved >2% today', d:'Chasing a gap = paying inflated premium. Wait for a pullback or skip.'},
   {id:'flow', cat:'Flow', l:'Options Flow Checked',      d:'Unusual sweeps align with thesis'},
   {id:'oi',   cat:'Flow', l:'Open Interest at Strikes',  d:'High OI at your strikes = magnet zones'},
-  {id:'iv',   cat:'Flow', l:'IV Rank Assessed',          d:'Buy low IV, sell high IV'},
-  {id:'cat',  cat:'News', l:'Catalyst Identified',       d:'Know the WHY — earnings, news, macro'},
-  {id:'time', cat:'News', l:'Catalyst Timing Clear',     d:'Event date vs expiry date checked'},
+  {id:'iv',   cat:'Flow', l:'IV Rank Assessed',          d:'Buy low IV (<40%), sell high IV (>55%). MSTR at 66% = sell, not buy.'},
+  {id:'voloc',cat:'Flow', l:'Volume has directional context', d:'High vol alone means nothing — sweeps on ASK = buying, BID = selling. Confirm directionality.'},
+  {id:'cat',  cat:'News', l:'Catalyst Identified',       d:'Know the SPECIFIC WHY — earnings date, product launch, macro event, technical breakout'},
+  {id:'time', cat:'News', l:'Catalyst Timing Clear',     d:'Event date vs expiry date checked. No catalyst = no long option.'},
+  {id:'beven',cat:'News', l:'Break-even is realistic',   d:'Stock must reach strike + premium by expiry. Is that move historically probable?'},
   {id:'size', cat:'Risk', l:'Position Sized Correctly',  d:'Max 2–5% of account per trade'},
   {id:'stop', cat:'Risk', l:'Stop Loss Defined',         d:'50% loss on debit, 2x on credit'},
   {id:'tgt',  cat:'Risk', l:'Profit Target Set',         d:'25–50% quick, 50–100% swings'},
   {id:'plan', cat:'Risk', l:'Exit Scenario Planned',     d:'What if it goes against you?'},
+  {id:'time2',cat:'Risk', l:'Entry time is after 10:00 AM', d:'First 30 min = noise. Volume and IV are unreliable until market settles.'},
 ]
 
 const CAT_COLOR = { TA:C.green, Flow:C.blue, News:C.orange, Risk:C.red }
@@ -596,6 +600,7 @@ export default function App() {
 
   // ── main tab & tools panel ──
   const [tab,        setTab]        = useState('dash')
+  const [btFilter,   setBtFilter]   = useState('all')    // backtest filter
   const [showTools,  setShowTools]  = useState(false)
   const [toolsTab,   setToolsTab]   = useState('settings')
 
@@ -647,7 +652,7 @@ export default function App() {
   const [trades,   setTrades]   = useState(()=>{try{return JSON.parse(ls('trades','[]'))}catch{return[]}})
   const [showAdd,  setShowAdd]  = useState(false)
   const [jFilter,  setJFilter]  = useState('All')
-  const [newTrade, setNewTrade] = useState({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:''})
+  const [newTrade, setNewTrade] = useState({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:'',conviction:'',iv:'',chgPctAtEntry:'',strike:'',breakevenReqPct:''})
   useEffect(()=>{try{localStorage.setItem('trades',JSON.stringify(trades))}catch{}},[trades])
 
   const jStats = (()=>{
@@ -788,18 +793,65 @@ export default function App() {
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
-      let score=50;const reasons=[],warnings=[]
-      if(volRatio>=1.5){score+=15;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
-      else if(volRatio<0.8){score-=10;warnings.push(`Low volume ${volRatio.toFixed(1)}x`)}
-      if(Math.abs(chgPct)>=1){score+=10;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
-      if(iv>=0.20&&iv<=0.50){score+=10;reasons.push(`IV ${(iv*100).toFixed(0)}% ideal`)}
-      else if(iv>0.60){warnings.push(`High IV ${(iv*100).toFixed(0)}%`)}
-      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.65){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
-      if((best.volume||0)>500){score+=5;reasons.push(`${best.volume} contracts on strike`)}
+      const ivPct=iv*100
+      const now=new Date()
+      const etHour=now.getHours()+(now.getMinutes()/60)
+      const isMorningNoise=etHour<10.0
+      const isChasing=Math.abs(chgPct)>2.0&&!isSpread
+      const isHighIV=iv>0.55&&!isSpread
       const hi52=quote.week_52_high||price,lo52=quote.week_52_low||price
       const pos52=(price-lo52)/((hi52-lo52)||1)
-      if(pos52>0.75){score+=10;reasons.push('Near 52-week high — strong trend')}
-      score=Math.min(95,Math.max(30,score))
+      const expiryDateObj=new Date(expiryRaw+'T12:00:00')
+      const dte=Math.round((expiryDateObj-now)/(1000*60*60*24))
+
+      let score=50; const reasons=[],warnings=[],hardBlocks=[]
+
+      // Hard blocks — cap at 48 regardless of other signals
+      if(isMorningNoise){hardBlocks.push('⏰ Entry before 10 AM — volume & IV unreliable. Wait for market to settle.');score=Math.min(score,45)}
+      if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
+      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
+
+      // IV environment
+      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
+      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct.toFixed(0)}% — moderate`)}
+      else if(iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
+      else if(iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
+
+      // Volume — only after 10 AM
+      if(!isMorningNoise){
+        if(volRatio>=2.0){score+=12;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
+        else if(volRatio>=1.5){score+=7;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
+        else if(volRatio<0.8){score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x`)}
+      } else {warnings.push(`Volume ${volRatio.toFixed(1)}x avg — unreliable before 10 AM`)}
+
+      // Price momentum
+      if(!isChasing){
+        if(Math.abs(chgPct)>=0.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% clean momentum`)}
+      } else {warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — chasing`)}
+
+      // Delta quality
+      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
+      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5;reasons.push(`Delta ${delta.toFixed(2)}`)}
+
+      // Strike activity
+      if(!isMorningNoise&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} contracts on strike`)}
+
+      // Trend
+      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
+      else if(pos52>0.65){score+=4}
+      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+
+      // DTE / IV incompatibility
+      if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
+      else if(dte>=21&&dte<=60){score+=5;reasons.push(`${dte} DTE — good buffer`)}
+
+      // No catalyst cap
+      const confirmsOnly=reasons.every(r=>r.includes('Volume')||r.includes('Delta')||r.includes('IV')||r.includes('contracts'))
+      const hasRealSignal=Math.abs(chgPct)>=1.5||pos52>0.85
+      if(confirmsOnly&&!hasRealSignal&&hardBlocks.length===0){score=Math.min(score,72);warnings.push('No catalyst — volume/delta/IV are confirming signals only. Identify WHY this moves.')}
+
+      if(hardBlocks.length>0) score=Math.min(score,48)
+      score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ All data from Tradier ${tradierMode}`)
 
@@ -841,7 +893,10 @@ export default function App() {
         oi:tradeData.oi||best.open_interest||0,
         chgPct:chgPct.toFixed(2)+'%',
         volRatio:volRatio.toFixed(1)+'x',
-        reasons,warnings,
+        reasons,warnings,hardBlocks,
+        dte, ivPct:ivPct.toFixed(1),
+        breakeven:(parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid).toFixed(2),
+        breakevenPct:(((parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid)/price-1)*100).toFixed(1),
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:`Tradier ${tradierMode}`,
       })
@@ -974,6 +1029,12 @@ _Not financial advice. Trade at your own risk._`
   const legsBlock = r.legsList?.length
     ? `\n🔧 *Legs:*\n${r.legsList.map(l=>'  '+l).join('\n')}`
     : ''
+  const blockWarn = r.hardBlocks?.length
+    ? `\n🚫 *SKIP FLAGS:*\n${r.hardBlocks.map(b=>'  ⚠ '+b).join('\n')}`
+    : ''
+  const beBlock = r.breakeven
+    ? `\n📊 *Break-even:* $${r.breakeven} (+${r.breakevenPct}% required) · DTE: ${r.dte}`
+    : ''
   return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
 🎯 *Conviction: ${r.score}%* | Grade: ${r.grade||'—'}
@@ -982,7 +1043,7 @@ _Not financial advice. Trade at your own risk._`
 
 📊 *Entry:* ${r.entry}
 🎯 *Target:* ${r.target}
-🛑 *Stop:* ${r.stop}${legsBlock}
+🛑 *Stop:* ${r.stop}${beBlock}${legsBlock}${blockWarn}
 
 📡 *Chain:* IV: ${r.iv} | Δ ${r.delta} | Bid: ${r.bid} | Ask: ${r.ask}
 
@@ -1031,15 +1092,41 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const iv=best.greeks?.mid_iv||0,delta=best.greeks?.delta||null
       const vol=quote.volume||0,avg=quote.average_volume||vol
       const volRatio=vol/(avg||1)
-      let score=50;const reasons=[],warnings=[]
-      if(volRatio>=1.5){score+=15;reasons.push(`Vol ${volRatio.toFixed(1)}x avg`)}
-      else if(volRatio<0.8){score-=10;warnings.push(`Low vol ${volRatio.toFixed(1)}x`)}
-      if(Math.abs(chgPct)>=1){score+=10;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
-      if(iv>=0.20&&iv<=0.50){score+=10;reasons.push(`IV ${(iv*100).toFixed(0)}% ideal`)}
-      else if(iv>0.60){warnings.push(`High IV ${(iv*100).toFixed(0)}%`)}
-      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.65){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
-      if((best.volume||0)>500){score+=5;reasons.push(`${best.volume} vol on strike`)}
-      score=Math.min(95,Math.max(30,score))
+      const ivPct2=iv*100
+      const now2=new Date()
+      const etHour2=now2.getHours()+(now2.getMinutes()/60)
+      const isMorning2=etHour2<10.0
+      const isChasing2=Math.abs(chgPct)>2.0
+      const isHighIV2=iv>0.55
+      const expDate2=new Date(expiryRaw+'T12:00:00')
+      const dte2=Math.round((expDate2-now2)/(1000*60*60*24))
+
+      let score=50; const reasons=[],warnings=[],hardBlocks2=[]
+      if(isMorning2){hardBlocks2.push('Morning noise <10AM');score=Math.min(score,45)}
+      if(isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}%`);score=Math.min(score,42)}
+      if(isHighIV2){hardBlocks2.push(`High IV ${ivPct2.toFixed(0)}%`);score=Math.min(score,48)}
+
+      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct2.toFixed(0)}% low`)}
+      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct2.toFixed(0)}% moderate`)}
+      else if(iv>0.55){score-=10;warnings.push(`IV ${ivPct2.toFixed(0)}% high`)}
+
+      if(!isMorning2){
+        if(volRatio>=2.0){score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x avg`)}
+        else if(volRatio>=1.5){score+=7;reasons.push(`Vol ${volRatio.toFixed(1)}x avg`)}
+        else if(volRatio<0.8){score-=8;warnings.push(`Low vol ${volRatio.toFixed(1)}x`)}
+      }
+
+      if(!isChasing2&&Math.abs(chgPct)>=0.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
+      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5}
+      if(!isMorning2&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} vol on strike`)}
+      if(dte2<14&&iv>0.45){score-=12;warnings.push(`DTE ${dte2} + IV ${ivPct2.toFixed(0)}% crush risk`)}
+      else if(dte2>=21&&dte2<=60){score+=5;reasons.push(`${dte2} DTE`)}
+
+      const confirmsOnly2=reasons.every(r=>r.includes('Vol')||r.includes('Delta')||r.includes('IV'))
+      if(confirmsOnly2&&hardBlocks2.length===0){score=Math.min(score,72);warnings.push('No catalyst identified')}
+      if(hardBlocks2.length>0) score=Math.min(score,48)
+      score=Math.min(95,Math.max(20,score))
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       return {
         ticker,score,tradeType:optType==='call'?'Call':'Put',
@@ -1071,6 +1158,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   const runAutoScan = useCallback(async()=>{
     if (!tradierToken) return
+    // Morning gate: no alerts before 10:00 AM — volume and IV are unreliable
+    const nowH = new Date()
+    const etHour = nowH.getHours() + nowH.getMinutes()/60
+    if (etHour < 10.0) {
+      setAutoLog(p=>[`[${nowH.toLocaleTimeString()}] ⏰ Morning gate active — auto-scan paused until 10:00 AM ET`,...p.slice(0,99)])
+      return
+    }
     const activeTF = scanTFRef.current  // read live value — not stale closure
     const tfCfgNow = TF_CONFIG[activeTF]||TF_CONFIG['Swing (21–45 DTE)']
     const list=watchlist.split(',').map(t=>t.trim().toUpperCase()).filter(Boolean)
@@ -1126,7 +1220,33 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     setNewTrade({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:''})
     setShowAdd(false)
   }
-  const gradeCol=g=>g==='A'?C.green:g==='B'?C.orange:C.red
+  const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
+
+  // Push a scan result directly into the journal as a paper trade
+  const pushToJournal = r => {
+    const t = {
+      id: Date.now()+'',
+      ticker:           r.ticker||r.sym||'',
+      type:             r.tradeType||'Call',
+      status:           'Open',
+      entry:            r.entry||'',
+      exitPrice:        '',
+      pnl:              '',
+      contracts:        '1',
+      expiry:           r.expiryDisplay||'',
+      strike:           r.strikeStr||'',
+      date:             new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
+      notes:            `App alert · ${r.score}% conviction · ${r.tfLabel||''}`,
+      conviction:       String(r.score||''),
+      iv:               String(r.ivPct||r.iv||''),
+      chgPctAtEntry:    String(r.chgPct||''),
+      breakevenReqPct:  String(r.breakevenPct||''),
+      hardBlockCount:   String((r.hardBlocks||[]).length),
+      grade:            r.grade||'',
+    }
+    setTrades(p=>[t,...p])
+    setTab('journal')
+  }
 
   // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
   const generateIndexAlerts = useCallback(async()=>{
@@ -1567,16 +1687,35 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT BUILDER</button>
+                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
+                    <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:`${C.orange}20`,border:`1px solid ${C.orange}`,color:C.orange,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
-                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 SEND TG</button>
+                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
                     )}
                     {tgStatus&&<span style={{fontSize:10,color:C.green}}>{tgStatus}</span>}
                   </div>
                 </div>
 
+                {/* ── Hard block banners ── */}
+                {scanResult.hardBlocks?.length>0&&(
+                  <div style={{marginBottom:11}}>
+                    {scanResult.hardBlocks.map((b,i)=>(
+                      <div key={i} style={{background:'#1a0408',border:`1px solid ${C.red}60`,borderRadius:5,padding:'9px 13px',marginBottom:5,display:'flex',gap:8,alignItems:'flex-start'}}>
+                        <span style={{fontSize:14,flexShrink:0}}>🚫</span>
+                        <div>
+                          <div style={{fontSize:9,color:C.red,letterSpacing:1.5,marginBottom:2}}>SKIP THIS TRADE</div>
+                          <div style={{fontSize:11,color:'#e08080',lineHeight:1.6}}>{b}</div>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{fontSize:9,color:'#5a3040',padding:'4px 8px',borderRadius:3,background:'#0e0406',border:`1px solid ${C.red}30`}}>
+                      Hard blocks cap conviction at 48% regardless of other signals. Fix the issue above before entering.
+                    </div>
+                  </div>
+                )}
+
                 {/* ── PRIMARY TRADE BOX: strike + real option prices ── */}
-                <div style={{background:'#030e06',border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11}}>
+                <div style={{background:isDark?'#030e06':'#f0f9f4',border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11}}>
                   <div style={{fontSize:8,color:C.green,letterSpacing:2,marginBottom:8}}>
                     {scanResult.isSpread ? 'SPREAD EXECUTION' : 'OPTION TRADE'}
                     {' — '}{scanResult.tradeType}
@@ -1599,6 +1738,26 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       </div>
                     )}
                   </div>
+
+                  {/* Break-even row */}
+                  {!scanResult.isSpread&&scanResult.breakeven&&(
+                    <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:10,padding:'6px 10px',borderRadius:4,background:isDark?'#060c10':'#e8f0f8',border:`1px solid ${C.blue}30`}}>
+                      <div>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>BREAK-EVEN AT EXPIRY</div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.blue,letterSpacing:1}}>${scanResult.breakeven}</div>
+                      </div>
+                      <div style={{width:1,height:28,background:C.border}}/>
+                      <div>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>MOVE REQUIRED</div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:parseFloat(scanResult.breakevenPct)>5?C.red:parseFloat(scanResult.breakevenPct)>3?C.orange:C.green,letterSpacing:1}}>+{scanResult.breakevenPct}%</div>
+                      </div>
+                      <div style={{width:1,height:28,background:C.border}}/>
+                      <div>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>DTE</div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:scanResult.dte<14?C.red:scanResult.dte<21?C.orange:C.green,letterSpacing:1}}>{scanResult.dte}</div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Bid / Ask / Mid for naked; or Net Cost for spreads */}
                   {!scanResult.isSpread ? (
@@ -1683,14 +1842,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {/* ── Why / Warnings ── */}
                 {scanResult.reasons?.length>0&&(
                   <Card style={{marginBottom:7}}>
-                    <Lbl color={C.green}>✅ WHY THIS TRADE</Lbl>
-                    {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:12,color:'#8ab0c0',lineHeight:1.7}}>• {r}</div>)}
+                    <Lbl color={C.green}>✅ SIGNALS</Lbl>
+                    {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:11,color:isDark?'#8ab0c0':'#2a5070',lineHeight:1.7}}>✓ {r}</div>)}
                   </Card>
                 )}
                 {scanResult.warnings?.length>0&&(
                   <Card color={`${C.orange}40`} style={{marginBottom:7}}>
-                    <Lbl color={C.orange}>⚠️ WATCH</Lbl>
-                    {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:12,color:'#8a7060',lineHeight:1.7}}>• {w}</div>)}
+                    <Lbl color={C.orange}>⚠️ WARNINGS</Lbl>
+                    {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:11,color:isDark?'#c08040':'#7a5020',lineHeight:1.7}}>⚠ {w}</div>)}
                   </Card>
                 )}
               </div>
@@ -1809,14 +1968,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 <Lbl color={C.green}>NEW TRADE ENTRY</Lbl>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:7,marginBottom:7}}>
                   <Field label="Ticker" value={newTrade.ticker} onChange={v=>setNewTrade(p=>({...p,ticker:v.toUpperCase()}))} placeholder="NVDA"/>
-                  <Field label="Type" value={newTrade.type} onChange={v=>setNewTrade(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
+                  <Field label="Type" value={newTrade.type} onChange={v=>setNewTrade(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']}/>
                   <Field label="Status" value={newTrade.status} onChange={v=>setNewTrade(p=>({...p,status:v}))} options={['Open','Closed','Stopped']}/>
+                  <Field label="Strike" value={newTrade.strike} onChange={v=>setNewTrade(p=>({...p,strike:v}))} placeholder="$210C"/>
+                  <Field label="Expiry" value={newTrade.expiry} onChange={v=>setNewTrade(p=>({...p,expiry:v}))} placeholder="Jun 20 2026"/>
+                  <Field label="Date Entered" value={newTrade.date} onChange={v=>setNewTrade(p=>({...p,date:v}))} placeholder="May 27 2026"/>
                   <Field label="Entry $" value={newTrade.entry} onChange={v=>setNewTrade(p=>({...p,entry:v}))} placeholder="$3.50"/>
                   <Field label="Exit $" value={newTrade.exitPrice} onChange={v=>setNewTrade(p=>({...p,exitPrice:v}))} placeholder="$6.50"/>
                   <Field label="P&L $" value={newTrade.pnl} onChange={v=>setNewTrade(p=>({...p,pnl:v}))} placeholder="+320"/>
                   <Field label="Qty" value={newTrade.contracts} onChange={v=>setNewTrade(p=>({...p,contracts:v}))} placeholder="2"/>
-                  <Field label="Expiry" value={newTrade.expiry} onChange={v=>setNewTrade(p=>({...p,expiry:v}))} placeholder="May 16 2026"/>
-                  <Field label="Date" value={newTrade.date} onChange={v=>setNewTrade(p=>({...p,date:v}))} placeholder="Apr 27 2026"/>
+                  <Field label="App Conviction %" value={newTrade.conviction} onChange={v=>setNewTrade(p=>({...p,conviction:v}))} placeholder="90"/>
+                  <Field label="IV at Entry %" value={newTrade.iv} onChange={v=>setNewTrade(p=>({...p,iv:v}))} placeholder="38"/>
+                  <Field label="Stock Move % at Entry" value={newTrade.chgPctAtEntry} onChange={v=>setNewTrade(p=>({...p,chgPctAtEntry:v}))} placeholder="+1.2"/>
+                  <Field label="Break-even Move % Req" value={newTrade.breakevenReqPct} onChange={v=>setNewTrade(p=>({...p,breakevenReqPct:v}))} placeholder="4.3"/>
                 </div>
                 <div style={{marginBottom:8}}>
                   <Field label="Notes" value={newTrade.notes} onChange={v=>setNewTrade(p=>({...p,notes:v}))} placeholder="What worked, what didn't..." rows={2}/>
@@ -1865,6 +2029,275 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         )}
       </div>
 
+      {/* ═══════════════ BACKTEST TAB ══════════════════════════════════════════ */}
+      {tab==='backtest' && (
+        <div className="si">
+          {(()=>{
+            // ── derive all analytics from trades array ─────────────────────
+            const all   = trades
+            const closed= all.filter(t=>t.status!=='Open')
+            const wins  = closed.filter(t=>parseFloat(t.pnl||0)>0)
+            const losses= closed.filter(t=>parseFloat(t.pnl||0)<0)
+            const open  = all.filter(t=>t.status==='Open')
+
+            // Filter helpers
+            const hasConv   = t=>t.conviction&&!isNaN(parseFloat(t.conviction))
+            const conv      = t=>parseFloat(t.conviction||0)
+            const ivAt      = t=>parseFloat(t.iv||0)
+            const chgAt     = t=>parseFloat(t.chgPctAtEntry||0)
+            const beReq     = t=>parseFloat(t.breakevenReqPct||0)
+            const pnl       = t=>parseFloat(t.pnl||0)
+            const hb        = t=>parseInt(t.hardBlockCount||0)
+
+            // conviction bands
+            const hi90  = closed.filter(t=>hasConv(t)&&conv(t)>=90)
+            const hi70  = closed.filter(t=>hasConv(t)&&conv(t)>=70&&conv(t)<90)
+            const lo70  = closed.filter(t=>hasConv(t)&&conv(t)<70)
+
+            const wr    = arr=>arr.length?Math.round(arr.filter(t=>pnl(t)>0).length/arr.length*100):null
+            const avgPL = arr=>arr.length?arr.reduce((s,t)=>s+pnl(t),0)/arr.length:0
+            const totPL = arr=>arr.reduce((s,t)=>s+pnl(t),0)
+
+            // Would-have-been-blocked analysis
+            const wouldBlock= t=> ivAt(t)>55 || Math.abs(chgAt(t))>2.0 || hb(t)>0
+            const blocked   = closed.filter(t=>hasConv(t)&&wouldBlock(t))
+            const passed    = closed.filter(t=>hasConv(t)&&!wouldBlock(t))
+            const blockedWr = wr(blocked)
+            const passedWr  = wr(passed)
+
+            // Filtered display list
+            const displayList = btFilter==='90plus'   ? closed.filter(t=>conv(t)>=90)
+                               : btFilter==='blocked'  ? closed.filter(wouldBlock)
+                               : btFilter==='passed'   ? closed.filter(t=>!wouldBlock(t)&&hasConv(t))
+                               : btFilter==='open'     ? open
+                               : closed
+
+            // P&L equity curve data
+            const curve = [...closed].reverse()
+            const cumPnL = curve.reduce((acc,t)=>{
+              acc.push({y:(acc[acc.length-1]?.y||0)+pnl(t), t:t.ticker})
+              return acc
+            },[])
+
+            return (
+              <div>
+                {/* ── Header ── */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.text,letterSpacing:3,lineHeight:1}}>STRATEGY BACKTEST</div>
+                  <div style={{fontSize:10,color:C.dim,marginTop:2}}>Based on trades logged in your Journal · tap 📋 PAPER TRADE on any scan result to track it here</div>
+                </div>
+
+                {closed.length===0 ? (
+                  <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,padding:24,textAlign:'center'}}>
+                    <div style={{fontSize:13,color:C.dim,marginBottom:8}}>No closed trades yet</div>
+                    <div style={{fontSize:11,color:'#3a5a6a',lineHeight:1.8}}>
+                      Two ways to build your track record:<br/>
+                      <span style={{color:C.orange}}>①</span> Tap <strong style={{color:C.orange}}>📋 PAPER TRADE</strong> on any scan result — logs it instantly<br/>
+                      <span style={{color:C.green}}>②</span> Use <strong style={{color:C.green}}>+ LOG TRADE</strong> in the Journal tab to enter past trades manually
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* ── Summary stat row ── */}
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:14}}>
+                      {[
+                        {l:'TOTAL P&L',  v:(totPL(closed)>=0?'+':'')+`$${Math.abs(totPL(closed)).toFixed(0)}`, c:totPL(closed)>=0?C.green:C.red},
+                        {l:'WIN RATE',   v:wr(closed)+'%', c:wr(closed)>=60?C.green:wr(closed)>=45?C.orange:C.red},
+                        {l:'TRADES',     v:`${wins.length}W / ${losses.length}L`, c:C.dim},
+                        {l:'AVG WIN',    v:'+$'+wins.length?Math.abs(avgPL(wins)).toFixed(0):'—', c:C.green},
+                        {l:'AVG LOSS',   v:'-$'+losses.length?Math.abs(avgPL(losses)).toFixed(0):'—', c:C.red},
+                        {l:'EXPECTANCY', v:(()=>{
+                          const w=wr(closed)/100, l=1-w
+                          const aw=wins.length?Math.abs(avgPL(wins)):0
+                          const al=losses.length?Math.abs(avgPL(losses)):1
+                          return ((w*aw - l*al)).toFixed(0)
+                        })(), c:(()=>{const w=wr(closed)/100,l=1-w,aw=wins.length?Math.abs(avgPL(wins)):0,al=losses.length?Math.abs(avgPL(losses)):1;return w*aw-l*al>=0?C.green:C.red})()},
+                      ].map((s,i)=>(
+                        <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
+                          <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{s.l}</div>
+                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:s.c}}>{s.v}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* ── Filter impact: blocked vs passed ── */}
+                    {(blocked.length>0||passed.length>0)&&(
+                      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>NEW FILTER IMPACT ANALYSIS</div>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+                          <div style={{background:isDark?'#100205':'#fff0f2',border:`1px solid ${C.red}40`,borderRadius:5,padding:'10px 12px'}}>
+                            <div style={{fontSize:9,color:C.red,letterSpacing:1.5,marginBottom:4}}>🚫 WOULD HAVE BLOCKED</div>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.red}}>{blocked.length}</div>
+                            <div style={{fontSize:10,color:C.dim,marginTop:2}}>trades match skip criteria</div>
+                            {blockedWr!==null&&<div style={{fontSize:11,color:C.red,marginTop:4}}>Actual win rate: <strong>{blockedWr}%</strong></div>}
+                            <div style={{fontSize:11,color:C.dim,marginTop:1}}>P&L if skipped: <span style={{color:totPL(blocked)<=0?C.green:C.red}}>{totPL(blocked)<=0?'Saved':'Lost'} ${Math.abs(totPL(blocked)).toFixed(0)}</span></div>
+                          </div>
+                          <div style={{background:isDark?'#020e06':'#f0fff4',border:`1px solid ${C.green}40`,borderRadius:5,padding:'10px 12px'}}>
+                            <div style={{fontSize:9,color:C.green,letterSpacing:1.5,marginBottom:4}}>✅ PASSES ALL FILTERS</div>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.green}}>{passed.length}</div>
+                            <div style={{fontSize:10,color:C.dim,marginTop:2}}>clean setups</div>
+                            {passedWr!==null&&<div style={{fontSize:11,color:C.green,marginTop:4}}>Win rate: <strong>{passedWr}%</strong></div>}
+                            <div style={{fontSize:11,color:C.dim,marginTop:1}}>P&L: <span style={{color:totPL(passed)>=0?C.green:C.red}}>${totPL(passed).toFixed(0)}</span></div>
+                          </div>
+                        </div>
+                        {blocked.length>0&&(
+                          <div style={{fontSize:9,color:C.dim,lineHeight:1.8}}>
+                            <strong style={{color:C.orange}}>What triggered the blocks:</strong>{' '}
+                            {blocked.filter(t=>ivAt(t)>55).length>0&&<span style={{color:C.orange}}>High IV ({blocked.filter(t=>ivAt(t)>55).length})</span>}
+                            {blocked.filter(t=>Math.abs(chgAt(t))>2).length>0&&<span style={{color:C.orange}}> · Chasing ({blocked.filter(t=>Math.abs(chgAt(t))>2).length})</span>}
+                            {blocked.filter(t=>hb(t)>0&&ivAt(t)<=55&&Math.abs(chgAt(t))<=2).length>0&&<span style={{color:C.orange}}> · Other flags ({blocked.filter(t=>hb(t)>0&&ivAt(t)<=55&&Math.abs(chgAt(t))<=2).length})</span>}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Conviction band breakdown ── */}
+                    {(hi90.length>0||hi70.length>0||lo70.length>0)&&(
+                      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY CONVICTION BAND</div>
+                        {[
+                          {label:'90%+  HIGH CONVICTION', arr:hi90, color:C.green},
+                          {label:'70–89%  MODERATE',      arr:hi70, color:C.orange},
+                          {label:'<70%   LOW',             arr:lo70, color:C.red},
+                        ].filter(b=>b.arr.length>0).map((b,i)=>{
+                          const bWr=wr(b.arr)
+                          const bPL=totPL(b.arr)
+                          const w=b.arr.filter(t=>pnl(t)>0).length
+                          return (
+                            <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{display:'flex',gap:12,fontSize:10,color:C.dim}}>
+                                  <span>{b.arr.length} trades · {w}W/{b.arr.length-w}L</span>
+                                  <span style={{color:bPL>=0?C.green:C.red}}>{bPL>=0?'+':''}{bPL.toFixed(0)} P&L</span>
+                                </div>
+                              </div>
+                              <div style={{textAlign:'right'}}>
+                                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:bWr>=60?C.green:bWr>=45?C.orange:C.red,lineHeight:1}}>{bWr}%</div>
+                                <div style={{fontSize:8,color:C.dim}}>win rate</div>
+                              </div>
+                              <div style={{width:50,height:6,background:C.border,borderRadius:3,overflow:'hidden'}}>
+                                <div style={{width:(bWr||0)+'%',height:'100%',background:b.color,borderRadius:3}}/>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {/* ── P&L by IV level ── */}
+                    {closed.filter(t=>ivAt(t)>0).length>=2&&(
+                      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>OUTCOME BY IV AT ENTRY</div>
+                        {[
+                          {label:'Low IV  (<40%)',    arr:closed.filter(t=>ivAt(t)>0&&ivAt(t)<40),   color:C.green},
+                          {label:'Moderate IV  (40–55%)', arr:closed.filter(t=>ivAt(t)>=40&&ivAt(t)<=55), color:C.orange},
+                          {label:'High IV  (>55%)',   arr:closed.filter(t=>ivAt(t)>55),              color:C.red},
+                        ].filter(b=>b.arr.length>0).map((b,i)=>{
+                          const bWr=wr(b.arr), bPL=totPL(b.arr), w=b.arr.filter(t=>pnl(t)>0).length
+                          return (
+                            <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{fontSize:10,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L · <span style={{color:bPL>=0?C.green:C.red}}>{bPL>=0?'+':''}{bPL.toFixed(0)}</span></div>
+                              </div>
+                              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
+                            </div>
+                          )
+                        })}
+                        <div style={{fontSize:9,color:'#2a5060',marginTop:6,lineHeight:1.8}}>
+                          MSTR lesson: buying high IV (66%) loses even when direction is right, because IV crush overwhelms the premium gain.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Break-even analysis ── */}
+                    {closed.filter(t=>beReq(t)>0).length>=2&&(
+                      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY BREAK-EVEN MOVE REQUIRED</div>
+                        {[
+                          {label:'Easy  (<3% move needed)',   arr:closed.filter(t=>beReq(t)>0&&beReq(t)<3),  color:C.green},
+                          {label:'Moderate  (3–5% needed)',   arr:closed.filter(t=>beReq(t)>=3&&beReq(t)<=5),color:C.orange},
+                          {label:'Hard  (>5% move needed)',   arr:closed.filter(t=>beReq(t)>5),              color:C.red},
+                        ].filter(b=>b.arr.length>0).map((b,i)=>{
+                          const bWr=wr(b.arr), w=b.arr.filter(t=>pnl(t)>0).length
+                          return (
+                            <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{fontSize:10,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L</div>
+                              </div>
+                              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
+                            </div>
+                          )
+                        })}
+                        <div style={{fontSize:9,color:'#2a5060',marginTop:6,lineHeight:1.8}}>
+                          GOOGL needed +4.3% — historically that puts you in the bottom 30% of probability outcomes. Sticking to trades requiring {'<'}3% move improves win rate dramatically.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Trade list with filter ── */}
+                    <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:10}}>
+                      {[
+                        {id:'all',     l:'All Closed'},
+                        {id:'90plus',  l:'90%+ Only'},
+                        {id:'blocked', l:'Would Block'},
+                        {id:'passed',  l:'Clean Setups'},
+                        {id:'open',    l:'Open / Paper'},
+                      ].map(f=>(
+                        <button key={f.id} className="hv" onClick={()=>setBtFilter(f.id)} style={{
+                          padding:'5px 10px',borderRadius:3,fontSize:10,letterSpacing:.5,cursor:'pointer',
+                          border:`1px solid ${btFilter===f.id?C.green:C.border}`,
+                          color:btFilter===f.id?C.green:C.dim,
+                          background:btFilter===f.id?`${C.green}15`:'transparent',
+                        }}>{f.l} ({f.id==='all'?closed.length:f.id==='90plus'?closed.filter(t=>conv(t)>=90).length:f.id==='blocked'?blocked.length:f.id==='passed'?passed.length:open.length})</button>
+                      ))}
+                    </div>
+
+                    {displayList.length===0
+                      ? <div style={{fontSize:11,color:C.dim,textAlign:'center',padding:16,border:`1px dashed ${C.border}`,borderRadius:5}}>No trades in this filter</div>
+                      : displayList.map((t,i)=>{
+                          const p=pnl(t), isWin=p>0, isLoss=p<0
+                          const stC=t.status==='Open'?C.blue:isWin?C.green:isLoss?C.red:C.dim
+                          const blocked_=wouldBlock(t)
+                          return (
+                            <div key={t.id||i} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${stC}`,borderRadius:4,padding:'10px 13px',marginBottom:6}}>
+                              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:4}}>
+                                <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text,letterSpacing:2}}>{t.ticker}</span>
+                                  <span style={{fontSize:9,color:stC,border:`1px solid ${stC}40`,padding:'1px 5px',borderRadius:2}}>{t.status}</span>
+                                  <span style={{fontSize:10,color:C.dim}}>{t.type}</span>
+                                  {t.strike&&<span style={{fontSize:10,color:C.dim}}>{t.strike}</span>}
+                                  {t.expiry&&<span style={{fontSize:9,color:'#2a4a5a'}}>{t.expiry}</span>}
+                                  {t.conviction&&<span style={{fontSize:9,color:C.blue,border:`1px solid ${C.blue}30`,padding:'1px 5px',borderRadius:2}}>{t.conviction}%</span>}
+                                  {blocked_&&<span style={{fontSize:8,color:C.red,border:`1px solid ${C.red}40`,padding:'1px 5px',borderRadius:2}}>🚫 BLOCKED</span>}
+                                </div>
+                                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                                  {p!==0&&<span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:isWin?C.green:C.red}}>{p>=0?'+':'-'}${Math.abs(p).toFixed(0)}</span>}
+                                  {t.status==='Open'&&<span style={{fontSize:9,color:C.orange,border:`1px solid ${C.orange}40`,padding:'1px 5px',borderRadius:2}}>PAPER</span>}
+                                </div>
+                              </div>
+                              <div style={{display:'flex',gap:10,marginTop:5,fontSize:10,color:C.dim,flexWrap:'wrap'}}>
+                                {t.entry&&<span>Entry: <span style={{color:'#8ab0c0'}}>{t.entry}</span></span>}
+                                {t.exitPrice&&<span>Exit: <span style={{color:'#8ab0c0'}}>{t.exitPrice}</span></span>}
+                                {t.iv&&<span>IV: <span style={{color:parseFloat(t.iv)>55?C.red:parseFloat(t.iv)>40?C.orange:C.green}}>{t.iv}%</span></span>}
+                                {t.chgPctAtEntry&&<span>Stk Δ: <span style={{color:Math.abs(parseFloat(t.chgPctAtEntry))>2?C.red:'#8ab0c0'}}>{t.chgPctAtEntry}%</span></span>}
+                                {t.breakevenReqPct&&<span>BE req: <span style={{color:parseFloat(t.breakevenReqPct)>5?C.red:parseFloat(t.breakevenReqPct)>3?C.orange:C.green}}>+{t.breakevenReqPct}%</span></span>}
+                              </div>
+                              {t.notes&&<div style={{marginTop:4,fontSize:10,color:'#3a5a6a',lineHeight:1.5}}>{t.notes}</div>}
+                            </div>
+                          )
+                        })
+                    }
+                  </>
+                )}
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
       {/* ═══════════════ BOTTOM TAB BAR ══════════════════════════════════════ */}
       <div style={{
         position:'fixed',bottom:0,left:0,right:0,zIndex:90,
@@ -1872,9 +2305,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         display:'grid',gridTemplateColumns:'1fr 1fr 1fr',
       }}>
         {[
-          {id:'dash', icon:'◈', label:'DASHBOARD'},
-          {id:'scan', icon:'⌁', label:'SCAN'},
-          {id:'journal', icon:'≡', label:'JOURNAL'},
+          {id:'dash',     icon:'◈', label:'DASH'},
+          {id:'scan',     icon:'⌁', label:'SCAN'},
+          {id:'journal',  icon:'≡', label:'JOURNAL'},
+          {id:'backtest', icon:'◎', label:'BACKTEST'},
         ].map(t=>{
           const active=tab===t.id
           return (
