@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useUser, useAuth, SignOutButton } from '@clerk/clerk-react'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -592,7 +591,7 @@ async function sendTelegram(message, token, chatId) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-export default function App() {
+export default function App(props={}) {
 
   // ── theme ──
   const [isDark, setIsDark] = useState(()=>ls('isDark','1')==='1')
@@ -935,9 +934,6 @@ export default function App() {
         strikeQuality: tradeData.strikeQuality||'',
         gexNote:       tradeData.gexNote||'',
         gexSign:       tradeData.gexSign||'',
-        bid:           isSpread ? tradeData.bid : tradeData.bid,
-        ask:           isSpread ? tradeData.ask : tradeData.ask,
-        mid:           isSpread ? tradeData.mid : tradeData.mid,
         entry:         tradeData.entry,
         target:        tradeData.target,
         stop:          tradeData.stop,
@@ -1286,16 +1282,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     setShowAdd(false)
   }
   const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
-  const { user }    = useUser()
-  const { getToken } = useAuth()
-  const openPortal  = async () => {
-    try {
-      const token = await getToken()
-      const res   = await fetch('/api/stripe/portal', { method:'POST', headers:{ Authorization:`Bearer ${token}` } })
-      const d     = await res.json()
-      if (d.url) window.location.href = d.url
-    } catch {}
-  }
+  // Auth props injected by Router.jsx in the deployed app.
+  // Defaults allow the app to run standalone (artifact preview / local dev).
+  const userEmail   = props.userEmail   || ''
+  const userInitial = props.userInitial || ''
+  const openPortal  = props.openPortal  || (()=>{})
+  const onSignOut   = props.onSignOut   || (()=>{})
 
   // Push a scan result directly into the journal as a paper trade
   const pushToJournal = r => {
@@ -1475,13 +1467,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </button>
             {/* User menu */}
             <div style={{position:'relative',display:'flex',alignItems:'center',gap:6}}>
-              {user&&(
+              {(userInitial||userEmail)&&(
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
                   <div style={{width:26,height:26,borderRadius:'50%',background:`${C.green}20`,border:`1px solid ${C.green}40`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:C.green,fontWeight:600}}>
-                    {(user.firstName||user.primaryEmailAddress?.emailAddress||'U')[0].toUpperCase()}
+                    {(userInitial||userEmail||'U')[0].toUpperCase()}
                   </div>
                   <button className="hv" onClick={openPortal} title="Manage subscription" style={{background:'transparent',border:'none',color:C.dim,fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5,padding:'2px 4px'}}>PRO</button>
-                  <SignOutButton><button className="hv" style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:3,padding:'4px 8px',fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>OUT</button></SignOutButton>
+                  <button className="hv" onClick={onSignOut} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:3,padding:'4px 8px',fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>OUT</button>
                 </div>
               )}
             </div>
