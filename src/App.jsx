@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useUser, useAuth, SignOutButton } from '@clerk/clerk-react'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -457,7 +458,7 @@ const CHECKLIST = [
   {id:'stop', cat:'Risk', l:'Stop Loss Defined',         d:'50% loss on debit, 2x on credit'},
   {id:'tgt',  cat:'Risk', l:'Profit Target Set',         d:'25–50% quick, 50–100% swings'},
   {id:'plan', cat:'Risk', l:'Exit Scenario Planned',     d:'What if it goes against you?'},
-  {id:'time2',cat:'Risk', l:'Entry time is after 10:00 AM', d:'First 30 min = noise. Volume and IV are unreliable until market settles.'},
+  {id:'time2',cat:'Risk', l:'If entering at open: size is reduced', d:'First 30 min is volatile — spreads are wider and volume signals are unreliable. Still tradeable if conviction is high, but use a limit at mid and size 50% of normal.'},
 ]
 
 const CAT_COLOR = { TA:C.green, Flow:C.blue, News:C.orange, Risk:C.red }
@@ -601,6 +602,7 @@ export default function App() {
   // ── main tab & tools panel ──
   const [tab,        setTab]        = useState('dash')
   const [btFilter,   setBtFilter]   = useState('all')    // backtest filter
+  const [paperToast, setPaperToast] = useState('')        // confirmation toast
   const [showTools,  setShowTools]  = useState(false)
   const [toolsTab,   setToolsTab]   = useState('settings')
 
@@ -799,6 +801,12 @@ export default function App() {
       const isMorningNoise=etHour<10.0
       const isChasing=Math.abs(chgPct)>2.0&&!isSpread
       const isHighIV=iv>0.55&&!isSpread
+
+      // Market regime — use esBar/nqBar already in state as directional context
+      const spxChgToday  = esBar?.chgPct||0
+      const ndxChgToday  = nqBar?.chgPct||0
+      const marketFalling= spxChgToday<-0.5 && ndxChgToday<-0.5
+      const marketRising = spxChgToday>0.5  && ndxChgToday>0.5
       const hi52=quote.week_52_high||price,lo52=quote.week_52_low||price
       const pos52=(price-lo52)/((hi52-lo52)||1)
       const expiryDateObj=new Date(expiryRaw+'T12:00:00')
@@ -807,9 +815,26 @@ export default function App() {
       let score=50; const reasons=[],warnings=[],hardBlocks=[]
 
       // Hard blocks — cap at 48 regardless of other signals
-      if(isMorningNoise){hardBlocks.push('⏰ Entry before 10 AM — volume & IV unreliable. Wait for market to settle.');score=Math.min(score,45)}
+      if(isMorningNoise){
+        // No score penalty — a genuinely strong setup is still valid at open.
+        // But surface a clear contextual warning so the user can make an informed call.
+        warnings.push('🔔 MARKET OPEN — First 30 min are volatile. Spreads are wider, volume signals are unreliable, and IV is inflated. If conviction is high, size smaller than normal and use a limit order at mid or better.')
+      }
       if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
       if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
+
+      // ── Market regime scoring ────────────────────────────────────────────
+      if(marketFalling && optType==='call' && !isSpread){
+        score-=12
+        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Calls face drag when index is falling.`)
+      } else if(marketRising && optType==='put' && !isSpread){
+        score-=10
+        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Puts face drag when index is rising.`)
+      } else if(marketRising && optType==='call'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`)
+      } else if(marketFalling && optType==='put'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`)
+      }
 
       // IV environment
       if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
@@ -817,16 +842,34 @@ export default function App() {
       else if(iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
       else if(iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
 
-      // Volume — only after 10 AM
+      // ── Volume + price coherence ─────────────────────────────────────────────
+      // Key insight: high volume with tiny move = institutional roll/distribution.
+      // Volume only becomes a bullish signal when it ACCOMPANIES significant price action.
       if(!isMorningNoise){
-        if(volRatio>=2.0){score+=12;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
-        else if(volRatio>=1.5){score+=7;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
-        else if(volRatio<0.8){score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x`)}
-      } else {warnings.push(`Volume ${volRatio.toFixed(1)}x avg — unreliable before 10 AM`)}
+        const volPriceCoherent = volRatio>=1.5 && Math.abs(chgPct)>=1.0
+        const volPriceDivergent= volRatio>=3.0 && Math.abs(chgPct)<0.8
+        if(volPriceDivergent){
+          score-=8
+          warnings.push(`Vol ${volRatio.toFixed(1)}x but stock barely moved (${chgPct.toFixed(1)}%) — likely institutional roll or distribution, not directional flow`)
+        } else if(volPriceCoherent){
+          score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent bullish signal`)
+        } else if(volRatio>=1.5){
+          score+=4
+          warnings.push(`Vol ${volRatio.toFixed(1)}x avg but price only ${chgPct.toFixed(1)}% — confirm this is directional before entering`)
+        } else if(volRatio<0.8){
+          score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x — weak conviction`)
+        }
+      } else {
+        // Still score the volume but add the open-volatility context
+        if(volRatio>=2.0){score+=8;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
+        warnings.push(`🔔 Market open — volume signals less reliable in first 30 min`)
+      }
 
-      // Price momentum
+      // ── Price momentum ────────────────────────────────────────────────────
       if(!isChasing){
-        if(Math.abs(chgPct)>=0.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% clean momentum`)}
+        if(Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
+        else if(Math.abs(chgPct)>=0.8&&Math.abs(chgPct)<1.5){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
+        // <0.8% with no other catalyst = neutral, no score added
       } else {warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — chasing`)}
 
       // Delta quality
@@ -841,14 +884,32 @@ export default function App() {
       else if(pos52>0.65){score+=4}
       else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
 
-      // DTE / IV incompatibility
+      // ── DTE / IV incompatibility ─────────────────────────────────────────
       if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
       else if(dte>=21&&dte<=60){score+=5;reasons.push(`${dte} DTE — good buffer`)}
 
-      // No catalyst cap
-      const confirmsOnly=reasons.every(r=>r.includes('Volume')||r.includes('Delta')||r.includes('IV')||r.includes('contracts'))
-      const hasRealSignal=Math.abs(chgPct)>=1.5||pos52>0.85
-      if(confirmsOnly&&!hasRealSignal&&hardBlocks.length===0){score=Math.min(score,72);warnings.push('No catalyst — volume/delta/IV are confirming signals only. Identify WHY this moves.')}
+      // ── Break-even reality: feeds directly into score ────────────────────
+      if(!isSpread && tradeData && tradeData.mid>0){
+        const strike_ = parseFloat(tradeData.primaryStrike||0)
+        const beReq_  = ((strike_ + tradeData.mid) / price - 1) * 100
+        if(beReq_>5.0){
+          score-=14
+          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — bottom 20% probability. Only enter with strong specific catalyst.`)
+        } else if(beReq_>3.5){
+          score-=7
+          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs a real catalyst to be viable`)
+        } else if(beReq_>0 && beReq_<=2.0){
+          score+=5
+          reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic target`)
+        }
+      }
+
+      // ── No-catalyst cap — use data values not string matching ──────────────
+      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85
+      if(!hasRealSignal && hardBlocks.length===0){
+        score=Math.min(score,72)
+        warnings.push('No identifiable catalyst — technical signals confirm structure but cannot predict direction. Know the specific WHY before entering.')
+      }
 
       if(hardBlocks.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
@@ -1102,7 +1163,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const dte2=Math.round((expDate2-now2)/(1000*60*60*24))
 
       let score=50; const reasons=[],warnings=[],hardBlocks2=[]
-      if(isMorning2){hardBlocks2.push('Morning noise <10AM');score=Math.min(score,45)}
+      if(isMorning2){
+        warnings.push('Market open — volatile first 30 min, size smaller')
+      }
       if(isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}%`);score=Math.min(score,42)}
       if(isHighIV2){hardBlocks2.push(`High IV ${ivPct2.toFixed(0)}%`);score=Math.min(score,48)}
 
@@ -1111,20 +1174,27 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       else if(iv>0.55){score-=10;warnings.push(`IV ${ivPct2.toFixed(0)}% high`)}
 
       if(!isMorning2){
-        if(volRatio>=2.0){score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x avg`)}
-        else if(volRatio>=1.5){score+=7;reasons.push(`Vol ${volRatio.toFixed(1)}x avg`)}
+        const vCoherent2  = volRatio>=1.5 && Math.abs(chgPct)>=1.0
+        const vDiverge2   = volRatio>=3.0 && Math.abs(chgPct)<0.8
+        if(vDiverge2){score-=8;warnings.push(`Vol ${volRatio.toFixed(1)}x but only ${chgPct.toFixed(1)}% move — likely roll/distribution`)}
+        else if(vCoherent2){score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move`)}
+        else if(volRatio>=1.5){score+=4;warnings.push(`Vol ${volRatio.toFixed(1)}x but price only ${chgPct.toFixed(1)}%`)}
         else if(volRatio<0.8){score-=8;warnings.push(`Low vol ${volRatio.toFixed(1)}x`)}
       }
 
-      if(!isChasing2&&Math.abs(chgPct)>=0.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      if(!isChasing2&&Math.abs(chgPct)>=1.5){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      else if(!isChasing2&&Math.abs(chgPct)>=0.8){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
       if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
       else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5}
       if(!isMorning2&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} vol on strike`)}
       if(dte2<14&&iv>0.45){score-=12;warnings.push(`DTE ${dte2} + IV ${ivPct2.toFixed(0)}% crush risk`)}
       else if(dte2>=21&&dte2<=60){score+=5;reasons.push(`${dte2} DTE`)}
 
-      const confirmsOnly2=reasons.every(r=>r.includes('Vol')||r.includes('Delta')||r.includes('IV'))
-      if(confirmsOnly2&&hardBlocks2.length===0){score=Math.min(score,72);warnings.push('No catalyst identified')}
+      const hasRealSignal2 = Math.abs(chgPct)>=1.5
+      if(!hasRealSignal2 && hardBlocks2.length===0){
+        score=Math.min(score,72)
+        warnings.push('No clear catalyst — confirm direction before alerting')
+      }
       if(hardBlocks2.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
@@ -1158,13 +1228,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   const runAutoScan = useCallback(async()=>{
     if (!tradierToken) return
-    // Morning gate: no alerts before 10:00 AM — volume and IV are unreliable
-    const nowH = new Date()
-    const etHour = nowH.getHours() + nowH.getMinutes()/60
-    if (etHour < 10.0) {
-      setAutoLog(p=>[`[${nowH.toLocaleTimeString()}] ⏰ Morning gate active — auto-scan paused until 10:00 AM ET`,...p.slice(0,99)])
-      return
-    }
+    // No morning gate — strong setups are valid at open.
+    // The scoring engine already adds a warning for volatile open conditions.
     const activeTF = scanTFRef.current  // read live value — not stale closure
     const tfCfgNow = TF_CONFIG[activeTF]||TF_CONFIG['Swing (21–45 DTE)']
     const list=watchlist.split(',').map(t=>t.trim().toUpperCase()).filter(Boolean)
@@ -1221,6 +1286,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     setShowAdd(false)
   }
   const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
+  const { user }    = useUser()
+  const { getToken } = useAuth()
+  const openPortal  = async () => {
+    try {
+      const token = await getToken()
+      const res   = await fetch('/api/stripe/portal', { method:'POST', headers:{ Authorization:`Bearer ${token}` } })
+      const d     = await res.json()
+      if (d.url) window.location.href = d.url
+    } catch {}
+  }
 
   // Push a scan result directly into the journal as a paper trade
   const pushToJournal = r => {
@@ -1229,7 +1304,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       ticker:           r.ticker||r.sym||'',
       type:             r.tradeType||'Call',
       status:           'Open',
-      entry:            r.entry||'',
+      entry:            r.mid||r.entry||'',   // mid price for clean journal display
       exitPrice:        '',
       pnl:              '',
       contracts:        '1',
@@ -1238,14 +1313,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       date:             new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
       notes:            `App alert · ${r.score}% conviction · ${r.tfLabel||''}`,
       conviction:       String(r.score||''),
-      iv:               String(r.ivPct||r.iv||''),
+      iv:               r.ivPct ? String(r.ivPct)
+                    : r.ivRaw ? String((r.ivRaw*100).toFixed(1))
+                    : r.iv   ? String((parseFloat(r.iv)*100).toFixed(1))
+                    : '',
       chgPctAtEntry:    String(r.chgPct||''),
       breakevenReqPct:  String(r.breakevenPct||''),
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
     }
     setTrades(p=>[t,...p])
-    setTab('journal')
+    setTab('backtest')
+    setPaperToast(`✅ ${t.ticker} logged as paper trade`)
+    setTimeout(()=>setPaperToast(''), 3000)
   }
 
   // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
@@ -1393,6 +1473,18 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <button className="hv" onClick={()=>{setShowTools(p=>!p);if(!showTools)setToolsTab('settings')}} style={{background:showTools?`${C.green}18`:'transparent',border:`1px solid ${showTools?C.green:C.border}`,color:showTools?C.green:C.dim,borderRadius:4,padding:'5px 11px',fontSize:11,letterSpacing:.5}}>
               {showTools ? '✕ CLOSE' : '⚙ TOOLS'}
             </button>
+            {/* User menu */}
+            <div style={{position:'relative',display:'flex',alignItems:'center',gap:6}}>
+              {user&&(
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <div style={{width:26,height:26,borderRadius:'50%',background:`${C.green}20`,border:`1px solid ${C.green}40`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:C.green,fontWeight:600}}>
+                    {(user.firstName||user.primaryEmailAddress?.emailAddress||'U')[0].toUpperCase()}
+                  </div>
+                  <button className="hv" onClick={openPortal} title="Manage subscription" style={{background:'transparent',border:'none',color:C.dim,fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5,padding:'2px 4px'}}>PRO</button>
+                  <SignOutButton><button className="hv" style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:3,padding:'4px 8px',fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>OUT</button></SignOutButton>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2296,6 +2388,17 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             )
           })()}
         </div>
+      )}
+
+      {/* ── Toast notification ── */}
+      {paperToast&&(
+        <div style={{
+          position:'fixed',top:72,left:'50%',transform:'translateX(-50%)',zIndex:999,
+          background:C.green,color:'#000',borderRadius:5,
+          padding:'9px 18px',fontSize:11,fontWeight:600,letterSpacing:.5,
+          boxShadow:'0 4px 20px rgba(0,255,136,.4)',
+          animation:'toastIn .2s ease',whiteSpace:'nowrap',
+        }}>{paperToast}</div>
       )}
 
       {/* ═══════════════ BOTTOM TAB BAR ══════════════════════════════════════ */}
