@@ -1,5 +1,10 @@
 // api/user/subscription.js
+// On ?sub=success, also checks Stripe directly in case webhook hasn't fired yet
+
+const Stripe = require('stripe')
 const { createClient } = require('@supabase/supabase-js')
+
+const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 function base64urlDecode(str) {
@@ -48,19 +53,53 @@ module.exports = async function handler(req, res) {
     return res.status(401).json({ error: 'Authentication failed: ' + e.message })
   }
 
+  // Get subscription record from Supabase
   const { data, error } = await supabase
     .from('subscriptions')
-    .select('status, plan, current_period_end, stripe_subscription_id')
+    .select('status, plan, current_period_end, stripe_subscription_id, stripe_customer_id')
     .eq('clerk_id', clerkUserId)
     .maybeSingle()
 
   if (error) return res.status(500).json({ error: error.message })
-  if (!data)  return res.status(200).json({ status: 'inactive', plan: null })
 
-  const now = new Date()
-  const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
+  // No record at all — definitely inactive
+  if (!data) return res.status(200).json({ status: 'inactive', plan: null })
+
   let status = data.status
-  if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < now) {
+
+  // If status is pending or inactive, check Stripe directly
+  // This handles the race condition where webhook hasn't fired yet
+  if ((status === 'pending' || status === 'inactive') && data.stripe_customer_id) {
+    try {
+      const subs = await stripe.subscriptions.list({
+        customer: data.stripe_customer_id,
+        limit:    5,
+        status:   'all',
+      })
+      const activeSub = subs.data.find(s =>
+        s.status === 'active' || s.status === 'trialing'
+      )
+      if (activeSub) {
+        // Update Supabase so future checks don't need to hit Stripe
+        status = activeSub.status
+        const periodEnd = new Date(activeSub.current_period_end * 1000).toISOString()
+        await supabase.from('subscriptions').upsert({
+          clerk_id:               clerkUserId,
+          stripe_subscription_id: activeSub.id,
+          status,
+          current_period_end:     periodEnd,
+          updated_at:             new Date().toISOString(),
+        }, { onConflict: 'clerk_id' })
+      }
+    } catch (stripeErr) {
+      console.error('Stripe check error:', stripeErr.message)
+      // Fall through with existing status
+    }
+  }
+
+  // Check period expiry
+  const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
+  if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < new Date()) {
     status = 'expired'
   }
 
