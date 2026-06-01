@@ -96,7 +96,8 @@ module.exports = async function handler(req, res) {
       stripeCustomerId = customer.id
     }
 
-    const session = await stripe.checkout.sessions.create({
+    // When `customer` is set, Stripe forbids also passing `customer_email`
+    const sessionParams = {
       customer:   stripeCustomerId,
       mode:       'subscription',
       line_items: [{ price: process.env.STRIPE_PRICE_ID_PRO, quantity: 1 }],
@@ -108,8 +109,8 @@ module.exports = async function handler(req, res) {
       cancel_url:  `${origin}/app`,
       allow_promotion_codes:      true,
       billing_address_collection: 'required',
-      customer_email: existingSub?.stripe_customer_id ? undefined : email,
-    })
+    }
+    const session = await stripe.checkout.sessions.create(sessionParams)
 
     await supabase.from('subscriptions').upsert({
       clerk_id:           clerkUserId,
