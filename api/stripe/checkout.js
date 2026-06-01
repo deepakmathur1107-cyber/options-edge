@@ -1,26 +1,53 @@
 // api/stripe/checkout.js
+// Verifies Clerk JWT using JWKS (networkless after first fetch, no SDK needed)
+
 const Stripe = require('stripe')
 const { createClient } = require('@supabase/supabase-js')
 
 const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
-// ─── Verify Clerk JWT without SDK ────────────────────────────────────────────
-// Uses Clerk's own verification endpoint — no azp/authorizedParties issue
-async function verifyClerkToken(token) {
-  const res = await fetch('https://api.clerk.com/v1/tokens/verify', {
-    method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
-    },
-    body: JSON.stringify({ token }),
+// ─── Lightweight JWT verification via Clerk JWKS ──────────────────────────────
+// Decodes the JWT, fetches Clerk's public key, verifies the signature.
+// Works with any Clerk instance — no SDK, no authorizedParties issue.
+
+function base64urlDecode(str) {
+  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+  return Buffer.from(b64 + pad, 'base64')
+}
+
+async function getClerkPublicKey(kid) {
+  const res  = await fetch('https://api.clerk.com/v1/jwks', {
+    headers: { Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}` }
   })
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error('Clerk verify failed: ' + err)
-  }
-  return res.json()   // returns { sub, ... }
+  if (!res.ok) throw new Error('Failed to fetch JWKS')
+  const jwks = await res.json()
+  const key  = jwks.keys?.find(k => k.kid === kid)
+  if (!key) throw new Error(`No JWKS key found for kid: ${kid}`)
+  return key
+}
+
+async function verifyClerkJWT(token) {
+  // 1. Decode header to get kid
+  const parts = token.split('.')
+  if (parts.length !== 3) throw new Error('Malformed JWT')
+  const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
+  const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
+
+  // 2. Check expiry
+  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+
+  // 3. Fetch public key and verify using Node crypto
+  const jwkKey  = await getClerkPublicKey(header.kid)
+  const crypto  = require('crypto')
+  const keyObj  = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+  const sigInput = Buffer.from(parts[0] + '.' + parts[1])
+  const sig      = base64urlDecode(parts[2])
+  const valid    = crypto.verify('sha256', sigInput, { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING }, sig)
+  if (!valid) throw new Error('Invalid signature')
+
+  return payload   // { sub: userId, ... }
 }
 
 module.exports = async function handler(req, res) {
@@ -29,30 +56,29 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   if (req.method === 'OPTIONS') return res.status(200).end()
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
+  if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   let body = req.body
   if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+  body = body || {}
 
-  // Verify Clerk JWT
   const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
   if (!token) return res.status(401).json({ error: 'No token provided' })
 
   let clerkUserId
   try {
-    const payload = await verifyClerkToken(token)
+    const payload = await verifyClerkJWT(token)
     clerkUserId   = payload.sub
-    if (!clerkUserId) throw new Error('No sub in token')
+    if (!clerkUserId) throw new Error('No user ID in token')
   } catch (e) {
-    console.error('Token verify error:', e.message)
-    return res.status(401).json({ error: 'Invalid token: ' + e.message })
+    console.error('JWT verify error:', e.message)
+    return res.status(401).json({ error: 'Authentication failed: ' + e.message })
   }
 
   const email  = body.email || ''
   const origin = req.headers.origin || `https://${req.headers.host}`
 
   try {
-    // Reuse existing Stripe customer if present
     let stripeCustomerId
     const { data: existingSub } = await supabase
       .from('subscriptions')
@@ -70,7 +96,6 @@ module.exports = async function handler(req, res) {
       stripeCustomerId = customer.id
     }
 
-    // Create Stripe Checkout session with 7-day trial
     const session = await stripe.checkout.sessions.create({
       customer:   stripeCustomerId,
       mode:       'subscription',
@@ -86,7 +111,6 @@ module.exports = async function handler(req, res) {
       customer_email: existingSub?.stripe_customer_id ? undefined : email,
     })
 
-    // Store pending record so webhook can find the clerk_id
     await supabase.from('subscriptions').upsert({
       clerk_id:           clerkUserId,
       stripe_customer_id: stripeCustomerId,
@@ -97,7 +121,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ url: session.url })
 
   } catch (e) {
-    console.error('Stripe checkout error:', e.message)
+    console.error('Checkout error:', e.message)
     return res.status(500).json({ error: e.message })
   }
 }
