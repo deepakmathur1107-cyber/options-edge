@@ -573,11 +573,23 @@ function PnLChart({ trades }) {
 }
 
 // ─── Tradier API proxy ────────────────────────────────────────────────────────
-async function tradierGet(path, token, mode) {
-  const res = await fetch(`/api/tradier?path=${encodeURIComponent(path)}`, {
-    headers:{'x-tradier-token':token,'x-tradier-mode':mode},
-  })
-  if (!res.ok) throw new Error(`Tradier ${res.status}: ${await res.text().catch(()=>'')}`)
+async function tradierGet(path, token, mode, authToken) {
+  const headers = {}
+  if (authToken) {
+    // Phase 2: use Clerk JWT — admin key on server side
+    headers['Authorization'] = `Bearer ${authToken}`
+  } else if (token) {
+    // Phase 1 legacy: user-provided token
+    headers['x-tradier-token'] = token
+    headers['x-tradier-mode']  = mode || 'sandbox'
+  }
+  const res = await fetch(`/api/tradier?path=${encodeURIComponent(path)}`, { headers })
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({}))
+    // Handle usage limit (free tier)
+    if (res.status === 429 && err.upgrade) throw new Error('USAGE_LIMIT:' + err.error)
+    throw new Error(`Tradier ${res.status}: ${err.error || ''}`)
+  }
   return res.json()
 }
 
@@ -592,6 +604,30 @@ async function sendTelegram(message, token, chatId) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App(props={}) {
+  // props.getToken — async function from Router that returns Clerk JWT
+
+  // ── auth token from Router (Phase 2) ──
+  const getAuthToken = props.getToken || (async () => null)
+
+  // ── Cloud API helpers ──────────────────────────────────────────────────────
+  const cloudGet = async (path) => {
+    const token = await getAuthToken()
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const res = await fetch(path, { headers })
+    if (!res.ok) throw new Error(`${path} ${res.status}`)
+    return res.json()
+  }
+  const cloudPost = async (path, body, method='POST') => {
+    const token = await getAuthToken()
+    const headers = { 'Content-Type': 'application/json' }
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(path, { method, headers, body: JSON.stringify(body) })
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:res.statusText}))
+      throw new Error(err.error || res.statusText)
+    }
+    return res.json()
+  }
 
   // ── theme ──
   const [isDark, setIsDark] = useState(()=>ls('isDark','1')==='1')
@@ -650,11 +686,44 @@ export default function App(props={}) {
   const [copied, setCopied] = useState(false)
 
   // ── journal ──
-  const [trades,   setTrades]   = useState(()=>{try{return JSON.parse(ls('trades','[]'))}catch{return[]}})
+  const [trades,          setTrades]        = useState(()=>{try{return JSON.parse(ls('trades','[]'))}catch{return[]}})
+  const [tradesLoaded,    setTradesLoaded]   = useState(false)
+  const [tradesSyncing,   setTradesSyncing]  = useState(false)
+  const [usageLimitHit,   setUsageLimitHit]  = useState(false)
+  const [usageCount,      setUsageCount]     = useState(0)
+  const [scanLimit]       = useState(4)  // free tier limit
   const [showAdd,  setShowAdd]  = useState(false)
   const [jFilter,  setJFilter]  = useState('All')
   const [newTrade, setNewTrade] = useState({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:'',conviction:'',iv:'',chgPctAtEntry:'',strike:'',breakevenReqPct:''})
   useEffect(()=>{try{localStorage.setItem('trades',JSON.stringify(trades))}catch{}},[trades])
+
+  // Load trades from cloud on mount (merges with localStorage)
+  useEffect(()=>{
+    if (tradesLoaded) return
+    getAuthToken().then(token => {
+      if (!token) { setTradesLoaded(true); return }
+      fetch('/api/user/trades', { headers:{ Authorization:`Bearer ${token}` } })
+        .then(r=>r.json())
+        .then(d=>{
+          if (d.trades?.length > 0) {
+            // Cloud is source of truth — replace localStorage
+            setTrades(d.trades.map(t=>({
+              id: t.id, ticker:t.ticker, type:t.type, status:t.status,
+              entry:t.entry, exitPrice:t.exit_price, pnl:String(t.pnl||''),
+              contracts:t.contracts, strike:t.strike, expiry:t.expiry,
+              date:t.logged_at?.split('T')[0]||'', notes:t.notes||'',
+              conviction:String(t.conviction||''), iv:String(t.iv_at_entry||''),
+              chgPctAtEntry:String(t.chg_pct_at_entry||''),
+              breakevenReqPct:String(t.be_req_pct||''),
+              hardBlockCount:String(t.hard_block_count||0), grade:t.grade||'',
+            })))
+            try { localStorage.setItem('trades', JSON.stringify(d.trades)) } catch {}
+          }
+          setTradesLoaded(true)
+        })
+        .catch(()=>setTradesLoaded(true))
+    }).catch(()=>setTradesLoaded(true))
+  }, [])
 
   const jStats = (()=>{
     const closed=trades.filter(t=>t.status!=='Open')
@@ -695,7 +764,11 @@ export default function App(props={}) {
   const [futErr,     setFutErr]     = useState('')
 
   // ─── Tradier helpers ──────────────────────────────────────────────────────
-  const tGet     = useCallback((path)=>tradierGet(path,tradierToken,tradierMode),[tradierToken,tradierMode])
+  // Phase 2: prefer Clerk JWT (admin key). Fall back to user token for sandbox testing.
+  const tGet = useCallback(async (path) => {
+    const authToken = await getAuthToken().catch(()=>null)
+    return tradierGet(path, tradierToken, tradierMode, authToken)
+  }, [tradierToken, tradierMode, getAuthToken])
   const getQuote    = async t=>{const d=await tGet(`/markets/quotes?symbols=${t}&greeks=false`);return d?.quotes?.quote||null}
   const getExpiries = async t=>{const d=await tGet(`/markets/options/expirations?symbol=${t}&includeAllRoots=false`);return d?.expirations?.date||[]}
   const getChain    = async(t,e)=>{const d=await tGet(`/markets/options/chains?symbol=${t}&expiration=${e}&greeks=true`);return d?.options?.option||[]}
@@ -798,8 +871,15 @@ export default function App(props={}) {
       const now=new Date()
       const etHour=now.getHours()+(now.getMinutes()/60)
       const isMorningNoise=etHour<10.0
-      const isChasing=Math.abs(chgPct)>2.0&&!isSpread
       const isHighIV=iv>0.55&&!isSpread
+
+      // Chasing vs earnings gap distinction:
+      // 2–5% with no catalyst = chasing intraday drift → block
+      // >5% = almost certainly a gap from earnings/news event → allow with context
+      // This is why MDB (+8.8% earnings gap) should score, but MSTR (+3.9% intraday) should not
+      const isIntraChasing = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0 && !isSpread
+      const isEarningsGap  = Math.abs(chgPct)>5.0 && !isSpread
+      const isChasing      = isIntraChasing  // only the intraday drift case is a hard block
 
       // Market regime — use esBar/nqBar already in state as directional context
       const spxChgToday  = esBar?.chgPct||0
@@ -821,6 +901,21 @@ export default function App(props={}) {
       }
       if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
       if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
+
+      // ── Earnings gap handling ────────────────────────────────────────────
+      // >5% gap = earnings/news catalyst, not intraday drift
+      // Score it as strong momentum; warn about premium expansion
+      if(isEarningsGap){
+        const gapOpt = chgPct>0 ? 'call' : 'put'
+        if(optType===gapOpt){
+          score+=15
+          reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
+          warnings.push('⚡ GAP PLAY — Premium is expanded. Size at 50% of normal. Enter on a small pullback or consolidation. Target 50–80% of premium.')
+        } else {
+          score-=20
+          warnings.push(`Trading AGAINST the gap — stock moved ${chgPct.toFixed(1)}% and you are playing the other direction. Very high risk.`)
+        }
+      }
 
       // ── Market regime scoring ────────────────────────────────────────────
       if(marketFalling && optType==='call' && !isSpread){
@@ -865,11 +960,13 @@ export default function App(props={}) {
       }
 
       // ── Price momentum ────────────────────────────────────────────────────
-      if(!isChasing){
+      if(isIntraChasing){
+        warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday without a specific catalyst — chasing`)
+      } else if(!isEarningsGap){
+        // Normal momentum scoring (earnings gap handled above)
         if(Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
         else if(Math.abs(chgPct)>=0.8&&Math.abs(chgPct)<1.5){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
-        // <0.8% with no other catalyst = neutral, no score added
-      } else {warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — chasing`)}
+      }
 
       // Delta quality
       if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
@@ -904,7 +1001,8 @@ export default function App(props={}) {
       }
 
       // ── No-catalyst cap — use data values not string matching ──────────────
-      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85
+      // Earnings gap IS a real signal — don't apply no-catalyst cap to it
+      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap
       if(!hasRealSignal && hardBlocks.length===0){
         score=Math.min(score,72)
         warnings.push('No identifiable catalyst — technical signals confirm structure but cannot predict direction. Know the specific WHY before entering.')
@@ -958,7 +1056,13 @@ export default function App(props={}) {
         source:`Tradier ${tradierMode}`,
       })
     } catch(e) {
-      setScanErr('❌ '+e.message)
+      if (e.message.startsWith('USAGE_LIMIT:')) {
+        setUsageLimitHit(true)
+        setUsageCount(scanLimit+1)
+        setScanErr('⚡ ' + e.message.replace('USAGE_LIMIT:',''))
+      } else {
+        setScanErr('❌ '+e.message)
+      }
       dbg('ERROR: '+e.message)
     }
     setScanning(false)
@@ -1153,7 +1257,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const now2=new Date()
       const etHour2=now2.getHours()+(now2.getMinutes()/60)
       const isMorning2=etHour2<10.0
-      const isChasing2=Math.abs(chgPct)>2.0
+      const isIntraChasing2 = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0
+      const isEarningsGap2  = Math.abs(chgPct)>5.0
+      const isChasing2      = isIntraChasing2
       const isHighIV2=iv>0.55
       const expDate2=new Date(expiryRaw+'T12:00:00')
       const dte2=Math.round((expDate2-now2)/(1000*60*60*24))
@@ -1162,7 +1268,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       if(isMorning2){
         warnings.push('Market open — volatile first 30 min, size smaller')
       }
-      if(isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}%`);score=Math.min(score,42)}
+      if(isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday`);score=Math.min(score,42)}
+      if(isEarningsGap2){score+=15;reasons.push(`Gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — earnings/news catalyst`);warnings.push('Gap play — size smaller, enter on pullback')}
       if(isHighIV2){hardBlocks2.push(`High IV ${ivPct2.toFixed(0)}%`);score=Math.min(score,48)}
 
       if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct2.toFixed(0)}% low`)}
@@ -1178,15 +1285,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         else if(volRatio<0.8){score-=8;warnings.push(`Low vol ${volRatio.toFixed(1)}x`)}
       }
 
-      if(!isChasing2&&Math.abs(chgPct)>=1.5){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
-      else if(!isChasing2&&Math.abs(chgPct)>=0.8){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      if(!isChasing2&&!isEarningsGap2&&Math.abs(chgPct)>=1.5){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      else if(!isChasing2&&!isEarningsGap2&&Math.abs(chgPct)>=0.8){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
       if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
       else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5}
       if(!isMorning2&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} vol on strike`)}
       if(dte2<14&&iv>0.45){score-=12;warnings.push(`DTE ${dte2} + IV ${ivPct2.toFixed(0)}% crush risk`)}
       else if(dte2>=21&&dte2<=60){score+=5;reasons.push(`${dte2} DTE`)}
 
-      const hasRealSignal2 = Math.abs(chgPct)>=1.5
+      const hasRealSignal2 = Math.abs(chgPct)>=1.5 || isEarningsGap2
       if(!hasRealSignal2 && hardBlocks2.length===0){
         score=Math.min(score,72)
         warnings.push('No clear catalyst — confirm direction before alerting')
@@ -1274,12 +1381,21 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   useEffect(()=>()=>clearInterval(autoRef.current),[])
 
   // ─── Journal helpers ──────────────────────────────────────────────────────
-  const addTrade=()=>{
+  const addTrade=async()=>{
     if (!newTrade.ticker) return
-    const t={...newTrade,id:Date.now()+'',date:newTrade.date||new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+    const localId=Date.now()+''
+    const t={...newTrade,id:localId,date:newTrade.date||new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
     setTrades(p=>[t,...p])
-    setNewTrade({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:''})
+    setNewTrade({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:'',conviction:'',iv:'',chgPctAtEntry:'',strike:'',breakevenReqPct:''})
     setShowAdd(false)
+    try {
+      const token=await getAuthToken()
+      if(token){
+        const res=await fetch('/api/user/trades',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(t)})
+        const d=await res.json()
+        if(d.trade?.id) setTrades(p=>p.map(x=>x.id===localId?{...x,id:d.trade.id}:x))
+      }
+    } catch(e){ console.log('Cloud sync (saved locally):',e.message) }
   }
   const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
   // Auth props injected by Router.jsx in the deployed app.
@@ -1690,9 +1806,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         {/* ── SCAN TAB ────────────────────────────────────────────────────── */}
         {tab==='scan' && (
           <div className="si">
-            {!tradierToken && (
-              <div style={{background:'#02080e',border:`1px solid ${C.blue}30`,borderRadius:6,padding:'9px 12px',marginBottom:11,fontSize:11,color:'#5a8aaa',lineHeight:1.6}}>
-                ℹ️ No token — server-side Tradier token active (Vercel env var). <button onClick={()=>{setToolsTab('settings');setShowTools(true)}} style={{background:'none',border:'none',color:C.blue,cursor:'pointer',fontSize:11,padding:0,textDecoration:'underline'}}>Add token in Settings</button> to override.
+            {usageLimitHit && (
+              <div style={{background:'#1a0810',border:`1px solid ${C.orange}50`,borderRadius:6,padding:'10px 13px',marginBottom:11,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+                <div>
+                  <div style={{fontSize:11,color:C.orange,marginBottom:2}}>⚡ Daily scan limit reached ({usageCount}/{scanLimit})</div>
+                  <div style={{fontSize:10,color:'#7a5020'}}>Free tier: {scanLimit} scans/day. Resets at midnight UTC.</div>
+                </div>
+                <button className="hv" onClick={()=>window.location.href='/app'} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>UPGRADE →</button>
               </div>
             )}
 
@@ -2466,14 +2586,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* ── SETTINGS ── */}
               {toolsTab==='settings'&&(
                 <div className="si">
-                  {/* Tradier */}
+                  {/* Tradier — Phase 2: admin key, no user token needed */}
                   <Card style={{marginBottom:12}}>
-                    <Lbl color={C.green}>📡 TRADIER DATA SOURCE</Lbl>
-                    <div style={{display:'grid',gap:9,marginBottom:10}}>
-                      <Field label="Bearer Token" value={tradierToken} onChange={setTradierToken} placeholder="Paste Tradier token here" type="password"/>
-                      <Field label="Mode" value={tradierMode} onChange={setTradierMode} options={['production','sandbox']}/>
+                    <Lbl color={C.green}>📡 MARKET DATA</Lbl>
+                    <div style={{fontSize:11,color:'#8ab0c0',lineHeight:1.8}}>
+                      Live options data is provided automatically — no API token required.
                     </div>
-                    {tradierToken&&<div style={{fontSize:10,color:C.green}}>✓ Token set — using <strong>{tradierMode}</strong></div>}
+                    <div style={{fontSize:10,color:C.dim,marginTop:8}}>
+                      Source: Tradier {tradierMode === 'sandbox' ? 'Sandbox (test data)' : 'Production (live data)'}
+                    </div>
+                    {tradierToken&&(
+                      <div style={{fontSize:9,color:'#3a6070',marginTop:6}}>
+                        Legacy token detected — using your personal token as override
+                      </div>
+                    )}
                   </Card>
 
                   {/* Anthropic */}
