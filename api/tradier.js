@@ -177,7 +177,7 @@ module.exports = async function handler(req, res) {
   let isFreePlan   = false
   let clerkUserId  = null
 
-  if (clerkJWT && TRADIER_TOKEN) {
+  if (clerkJWT) {
     // Phase 2 path: verify Clerk JWT, check subscription, apply usage gate
     try {
       const payload = await verifyClerkJWT(clerkJWT)
@@ -187,25 +187,28 @@ module.exports = async function handler(req, res) {
       const isPaid = status === 'active' || status === 'trialing'
       isFreePlan   = !isPaid
 
-      // Usage gate for free users
       const usage = await checkUsage(clerkUserId, isPaid ? plan : 'free')
       if (!usage.allowed) {
         return res.status(429).json({
-          error:    `Free tier limit reached (${usage.limit} scans/day). Upgrade to Pro for unlimited scans.`,
-          count:    usage.count,
-          limit:    usage.limit,
-          upgrade:  true,
+          error:   `Free tier limit reached (${usage.limit} scans/day). Upgrade to Pro for unlimited scans.`,
+          count:   usage.count,
+          limit:   usage.limit,
+          upgrade: true,
         })
       }
     } catch (e) {
-      // JWT verify failed — fall through to admin token (dev/testing mode)
-      console.log('Auth fallback (JWT error):', e.message)
+      // JWT verify failed — still serve data using admin key (dev/testing fallback)
+      console.log('JWT verify failed, using admin key:', e.message)
     }
   } else if (legacyToken) {
-    // Legacy path: user-provided token (Phase 1 backwards compat)
+    // Legacy: user-provided token in header
     tradierToken = legacyToken
-  } else if (!TRADIER_TOKEN) {
-    return res.status(401).json({ error: 'No Tradier token configured. Add TRADIER_TOKEN to Vercel env vars.' })
+  }
+
+  // At this point tradierToken = admin key from env (default)
+  // If admin key is not set, reject
+  if (!tradierToken) {
+    return res.status(401).json({ error: 'No Tradier token. Add TRADIER_TOKEN to Vercel Environment Variables.' })
   }
 
   // ── Build cache key ────────────────────────────────────────────────────────
