@@ -576,19 +576,23 @@ function PnLChart({ trades }) {
 async function tradierGet(path, token, mode, authToken) {
   const headers = {}
   if (authToken) {
-    // Phase 2: use Clerk JWT — admin key on server side
+    // Phase 2: Clerk JWT → server uses admin TRADIER_TOKEN
     headers['Authorization'] = `Bearer ${authToken}`
   } else if (token) {
-    // Phase 1 legacy: user-provided token
+    // Phase 1 legacy / sandbox override: user-provided token
     headers['x-tradier-token'] = token
     headers['x-tradier-mode']  = mode || 'sandbox'
+  } else {
+    // No auth at all — still try, server may have admin token configured
+    // (works when TRADIER_TOKEN is set in Vercel env vars)
   }
   const res = await fetch(`/api/tradier?path=${encodeURIComponent(path)}`, { headers })
   if (!res.ok) {
-    const err = await res.json().catch(()=>({}))
-    // Handle usage limit (free tier)
+    const raw = await res.text().catch(()=>'')
+    let err = {}
+    try { err = JSON.parse(raw) } catch {}
     if (res.status === 429 && err.upgrade) throw new Error('USAGE_LIMIT:' + err.error)
-    throw new Error(`Tradier ${res.status}: ${err.error || ''}`)
+    throw new Error(`Tradier ${res.status}: ${err.error || raw.slice(0,80)}`)
   }
   return res.json()
 }
@@ -817,9 +821,13 @@ export default function App(props={}) {
         color: dir==='BULLISH'?C.green:dir==='BEARISH'?C.red:C.orange })
     }
     setBarLoading(false)
-  },[tradierToken,tradierMode])
+  },[tradierToken,tradierMode,getAuthToken])
 
-  useEffect(()=>{ fetchPriceBar() },[]) // fetch on mount
+  // Fetch price bar when component mounts AND when getAuthToken becomes available
+  // (getAuthToken starts as a no-op, gets replaced by real Clerk token from Router)
+  useEffect(()=>{
+    fetchPriceBar()
+  },[getAuthToken])  // re-runs when real auth token arrives
 
   // ─── Single ticker scan ───────────────────────────────────────────────────
   const runScan = async()=>{
