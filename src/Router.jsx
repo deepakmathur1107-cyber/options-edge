@@ -42,42 +42,61 @@ function Spinner() {
 
 // ─── Protected route — requires auth + active subscription ──────────────────
 function Protected() {
-  const { isLoaded, isSignedIn } = useUser()
-  const { getToken }             = useAuth()
-  const navigate                 = useNavigate()
-  const location                 = useLocation()
-  const [subStatus, setSubStatus] = useState(null)   // null = loading
+  const { isLoaded, isSignedIn, user } = useUser()
+  const { getToken, signOut }          = useAuth()
+  const navigate                       = useNavigate()
+  const location                       = useLocation()
+  const [subStatus, setSubStatus]      = useState(null)
+
+  // Open Stripe billing portal
+  const openPortal = async () => {
+    try {
+      const token = await getToken()
+      const res   = await fetch('/api/stripe/portal', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const d = await res.json()
+      if (d.url) window.location.href = d.url
+    } catch (e) { console.error('Portal error:', e) }
+  }
 
   useEffect(() => {
     if (!isLoaded) return
     if (!isSignedIn) { navigate('/', { replace: true }); return }
-    // Check subscription
     fetchSubStatus(getToken).then(s => {
       setSubStatus(s)
-      // Clear cache if returning from Stripe success
       if (location.search.includes('sub=success')) {
         try { sessionStorage.removeItem('sub_status_cache') } catch {}
       }
     })
   }, [isLoaded, isSignedIn, location.search])
 
-  // Re-check after returning from Stripe
+  // Re-check after Stripe success — clear cache + small delay for webhook
   useEffect(() => {
     if (location.search.includes('sub=success')) {
-      setSubStatus(null)  // force re-fetch
-      fetchSubStatus(getToken).then(setSubStatus)
+      try { sessionStorage.removeItem('sub_status_cache') } catch {}
+      setSubStatus(null)
+      setTimeout(() => fetchSubStatus(getToken).then(setSubStatus), 1500)
     }
   }, [location.search])
 
   if (!isLoaded || subStatus === null) return <Spinner />
-  if (!isSignedIn) return <Navigate to="/" replace />
+  if (!isSignedIn)                     return <Navigate to="/" replace />
   if (subStatus !== 'active' && subStatus !== 'trialing') return <Paywall />
-  return <App />
+
+  return <App
+    userEmail={user?.primaryEmailAddress?.emailAddress || ''}
+    userInitial={user?.firstName || user?.primaryEmailAddress?.emailAddress?.[0] || ''}
+    openPortal={openPortal}
+    onSignOut={() => signOut({ redirectUrl: '/' })}
+    getToken={getToken}
+  />
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 export default function Router() {
-  const { isLoaded, isSignedIn } = useUser()
+  const { isLoaded, isSignedIn, user } = useUser()
 
   if (!isLoaded) return <Spinner />
 
