@@ -608,6 +608,10 @@ export default function App(props={}) {
 
   // ── auth token from Router (Phase 2) ──
   const getAuthToken = props.getToken || (async () => null)
+  // Phase 2: admin key is always active — no per-user token required.
+  // hasDataAccess = true when admin key is set OR user has a personal token (legacy).
+  // Used to gate UI elements that need market data.
+  const hasDataAccess = true   // admin TRADIER_TOKEN always present on server
 
   // ── Cloud API helpers ──────────────────────────────────────────────────────
   const cloudGet = async (path) => {
@@ -1330,7 +1334,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   },[tradierToken,tradierMode])
 
   const runAutoScan = useCallback(async()=>{
-    if (!tradierToken) return
+    // Admin key always available — no token check needed
     // No morning gate — strong setups are valid at open.
     // The scoring engine already adds a warning for volatile open conditions.
     const activeTF = scanTFRef.current  // read live value — not stale closure
@@ -1574,7 +1578,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 AUTO
               </span>
             )}
-            {tradierToken && <span style={{fontSize:9,color:C.dim,letterSpacing:1}}>{tradierMode.toUpperCase()}</span>}
+            <span style={{fontSize:9,color:C.dim,letterSpacing:1}}>{tradierMode.toUpperCase()}</span>
             <button className="hv" onClick={()=>setIsDark(p=>!p)} title={isDark?'Switch to light mode':'Switch to dark mode'} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:4,padding:'5px 9px',fontSize:13,cursor:'pointer',lineHeight:1}}>
               {isDark?'☀':'🌙'}
             </button>
@@ -1611,7 +1615,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <span style={{fontSize:10,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
                 </>
               ) : (
-                <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':tradierToken?'—':'NO TOKEN'}</span>
+                <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
               )}
             </div>
           ))}
@@ -1652,11 +1656,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               })}
             </div>
 
-            {/* ── No token CTA ── */}
+            {/* ── No data CTA — shows only when price bar hasn't loaded yet ── */}
             {!esBar && !nqBar && (
               <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-                <div style={{fontSize:10,color:C.blue}}>Add Tradier token in Settings to load live SPX/NDX data</div>
-                <button className="hv" onClick={()=>{setToolsTab('settings');setShowTools(true)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>ADD TOKEN</button>
+                <div style={{fontSize:10,color:C.dim}}>Loading market data — click ↺ to refresh SPX / NDX prices</div>
+                <button className="hv" onClick={fetchPriceBar} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>↺ REFRESH</button>
               </div>
             )}
 
@@ -1697,12 +1701,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>SPX / NDX INDEX SETUPS</div>
                   <div style={{fontSize:9,color:'#2a5060',marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
                 </div>
-                <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading||!tradierToken} style={{
+                <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background:indexAlertsLoading?'transparent':`${C.green}18`,
-                  border:`1px solid ${indexAlertsLoading||!tradierToken?C.border:C.green}`,
-                  color:indexAlertsLoading||!tradierToken?C.dim:C.green,
+                  border:`1px solid ${indexAlertsLoading?C.border:C.green}`,
+                  color:indexAlertsLoading?C.dim:C.green,
                   padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
-                  cursor:tradierToken&&!indexAlertsLoading?'pointer':'not-allowed',
+                  cursor:indexAlertsLoading?'not-allowed':'pointer',
                   fontFamily:"'Bebas Neue',sans-serif",
                 }}>
                   {indexAlertsLoading?<span className="pulse">SCANNING</span>:'GENERATE'}
@@ -1710,7 +1714,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
                 <div style={{fontSize:10,color:'#2a5060',textAlign:'center',padding:'10px 0'}}>
-                  {tradierToken?'Hit GENERATE to scan SPX & NDX across all 4 timeframes':'Add Tradier token first'}
+                  {'Hit GENERATE to scan SPX & NDX across all 4 timeframes'}
                 </div>
               )}
               {indexAlerts.slice(0,6).map((al,i)=>{
