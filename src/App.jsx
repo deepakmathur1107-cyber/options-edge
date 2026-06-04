@@ -782,34 +782,50 @@ export default function App(props={}) {
   const getChain    = async(t,e)=>{const d=await tGet(`/markets/options/chains?symbol=${t}&expiration=${e}&greeks=true`);return d?.options?.option||[]}
 
   // ─── Price bar fetch ──────────────────────────────────────────────────────
+  // Direct fetch — avoids stale closure issues with useCallback chains
   const fetchPriceBar = useCallback(async()=>{
     setBarLoading(true)
-    const tryQuote = async symbols => {
-      for (const sym of symbols) {
-        try {
-          const q = await getQuote(sym)
-          const p = parseFloat(q?.last||q?.prevclose||0)
-          if (p > 0) return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym }
-          else console.log(`tryQuote ${sym}: no price in response`, q)
-        } catch(e) {
-          console.log(`tryQuote ${sym} error:`, e.message)
-        }
+
+    const directQuote = async (sym) => {
+      try {
+        // Get auth token fresh on every call
+        const authToken = await getAuthToken().catch(()=>null)
+        const headers = {}
+        if (authToken) headers['Authorization'] = `Bearer ${authToken}`
+        else if (tradierToken) { headers['x-tradier-token']=tradierToken; headers['x-tradier-mode']=tradierMode }
+
+        const path = `/markets/quotes?symbols=${sym}&greeks=false`
+        const res  = await fetch(`/api/tradier?path=${encodeURIComponent(path)}`, { headers })
+        if (!res.ok) { console.warn(`Quote ${sym}: HTTP ${res.status}`); return null }
+        const data = await res.json()
+        const q = data?.quotes?.quote
+        if (!q) { console.warn(`Quote ${sym}: no quote in response`, data); return null }
+        const p = parseFloat(q.last || q.prevclose || 0)
+        if (p <= 0) { console.warn(`Quote ${sym}: price is 0`, q); return null }
+        return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym, q }
+      } catch(e) {
+        console.warn(`Quote ${sym} failed:`, e.message)
+        return null
       }
-      return null
     }
-    // Try SPY/QQQ first — always available including sandbox.
-    // SPX/NDX are index symbols and may not be available in Tradier sandbox.
-    const [es, nq] = await Promise.all([
-      tryQuote(['SPY','SPX','$SPX.X']),
-      tryQuote(['QQQ','NDX','$NDX.X']),
-    ])
-    if (es) setEsBar({...es, label: es.sym==='SPY'?'SPY (SPX proxy)':'SPX'})
-    if (nq) setNqBar({...nq, label: nq.sym==='QQQ'?'QQQ (NDX proxy)':'NDX'})
-    // Update market conviction whenever prices refresh
+
+    // Try symbols in order — first success wins
+    let es = null, nq = null
+    for (const sym of ['SPY','SPX','$SPX.X']) {
+      es = await directQuote(sym)
+      if (es) break
+    }
+    for (const sym of ['QQQ','NDX','$NDX.X']) {
+      nq = await directQuote(sym)
+      if (nq) break
+    }
+
+    if (es) setEsBar({...es, label: es.sym==='SPY'?'SPY':es.sym==='SPX'?'SPX':'SPX'})
+    if (nq) setNqBar({...nq, label: nq.sym==='QQQ'?'QQQ':nq.sym==='NDX'?'NDX':'NDX'})
+
     if (es) {
       const spxChg = es.chgPct
       const ndxChg = nq?.chgPct || spxChg
-      const volR   = 1 // volume not in bar data — neutral
       let bull = 50
       if (spxChg > 1.0) bull += 22
       else if (spxChg > 0.5) bull += 14
@@ -821,17 +837,14 @@ export default function App(props={}) {
       else if (ndxChg < 0 && spxChg < 0) bull -= 8
       bull = Math.min(94, Math.max(6, bull))
       const dir = bull >= 62 ? 'BULLISH' : bull <= 38 ? 'BEARISH' : 'NEUTRAL'
-      setMarketConviction({ score: bull, direction: dir, spxChg, ndxChg,
+      setMarketConviction({ score:bull, direction:dir, spxChg, ndxChg,
         color: dir==='BULLISH'?C.green:dir==='BEARISH'?C.red:C.orange })
     }
     setBarLoading(false)
-  },[tradierToken,tradierMode,getAuthToken])
+  },[tradierToken, tradierMode, getAuthToken])
 
-  // Fetch price bar when component mounts AND when getAuthToken becomes available
-  // (getAuthToken starts as a no-op, gets replaced by real Clerk token from Router)
-  useEffect(()=>{
-    fetchPriceBar()
-  },[getAuthToken])  // re-runs when real auth token arrives
+  // Run on mount only — fetchPriceBar already captures getAuthToken via closure
+  useEffect(()=>{ fetchPriceBar() },[])
 
   // ─── Single ticker scan ───────────────────────────────────────────────────
   const runScan = async()=>{
