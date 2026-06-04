@@ -789,18 +789,22 @@ export default function App(props={}) {
         try {
           const q = await getQuote(sym)
           const p = parseFloat(q?.last||q?.prevclose||0)
-          if (p) return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym }
-        } catch {}
+          if (p > 0) return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym }
+          else console.log(`tryQuote ${sym}: no price in response`, q)
+        } catch(e) {
+          console.log(`tryQuote ${sym} error:`, e.message)
+        }
       }
       return null
     }
-    // SPX/NDX are the primary symbols — direct Tradier index quotes
+    // Try SPY/QQQ first — always available including sandbox.
+    // SPX/NDX are index symbols and may not be available in Tradier sandbox.
     const [es, nq] = await Promise.all([
-      tryQuote(['SPX','$SPX.X','SPY']),
-      tryQuote(['NDX','$NDX.X','QQQ']),
+      tryQuote(['SPY','SPX','$SPX.X']),
+      tryQuote(['QQQ','NDX','$NDX.X']),
     ])
-    if (es) setEsBar({...es, label:'SPX'})
-    if (nq) setNqBar({...nq, label:'NDX'})
+    if (es) setEsBar({...es, label: es.sym==='SPY'?'SPY (SPX proxy)':'SPX'})
+    if (nq) setNqBar({...nq, label: nq.sym==='QQQ'?'QQQ (NDX proxy)':'NDX'})
     // Update market conviction whenever prices refresh
     if (es) {
       const spxChg = es.chgPct
@@ -1664,11 +1668,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               })}
             </div>
 
-            {/* ── No data CTA — shows only when price bar hasn't loaded yet ── */}
-            {!esBar && !nqBar && (
-              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
-                <div style={{fontSize:10,color:C.dim}}>Loading market data — click ↺ to refresh SPX / NDX prices</div>
-                <button className="hv" onClick={fetchPriceBar} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>↺ REFRESH</button>
+            {/* ── No data CTA ── */}
+            {!esBar && !nqBar && !barLoading && (
+              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:10,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
+                  <div style={{fontSize:9,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
+                </div>
+                <button className="hv" onClick={fetchPriceBar} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>↺ RETRY</button>
+              </div>
+            )}
+            {!esBar && !nqBar && barLoading && (
+              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
+                <div style={{fontSize:10,color:C.dim}}>⏳ Loading market data...</div>
               </div>
             )}
 
