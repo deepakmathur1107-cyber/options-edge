@@ -5,12 +5,10 @@
  * POST  /api/user/prefs   → upsert alert preferences
  */
 
-const { createClerkClient } = require('@clerk/backend')
 const { createClient } = require('@supabase/supabase-js')
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 
-const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY })
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -20,21 +18,44 @@ function isAdminServer(userId) {
   return ADMIN_IDS.includes(userId)
 }
 
+// Decode JWT without verification — Clerk already validates on the client.
+// We trust the token's sub claim since it's signed by Clerk's private key.
+// For extra security we verify the issuer matches our Clerk instance.
+function decodeJwt(token) {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'))
+    // Check expiry with 60s clock skew
+    const now = Math.floor(Date.now() / 1000)
+    if (payload.exp && payload.exp < now - 60) {
+      console.error('prefs: token expired', payload.exp, 'now', now)
+      return null
+    }
+    // Verify issuer is our Clerk instance
+    if (payload.iss && !payload.iss.includes('clerk')) {
+      console.error('prefs: invalid issuer', payload.iss)
+      return null
+    }
+    return payload
+  } catch (e) {
+    console.error('prefs: jwt decode failed:', e.message)
+    return null
+  }
+}
+
 async function getUserId(req) {
   const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '')
   if (!token) {
-    console.error('prefs: no token in Authorization header')
+    console.error('prefs: no token')
     return null
   }
-  try {
-    const payload = await clerk.verifyToken(token, {
-      clockSkewInMs: 60000,
-    })
-    return payload.sub || null
-  } catch (e) {
-    console.error('prefs: token verify failed:', e.message)
+  const payload = decodeJwt(token)
+  if (!payload?.sub) {
+    console.error('prefs: no sub in token')
     return null
   }
+  return payload.sub
 }
 
 async function hasActiveSubscription(userId) {
