@@ -2,10 +2,7 @@
  * src/pages/AlertSettings.jsx
  *
  * Full-page alert preferences.
- * Route: /settings/alerts
- *
- * Reads:  GET  /api/user/prefs
- * Writes: POST /api/user/prefs
+ * Route: /app/settings/alerts
  */
 
 import { useState, useEffect } from 'react'
@@ -20,7 +17,6 @@ const DEFAULT_PREFS = {
   symbols:        ['SPY', 'QQQ'],
 }
 
-// ── Shared input style (matches App.jsx iSt) ───────────────────────────────
 const iSt = {
   width: '100%',
   background: '#0d1a26',
@@ -40,7 +36,6 @@ export default function AlertSettings({ getToken }) {
   const [saved,   setSaved]   = useState(false)
   const [error,   setError]   = useState(null)
 
-  // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
       try {
@@ -65,7 +60,6 @@ export default function AlertSettings({ getToken }) {
     load()
   }, [getToken])
 
-  // ── Save ──────────────────────────────────────────────────────────────────
   async function handleSave() {
     setSaving(true)
     setError(null)
@@ -98,7 +92,6 @@ export default function AlertSettings({ getToken }) {
     }))
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
   const C = {
     green: '#00ff88', blue: '#00c8ff', orange: '#ff9500',
     red: '#ff4466', dim: '#4a7a8a', card: '#0d1a26',
@@ -112,14 +105,14 @@ export default function AlertSettings({ getToken }) {
       color: C.text, paddingBottom: 40,
     }}>
 
-      {/* ── Header ── */}
+      {/* Header */}
       <div style={{
         borderBottom: `1px solid ${C.border}`,
         padding: '12px 16px',
         display: 'flex', alignItems: 'center', gap: 12,
         background: '#06090f',
       }}>
-        <Link to="/" style={{
+        <Link to="/app" style={{
           color: C.dim, textDecoration: 'none', fontSize: 11,
           border: `1px solid ${C.border}`, padding: '4px 10px',
           borderRadius: 3, letterSpacing: 0.5,
@@ -137,7 +130,7 @@ export default function AlertSettings({ getToken }) {
         </span>
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div style={{ maxWidth: 560, margin: '0 auto', padding: '24px 16px' }}>
 
         {loading ? (
@@ -146,11 +139,9 @@ export default function AlertSettings({ getToken }) {
           </div>
         ) : (
           <>
-
-            {/* ── Email alerts toggle ── */}
+            {/* Email toggle */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
               <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>EMAIL ALERTS</div>
-
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
                   <div style={{ fontSize: 12, color: C.text }}>Enable email alerts</div>
@@ -175,7 +166,6 @@ export default function AlertSettings({ getToken }) {
                   }} />
                 </button>
               </div>
-
               <div style={{ opacity: prefs.email_alerts ? 1 : 0.4, pointerEvents: prefs.email_alerts ? 'auto' : 'none' }}>
                 <div style={{ fontSize: 9, color: C.dim, letterSpacing: 1.5, marginBottom: 5 }}>SEND ALERTS TO</div>
                 <input
@@ -191,7 +181,7 @@ export default function AlertSettings({ getToken }) {
               </div>
             </div>
 
-            {/* ── Symbols ── */}
+            {/* Symbols */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
               <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>SYMBOLS TO WATCH</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
@@ -220,7 +210,7 @@ export default function AlertSettings({ getToken }) {
               </div>
             </div>
 
-            {/* ── Edge score threshold ── */}
+            {/* Edge score */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
               <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>MINIMUM EDGE SCORE</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
@@ -242,12 +232,9 @@ export default function AlertSettings({ getToken }) {
                 <span>30 — more alerts</span>
                 <span>80 — fewer, higher quality</span>
               </div>
-              <div style={{ fontSize: 9, color: '#2a5060', marginTop: 8 }}>
-                Only contracts scoring above this threshold trigger an email.
-              </div>
             </div>
 
-            {/* ── Schedule info ── */}
+            {/* Schedule */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 10 }}>SCHEDULE</div>
               <div style={{ fontSize: 10, color: '#4a7a8a', lineHeight: 1.9 }}>
@@ -265,18 +252,17 @@ export default function AlertSettings({ getToken }) {
               </div>
             </div>
 
-            {/* ── Error ── */}
             {error && (
               <div style={{
                 fontSize: 11, color: C.red, background: '#1a0408',
                 border: `1px solid ${C.red}30`, borderRadius: 5,
-                padding: '9px 13px', marginBottom: 12, lineHeight: 1.6,
+                padding: '9px 13px', marginBottom: 12,
               }}>
                 {error}
               </div>
             )}
 
-            {/* ── Save ── */}
+            {/* Save */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button
                 onClick={handleSave}
@@ -296,7 +282,6 @@ export default function AlertSettings({ getToken }) {
                 <span style={{ fontSize: 11, color: C.green }}>✓ Saved</span>
               )}
             </div>
-
           </>
         )}
       </div>
