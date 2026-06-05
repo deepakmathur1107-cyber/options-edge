@@ -45,13 +45,13 @@ function AuthShell() {
 
   return (
     <Routes>
-      <Route path="/app"                 element={<App {...authProps} />} />
-      <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
-      <Route path="/sign-in/*"           element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
-      <Route path="/sign-up/*"           element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
-      <Route path="/"                    element={<Navigate to="/app" replace />} />
-      <Route path="*"                    element={<Navigate to="/app" replace />} />
-    </Routes>
+    <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
+    <Route path="/app"                 element={<App {...authProps} />} />
+    <Route path="/sign-in/*"           element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
+    <Route path="/sign-up/*"           element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
+    <Route path="/"                    element={<Navigate to="/app" replace />} />
+    <Route path="*"                    element={<Navigate to="/app" replace />} />
+  </Routes>
   )
 }
 
