@@ -27,6 +27,8 @@ function AuthShell() {
   const { getToken, isLoaded, isSignedIn } = useAuth()
   const { user } = useUser()
 
+  if (!isLoaded) return null
+  
   // Stripe customer portal redirect
   const openPortal = async () => {
     try {
