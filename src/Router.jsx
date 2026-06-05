@@ -68,10 +68,13 @@ function AuthShell() {
 // ── Root export ────────────────────────────────────────────────────────────
 export default function Router() {
   return (
-    <ClerkProvider 
+<ClerkProvider 
   publishableKey={CLERK_KEY}
   afterSignInUrl="/"
-  afterSignUpUrl="/">
+  afterSignUpUrl="/"
+  signInFallbackRedirectUrl="/"
+  signUpFallbackRedirectUrl="/"
+>
       <BrowserRouter>
         <AuthShell />
       </BrowserRouter>
