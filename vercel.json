@@ -1,12 +1,23 @@
 {
-  "buildCommand":    "npm run build",
-  "outputDirectory": "dist",
-  "framework":       "vite",
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)",     "destination": "/index.html" }
+  "crons": [
+    {
+      "path": "/api/alerts/send",
+      "schedule": "0 14 * * 1-5"
+    }
   ],
   "functions": {
-    "api/**/*.js": { "maxDuration": 30 }
-  }
+    "api/**/*.js": {
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
 }
