@@ -2962,3 +2962,4 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     </div>
   )
 }
+
