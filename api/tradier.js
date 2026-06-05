@@ -1,6 +1,7 @@
-// api/tradier.js
-// Minimal admin-key proxy — no Supabase, no Clerk, no Redis required.
-// Add those back once basic data flow is confirmed working.
+// api/tradier.js — Phase 2
+// Admin users: full access, no cache (always fresh data)
+// Pro users: full access, Redis cache
+// Free users: 4 scans/day limit
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN  || ''
@@ -8,10 +9,11 @@ const TRADIER_BASE  = TRADIER_MODE === 'sandbox'
   ? 'https://sandbox.tradier.com/v1'
   : 'https://api.tradier.com/v1'
 
-// Optional Redis cache — skipped if not configured
 const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
+const FREE_LIMIT  = 4
 
+// ─── Redis helpers ────────────────────────────────────────────────────────────
 async function cacheGet(key) {
   if (!REDIS_URL || !REDIS_TOKEN) return null
   try {
@@ -33,12 +35,83 @@ async function cacheSet(key, value, ttl) {
   } catch {}
 }
 
-function getTTL(path) {
-  if (path.includes('expirations')) return 86400  // 24h
-  if (path.includes('chains'))      return 300    // 5min
-  return 30                                       // 30s for quotes
+async function usageIncr(clerkId) {
+  if (!REDIS_URL || !REDIS_TOKEN) return 0
+  const today = new Date().toISOString().split('T')[0]
+  const key   = `usage:${clerkId}:${today}`
+  try {
+    const r = await fetch(`${REDIS_URL}/incr/${encodeURIComponent(key)}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
+    })
+    const d = await r.json()
+    const count = d.result || 0
+    // Set expiry on first increment
+    if (count === 1) {
+      await fetch(`${REDIS_URL}/expire/${encodeURIComponent(key)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, seconds: 90000 })
+      })
+    }
+    return count
+  } catch { return 0 }
 }
 
+function getTTL(path) {
+  if (path.includes('expirations')) return 86400
+  if (path.includes('chains'))      return 300
+  return 30
+}
+
+// ─── Clerk JWT verify (inline — no module dependency) ────────────────────────
+function b64d(str) {
+  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
+  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
+  return Buffer.from(b64+pad,'base64')
+}
+
+async function getClerkId(authHeader) {
+  const token = (authHeader||'').replace('Bearer ','').trim()
+  if (!token) return null
+  try {
+    const parts   = token.split('.')
+    if (parts.length!==3) return null
+    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+    if (payload.exp && Date.now()/1000 > payload.exp) return null
+    const clerkKey = process.env.CLERK_SECRET_KEY
+    if (!clerkKey) return null
+    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
+      { headers: { Authorization: 'Bearer '+clerkKey } })
+    if (!jwksRes.ok) return null
+    const jwks   = await jwksRes.json()
+    const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
+    if (!jwkKey) return null
+    const crypto = require('crypto')
+    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+    const valid  = crypto.verify('sha256',
+      Buffer.from(parts[0]+'.'+parts[1]),
+      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+      b64d(parts[2]))
+    return valid ? payload.sub : null
+  } catch { return null }
+}
+
+async function getPlan(clerkId) {
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key || !clerkId) return 'pro'  // no DB = full access
+  try {
+    const { createClient } = require('@supabase/supabase-js')
+    const sb = createClient(url, key)
+    const { data } = await sb.from('subscriptions')
+      .select('status').eq('clerk_id', clerkId).maybeSingle()
+    const s = data?.status || 'inactive'
+    return (s==='active'||s==='trialing') ? 'pro' : 'free'
+  } catch { return 'pro' }  // DB error = assume pro, don't block
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin',  '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -49,70 +122,76 @@ module.exports = async function handler(req, res) {
   const tradierPath = req.query.path
   if (!tradierPath) return res.status(400).json({ error: 'Missing ?path= param' })
 
-  // Determine which token to use
-  // 1. Legacy per-user token from header (backwards compat)
-  // 2. Admin token from env (Phase 2 default)
+  // ── Token resolution ──────────────────────────────────────────────────────
   const legacyToken = req.headers['x-tradier-token'] || ''
   const activeToken = legacyToken || TRADIER_TOKEN
-
   if (!activeToken) {
-    return res.status(401).json({
-      error: 'No Tradier token. Set TRADIER_TOKEN in Vercel Environment Variables.',
-      mode:  TRADIER_MODE,
-      base:  TRADIER_BASE,
-    })
+    return res.status(401).json({ error: 'No Tradier token. Set TRADIER_TOKEN in Vercel env vars.' })
   }
 
-  // Build query string (extra params beyond ?path=)
-  const qs = new URLSearchParams(req.query)
+  // ── Admin check ───────────────────────────────────────────────────────────
+  const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
+  const clerkId   = await getClerkId(req.headers.authorization)
+  const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
+
+  // ── Usage gate (free users only, skip for admin/pro) ─────────────────────
+  if (!isAdmin && clerkId) {
+    const plan = await getPlan(clerkId)
+    if (plan === 'free') {
+      const count = await usageIncr(clerkId)
+      if (count > FREE_LIMIT) {
+        return res.status(429).json({
+          error:   `Free tier: ${FREE_LIMIT} scans/day. Upgrade for unlimited.`,
+          upgrade: true,
+          count,
+          limit:   FREE_LIMIT,
+        })
+      }
+    }
+  }
+
+  // ── Build URL ─────────────────────────────────────────────────────────────
+  const qs    = new URLSearchParams(req.query)
   qs.delete('path')
   const qsStr = qs.toString()
+  const url   = `${TRADIER_BASE}${tradierPath}${qsStr ? '?' + qsStr : ''}`
 
-  // Cache key
-  const cacheKey = ('tr:' + tradierPath + (qsStr ? '?' + qsStr : ''))
-    .replace(/[^\w:._%-]/g, '_')
-    .slice(0, 200)
+  // ── Cache (skip for admin — always get fresh data) ────────────────────────
+  const cKey = ('tr:'+tradierPath+(qsStr?'?'+qsStr:''))
+    .replace(/[^\w:._%-]/g,'_').slice(0,200)
 
-  // Check cache
-  const cached = await cacheGet(cacheKey)
-  if (cached) {
-    res.setHeader('X-Cache', 'HIT')
-    return res.status(200).json(cached)
+  if (!isAdmin) {
+    const cached = await cacheGet(cKey)
+    if (cached) {
+      res.setHeader('X-Cache', 'HIT')
+      return res.status(200).json(cached)
+    }
   }
 
-  // Call Tradier
-  const url = `${TRADIER_BASE}${tradierPath}${qsStr ? '?' + qsStr : ''}`
-  console.log(`[tradier] ${TRADIER_MODE} → ${url}`)
+  // ── Call Tradier ──────────────────────────────────────────────────────────
+  console.log(`[tradier] ${isAdmin?'ADMIN':'user'} ${TRADIER_MODE} → ${tradierPath}`)
 
   try {
     const upstream = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${activeToken}`,
-        Accept:        'application/json',
-      }
+      headers: { Authorization: `Bearer ${activeToken}`, Accept: 'application/json' }
     })
 
     const text = await upstream.text()
-
     let data
-    try {
-      data = JSON.parse(text)
-    } catch {
-      console.error('[tradier] Non-JSON:', text.slice(0, 300))
-      return res.status(502).json({ error: 'Non-JSON from Tradier', raw: text.slice(0, 200) })
-    }
+    try   { data = JSON.parse(text) }
+    catch { return res.status(502).json({ error: 'Non-JSON from Tradier', raw: text.slice(0,200) }) }
 
     if (upstream.ok) {
-      await cacheSet(cacheKey, data, getTTL(tradierPath))
+      if (!isAdmin) await cacheSet(cKey, data, getTTL(tradierPath))
       res.setHeader('X-Cache', 'MISS')
     } else {
-      console.error(`[tradier] ${upstream.status}:`, JSON.stringify(data).slice(0, 200))
+      console.error(`[tradier] ${upstream.status}:`, JSON.stringify(data).slice(0,200))
     }
 
     return res.status(upstream.status).json(data)
 
   } catch (e) {
-    console.error('[tradier] fetch error:', e.message)
+    console.error('[tradier] error:', e.message)
     return res.status(500).json({ error: 'Tradier fetch failed: ' + e.message })
   }
 }
