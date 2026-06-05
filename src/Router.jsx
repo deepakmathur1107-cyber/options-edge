@@ -8,6 +8,7 @@
  *
  * Routes:
  *   /                  → App (main dashboard)
+ *   /app               → redirect to / (Clerk dev instance default)
  *   /settings/alerts   → AlertSettings
  *   /sign-in           → Clerk SignIn component
  *   /sign-up           → Clerk SignUp component
@@ -54,6 +55,7 @@ function AuthShell() {
   return (
     <Routes>
       <Route path="/"                element={<App {...authProps} />} />
+      <Route path="/app"             element={<Navigate to="/" replace />} />
       <Route path="/settings/alerts" element={<AlertSettings {...authProps} />} />
       <Route path="/sign-in/*"       element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/" />} />
       <Route path="/sign-up/*"       element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/" />} />
