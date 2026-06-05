@@ -22,12 +22,17 @@ function isAdminServer(userId) {
 
 async function getUserId(req) {
   const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '')
-  if (!token) return null
+  if (!token) {
+    console.error('prefs: no token in Authorization header')
+    return null
+  }
   try {
-    const payload = await clerk.verifyToken(token)
+    const payload = await clerk.verifyToken(token, {
+      clockSkewInMs: 60000,
+    })
     return payload.sub || null
   } catch (e) {
-    console.error('Token verify failed:', e.message)
+    console.error('prefs: token verify failed:', e.message)
     return null
   }
 }
