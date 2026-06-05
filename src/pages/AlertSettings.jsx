@@ -100,7 +100,7 @@ export default function AlertSettings({ getToken }) {
 
   return (
     <div style={{
-      background: C.bg, minHeight: '100vh',
+      background: 'red', minHeight: '100vh',
       fontFamily: "'IBM Plex Mono', monospace",
       color: C.text, paddingBottom: 40,
     }}>
