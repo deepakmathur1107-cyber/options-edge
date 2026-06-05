@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
@@ -1619,7 +1620,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </div>
                   <button className="hv" onClick={openPortal} title="Manage subscription" style={{background:'transparent',border:'none',color:C.dim,fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5,padding:'2px 4px'}}>PRO</button>
                   <button className="hv" onClick={onSignOut} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:3,padding:'4px 8px',fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>OUT</button>
-                  import { Link } from 'react-router-dom'
+
 
                   // Inside the user menu, next to the OUT button:
                   <Link to="/settings/alerts" style={{
