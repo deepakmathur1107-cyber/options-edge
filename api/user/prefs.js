@@ -26,7 +26,8 @@ async function getUserId(req) {
   try {
     const payload = await clerk.verifyToken(token)
     return payload.sub || null
-  } catch {
+  } catch (e) {
+    console.error('Token verify failed:', e.message)
     return null
   }
 }
