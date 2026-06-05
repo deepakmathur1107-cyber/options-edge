@@ -71,7 +71,7 @@ export default function Router() {
     <ClerkProvider 
   publishableKey={CLERK_KEY}
   afterSignInUrl="/"
-  afterSignUpUrl="/"
+  afterSignUpUrl="/">
       <BrowserRouter>
         <AuthShell />
       </BrowserRouter>
