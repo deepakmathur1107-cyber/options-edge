@@ -1,18 +1,9 @@
 /**
  * src/Router.jsx
  *
- * Top-level router. Handles:
- *  - Clerk auth provider
- *  - BrowserRouter + all routes
- *  - Passes auth helpers down to pages as props
- *
- * Routes:
- *   /                  → App (main dashboard)
- *   /app               → redirect to / (Clerk dev instance default)
- *   /settings/alerts   → AlertSettings
- *   /sign-in           → Clerk SignIn component
- *   /sign-up           → Clerk SignUp component
- *   *                  → redirect to /
+ * Top-level router.
+ * NOTE: Clerk dev instance serves app at /app base path.
+ * All routes prefixed with /app until custom domain + Clerk Production is set up.
  */
 
 import { ClerkProvider, useAuth, useUser, SignIn, SignUp } from '@clerk/clerk-react'
@@ -54,12 +45,12 @@ function AuthShell() {
 
   return (
     <Routes>
-      <Route path="/"                element={<App {...authProps} />} />
-      <Route path="/app"             element={<Navigate to="/" replace />} />
-      <Route path="/settings/alerts" element={<AlertSettings {...authProps} />} />
-      <Route path="/sign-in/*"       element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/" />} />
-      <Route path="/sign-up/*"       element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/" />} />
-      <Route path="*"                element={<Navigate to="/" replace />} />
+      <Route path="/app"                 element={<App {...authProps} />} />
+      <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
+      <Route path="/sign-in/*"           element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
+      <Route path="/sign-up/*"           element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
+      <Route path="/"                    element={<Navigate to="/app" replace />} />
+      <Route path="*"                    element={<Navigate to="/app" replace />} />
     </Routes>
   )
 }
@@ -68,10 +59,10 @@ export default function Router() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
-      afterSignInUrl="/"
-      afterSignUpUrl="/"
-      signInFallbackRedirectUrl="/"
-      signUpFallbackRedirectUrl="/"
+      afterSignInUrl="/app"
+      afterSignUpUrl="/app"
+      signInFallbackRedirectUrl="/app"
+      signUpFallbackRedirectUrl="/app"
     >
       <BrowserRouter>
         <AuthShell />
