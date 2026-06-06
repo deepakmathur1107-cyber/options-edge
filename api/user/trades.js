@@ -7,12 +7,10 @@
  * DELETE /api/user/trades?id=<id>  → delete a trade
  */
 
-const { createClerkClient } = require('@clerk/backend')
 const { createClient } = require('@supabase/supabase-js')
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 
-const clerk = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY })
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -22,15 +20,25 @@ function isAdminServer(userId) {
   return ADMIN_IDS.includes(userId)
 }
 
-async function getUserId(req) {
-  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '')
-  if (!token) return null
+function decodeJwt(token) {
   try {
-    const payload = await clerk.verifyToken(token)
-    return payload.sub || null
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'))
+    const now = Math.floor(Date.now() / 1000)
+    if (payload.exp && payload.exp < now - 60) return null
+    if (payload.iss && !payload.iss.includes('clerk')) return null
+    return payload
   } catch {
     return null
   }
+}
+
+async function getUserId(req) {
+  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '')
+  if (!token) return null
+  const payload = decodeJwt(token)
+  return payload?.sub || null
 }
 
 async function hasActiveSubscription(userId) {
@@ -67,9 +75,9 @@ module.exports = async function handler(req, res) {
   if (req.method === 'POST') {
     const {
       symbol, option_type, strategy, strike, expiration,
-      contracts, premium, notes,
+      contracts, premium, notes, status,
       // Legacy fields from App.jsx journal
-      ticker, type, status, entry, exitPrice, pnl,
+      ticker, type, entry, exitPrice, pnl,
       expiry, date, conviction, iv, chgPctAtEntry,
       breakevenReqPct, hardBlockCount, grade,
     } = req.body || {}
@@ -84,10 +92,17 @@ module.exports = async function handler(req, res) {
         strike: strike ? Number(strike) : null,
         expiration: expiration || expiry || null,
         contracts: Number(contracts || 1),
-        premium: premium != null ? Number(premium) : entry ? Number(entry.replace(/[^0-9.]/g, '')) : null,
+        premium: premium != null ? Number(premium)
+          : entry ? Number(String(entry).replace(/[^0-9.]/g, '')) : null,
         notes: notes || null,
         status: status || 'open',
-        // Extra journal fields stored as JSON in notes if needed
+        pnl: pnl ? Number(String(pnl).replace(/[^0-9.-]/g, '')) : null,
+        conviction: conviction ? Number(conviction) : null,
+        iv_at_entry: iv ? Number(iv) : null,
+        chg_pct_at_entry: chgPctAtEntry ? Number(chgPctAtEntry) : null,
+        be_req_pct: breakevenReqPct ? Number(breakevenReqPct) : null,
+        hard_block_count: hardBlockCount ? Number(hardBlockCount) : 0,
+        grade: grade || null,
       })
       .select()
       .single()
@@ -101,7 +116,7 @@ module.exports = async function handler(req, res) {
     const { id } = req.query
     if (!id) return res.status(400).json({ error: 'id required' })
 
-    const allowed = ['status', 'close_price', 'close_date', 'notes', 'contracts', 'premium']
+    const allowed = ['status', 'close_price', 'close_date', 'notes', 'contracts', 'premium', 'pnl']
     const updates = {}
     for (const key of allowed) {
       if (req.body?.[key] !== undefined) updates[key] = req.body[key]
