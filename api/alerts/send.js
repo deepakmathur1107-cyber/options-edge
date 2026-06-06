@@ -169,7 +169,11 @@ module.exports = async function handler(req, res) {
     await Promise.all(prefs.map(async pref => {
       if (!pref.alert_email) return
       const minScore = pref.min_edge_score || 50
-      const userSymbols = pref.symbols || ['SPY', 'QQQ']
+      const userSymbols = Array.isArray(pref.symbols) 
+      ? pref.symbols 
+      : typeof pref.symbols === 'string' 
+      ? pref.symbols.split(',').map(s => s.trim()).filter(Boolean)
+      : ['SPY', 'QQQ']
       const matching = userSymbols.flatMap(s => scanResults[s] || []).filter(c => c.edgeScore >= minScore)
       if (!matching.length) return
 
