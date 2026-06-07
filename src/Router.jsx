@@ -75,7 +75,7 @@ function AuthShell() {
   // Always returns a fresh token or null. Never throws.
   const stableGetToken = async () => {
     try {
-      const token = await getToken({ skipCache: false })
+      const token = await getToken({ skipCache: true })
       return token || null
     } catch {
       return null
@@ -104,9 +104,9 @@ function AuthShell() {
       <Route path="/app/trades"          element={<TradeLog      {...authProps} />} />
       <Route path="/app"                 element={<App           {...authProps} />} />
       <Route path="/sign-in/*"
-        element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
+        element={<SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/app" />} />
       <Route path="/sign-up/*"
-        element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
+        element={<SignUp routing="path" path="/sign-up" fallbackRedirectUrl="/app" />} />
       <Route path="/"  element={<Navigate to="/app" replace />} />
       <Route path="*"  element={<Navigate to="/app" replace />} />
     </Routes>
@@ -117,8 +117,8 @@ export default function Router() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
-      afterSignInUrl="/app"
-      afterSignUpUrl="/app"
+      fallbackRedirectUrl="/app"
+      fallbackRedirectUrl="/app"
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
     >
