@@ -7,7 +7,7 @@
  * DELETE /api/user/trades?id=<id>  → delete a trade
  *
  * Exact column names from trades table:
- * id, clerk_user_id, ticker, type, status, entry, close_price, pnl,
+ * id, clerk_id, ticker, type, status, entry, close_price, pnl,
  * contracts, strike, expiration, conviction, iv_at_entry, chg_pct_at_entry,
  * be_req_pct, hard_block_count, grade, notes, created_at, option_type,
  * strategy, premium, close_date, updated_at, action,
@@ -53,7 +53,7 @@ async function hasActiveSubscription(userId) {
   const { data, error } = await supabase
     .from('subscriptions')
     .select('status')
-    .eq('clerk_user_id', userId)
+    .eq('clerk_id', userId)
     .single()
   if (error || !data) return false
   return ['active', 'trialing'].includes(data.status)
@@ -77,7 +77,7 @@ module.exports = async function handler(req, res) {
     const { data, error } = await supabase
       .from('trades')
       .select('*')
-      .eq('clerk_user_id', userId)
+      .eq('clerk_id', userId)
       .order('created_at', { ascending: false })
 
     if (error) return res.status(500).json({ error: error.message })
@@ -114,7 +114,7 @@ module.exports = async function handler(req, res) {
     const { data, error } = await supabase
       .from('trades')
       .insert({
-        clerk_user_id:    userId,
+        clerk_id:    userId,
         ticker,
         option_type,
         action,
@@ -191,7 +191,7 @@ module.exports = async function handler(req, res) {
       .from('trades')
       .update(updates)
       .eq('id', id)
-      .eq('clerk_user_id', userId)
+      .eq('clerk_id', userId)
       .select()
       .single()
 
@@ -209,7 +209,7 @@ module.exports = async function handler(req, res) {
       .from('trades')
       .delete()
       .eq('id', id)
-      .eq('clerk_user_id', userId)
+      .eq('clerk_id', userId)
 
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ success: true })

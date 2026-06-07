@@ -90,7 +90,7 @@ module.exports = async function handler(req, res) {
 
     return res.status(200).json({
       prefs: data ?? {
-        clerk_user_id: userId,
+        clerk_id: userId,
         email_alerts: false,
         alert_email: null,
         min_edge_score: 50,
@@ -105,7 +105,7 @@ module.exports = async function handler(req, res) {
     const { email_alerts, alert_email, min_edge_score, symbols, alert_types } = req.body || {}
 
     const upsertPayload = {
-      clerk_user_id: userId,
+      clerk_id: userId,
       updated_at: new Date().toISOString(),
     }
 
@@ -117,7 +117,7 @@ module.exports = async function handler(req, res) {
 
     const { data, error } = await supabase
       .from('alert_prefs')
-      .upsert(upsertPayload, { onConflict: 'clerk_user_id' })
+      .upsert(upsertPayload, { onConflict: 'clerk_id' })
       .select()
       .single()
 
