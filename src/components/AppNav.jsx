@@ -1,9 +1,17 @@
 /**
  * src/components/AppNav.jsx
  *
- * Responsive navigation:
- *   Mobile  (<768px): fixed bottom tab bar
- *   Desktop (>=768px): sticky top nav bar
+ * Responsive nav:
+ *   Desktop ≥768px : sticky top bar
+ *   Mobile  <768px : fixed bottom tab bar
+ *
+ * Design rules:
+ *   - Active tab  : solid filled C.green, black text, green glow
+ *   - Theme toggle: amber solid bg
+ *   - Bell        : blue solid bg
+ *   - SANDBOX/PROD: colored badge
+ *   - PRO         : green badge
+ *   - OUT         : red badge, solid fill
  */
 import { Link, useLocation } from 'react-router-dom'
 
@@ -14,247 +22,298 @@ export default function AppNav({
   tradierMode, autoOn,
   showTools, setShowTools,
 }) {
-  const location = useLocation()
+  const location    = useLocation()
   const isTradesPage = location.pathname === '/app/trades'
   const isAlertsPage = location.pathname === '/app/settings/alerts'
-  const isMainApp    = location.pathname === '/app'
-  const isSubPage    = isTradesPage || isAlertsPage
+  const isMainApp    = !isTradesPage && !isAlertsPage
+  const subLabel     = isTradesPage ? 'TRADES' : 'ALERT SETTINGS'
 
-  const btnBase = {
-    fontFamily: "'IBM Plex Mono', monospace",
+  // ── Shared base ───────────────────────────────────────────────────────────
+  const base = {
     cursor: 'pointer', transition: 'all .15s',
-  }
-
-  const topTabBtn = (active) => ({
-    ...btnBase,
     fontFamily: "'Inter', sans-serif",
-    fontWeight: 600,
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '5px 13px', borderRadius: 4,
-    background: active ? `${C.green}18` : 'transparent',
-    border: `1px solid ${active ? C.green : 'transparent'}`,
-    color: active ? C.green : C.dim,
-    fontSize: 12, letterSpacing: 0.3,
-  })
-
-  const bottomTabBtn = (active) => ({
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    justifyContent: 'center', gap: 3, padding: '10px 4px',
-    background: 'transparent', border: 'none', cursor: 'pointer',
-    borderTop: `2px solid ${active ? C.green : 'transparent'}`,
-    transition: 'border-color .2s', flex: 1,
-    height: '58px', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-  })
-
-  const iconBtn = {
-    ...btnBase,
-    background: isDark ? '#1a2e3e' : '#e8edf4',
-    border: `1px solid ${C.border}`,
-    color: C.text,
-    borderRadius: 6, padding: '6px 10px',
-    fontSize: 14, lineHeight: 1,
-    transition: 'all .15s',
+    border: 'none', outline: 'none',
   }
 
-  const subLabel = isTradesPage ? '/ TRADES' : '/ ALERT SETTINGS'
+  // ── Desktop top-nav tab (active = solid green filled) ─────────────────────
+  const topTab = (active) => ({
+    ...base,
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '7px 18px', borderRadius: 7,
+    fontWeight: 700, fontSize: 12, letterSpacing: 0.4,
+    background: active ? C.green : 'transparent',
+    color:      active ? '#000'  : C.dim,
+    border:     active ? 'none'  : `1px solid transparent`,
+    boxShadow:  active ? `0 2px 10px ${C.green}55` : 'none',
+  })
+
+  // ── Icon pill (bell, theme toggle) ────────────────────────────────────────
+  const iconPill = (bg, border, color) => ({
+    ...base,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 36, height: 36, borderRadius: 8,
+    background: bg, border: `1px solid ${border}`,
+    color, fontSize: 17, fontWeight: 700,
+    textDecoration: 'none',
+  })
+
+  // ── Small badge ───────────────────────────────────────────────────────────
+  const badge = (bg, border, color) => ({
+    ...base,
+    padding: '4px 10px', borderRadius: 5,
+    fontSize: 9, fontWeight: 700, letterSpacing: 0.8,
+    background: bg, border: `1px solid ${border}`,
+    color,
+  })
+
+  // ── Mobile bottom tab button ──────────────────────────────────────────────
+  const mobileTab = (active) => ({
+    ...base,
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    justifyContent: 'center', gap: 3,
+    flex: 1, height: 58,
+    background: 'transparent',
+    borderTop: `3px solid ${active ? C.green : 'transparent'}`,
+    paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+  })
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-        @keyframes navpulse{0%,100%{opacity:1}50%{opacity:.35}}
-        @media(max-width:767px){.oe-topnav{display:none!important}}
-        @media(min-width:768px){.oe-bottomnav{display:none!important}}
-        .oe-navbtn:hover{opacity:.75}
-        .oe-toptab:hover{border-color:${C.green}50!important;color:${C.text}!important}
+        @keyframes navpulse{0%,100%{opacity:1}50%{opacity:.4}}
+        @media(max-width:767px){.oe-top{display:none!important}}
+        @media(min-width:768px){.oe-bot{display:none!important}}
+        .oe-navbtn{cursor:pointer}
+        .oe-navbtn:hover{opacity:.82!important}
+        .oe-toptab:hover{border:1px solid ${C.green}60!important;color:${C.text}!important}
       `}</style>
 
-      {/* ════════════════════════════════════════════════════════════
+      {/* ══════════════════════════════════════════════════════════════════════
           DESKTOP TOP NAV
-      ════════════════════════════════════════════════════════════ */}
-      <div className="oe-topnav" style={{
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div className="oe-top" style={{
         position: 'sticky', top: 0, zIndex: 100,
-        background: C.bgAlt, borderBottom: `1px solid ${C.border}`,
-        boxShadow: isDark ? '0 2px 8px rgba(0,0,0,.3)' : '0 2px 8px rgba(0,0,0,.06)',
+        background: C.bgAlt,
+        borderBottom: `1px solid ${C.border}`,
+        boxShadow: isDark
+          ? '0 2px 12px rgba(0,0,0,.45)'
+          : '0 2px 12px rgba(0,0,0,.08)',
       }}>
         <div style={{
-          maxWidth: 1100, margin: '0 auto', padding: '0 20px',
-          height: 56, display: 'flex', alignItems: 'center', gap: 6,
+          maxWidth: 1100, margin: '0 auto',
+          padding: '0 20px', height: 58,
+          display: 'flex', alignItems: 'center', gap: 6,
         }}>
 
           {/* Logo */}
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginRight: 12, flexShrink: 0 }}>
+          <div style={{ display:'flex', alignItems:'baseline', gap:6, marginRight:14, flexShrink:0 }}>
             <span style={{
               fontFamily: "'Bebas Neue', sans-serif",
-              fontSize: 21, letterSpacing: 4, color: C.green, lineHeight: 1,
+              fontSize: 22, letterSpacing: 4,
+              color: C.green, lineHeight: 1,
             }}>OPTIONS EDGE</span>
             <span style={{ fontSize: 8, color: C.dim, letterSpacing: 2 }}>v3.0</span>
           </div>
 
-          {/* ── Main app nav tabs ── */}
+          {/* ── Main app tabs ── */}
           {isMainApp && (
-            <div style={{ display: 'flex', gap: 2, flex: 1 }}>
-              {['dash', 'scan'].map(id => (
-                <button key={id} className="oe-navbtn oe-toptab"
-                  onClick={() => setTab(id)}
-                  style={topTabBtn(tab === id)}
+            <div style={{ display:'flex', gap:4, flex:1 }}>
+              {[
+                { id:'dash',  icon:'◈', label:'DASH'  },
+                { id:'scan',  icon:'⌁', label:'SCAN'  },
+              ].map(t => (
+                <button key={t.id} className="oe-navbtn oe-toptab"
+                  onClick={() => setTab(t.id)}
+                  style={topTab(tab === t.id)}
                 >
-                  {{ dash: '◈', scan: '⌁' }[id]}
-                  &nbsp;{id.toUpperCase()}
+                  {t.icon}&nbsp;{t.label}
                 </button>
               ))}
-              <Link to="/app/trades" className="oe-navbtn oe-toptab" style={{
-                ...topTabBtn(false), textDecoration: 'none',
-              }}>
+
+              <Link to="/app/trades" className="oe-navbtn oe-toptab"
+                style={{ ...topTab(false), textDecoration:'none' }}>
                 ≡&nbsp;TRADES
               </Link>
+
               <button className="oe-navbtn oe-toptab"
                 onClick={() => setShowTools(p => !p)}
-                style={topTabBtn(showTools)}
-              >
+                style={topTab(showTools)}>
                 ⚙&nbsp;TOOLS
               </button>
             </div>
           )}
 
           {/* ── Sub-page breadcrumb ── */}
-          {isSubPage && (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!isMainApp && (
+            <div style={{ flex:1, display:'flex', alignItems:'center', gap:10 }}>
               <Link to="/app" style={{
-                ...btnBase, color: C.dim, textDecoration: 'none', fontSize: 11,
-                border: `1px solid ${C.border}`, padding: '5px 12px', borderRadius: 4,
-                letterSpacing: .5, display: 'inline-flex', alignItems: 'center', gap: 5,
+                ...base, textDecoration:'none',
+                color: C.text, fontSize: 11,
+                background: C.cardAlt,
+                border: `1px solid ${C.border}`,
+                padding: '6px 14px', borderRadius: 6,
+                letterSpacing: .4,
+                display: 'inline-flex', alignItems: 'center', gap: 5,
               }}>← BACK</Link>
-              <span style={{ fontSize: 10, color: C.dim, letterSpacing: 1.5 }}>{subLabel}</span>
+              <span style={{
+                fontSize: 11, color: C.dim,
+                letterSpacing: 2, fontWeight: 600,
+              }}>{subLabel}</span>
             </div>
           )}
 
           {/* ── Right controls ── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginLeft: 'auto', flexShrink: 0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginLeft:'auto', flexShrink:0 }}>
+
+            {/* LIVE pulse */}
             {autoOn && (
-              <span style={{
-                fontSize: 9, color: C.green,
-                display: 'flex', alignItems: 'center', gap: 4,
-              }}>
+              <span style={{ fontSize:9, color:C.green, display:'flex', alignItems:'center', gap:4 }}>
                 <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: C.green, display: 'inline-block',
-                  boxShadow: `0 0 7px ${C.green}`,
+                  width:7, height:7, borderRadius:'50%',
+                  background: C.green, display:'inline-block',
+                  boxShadow: `0 0 8px ${C.green}`,
                   animation: 'navpulse 1.1s infinite',
                 }}/>
                 LIVE
               </span>
             )}
+
+            {/* Tradier mode badge */}
             {tradierMode && (
               <span style={{
                 fontSize: 8, fontWeight: 700, letterSpacing: 1,
-                padding: '4px 9px', borderRadius: 4,
-                background: tradierMode === 'sandbox' ? `${C.orange}20` : `${C.green}20`,
-                border: `1px solid ${tradierMode === 'sandbox' ? C.orange+'60' : C.green+'60'}`,
+                padding: '5px 10px', borderRadius: 5,
+                background: tradierMode === 'sandbox'
+                  ? `${C.orange}25` : `${C.green}20`,
+                border: `1px solid ${tradierMode === 'sandbox'
+                  ? C.orange + '70' : C.green + '60'}`,
                 color: tradierMode === 'sandbox' ? C.orange : C.green,
-              }}>{tradierMode.toUpperCase()}</span>
-            )}
-            <button className="oe-navbtn" onClick={() => setIsDark(p => !p)}
-              title={isDark ? 'Light mode' : 'Dark mode'}
-              style={{
-                ...iconBtn,
-                background: '#f59e0b22',
-                border: `1px solid #f59e0b60`,
-                color: '#f59e0b',
-                fontWeight: 700,
               }}>
+                {tradierMode.toUpperCase()}
+              </span>
+            )}
+
+            {/* Theme toggle — amber */}
+            <button className="oe-navbtn"
+              onClick={() => setIsDark(p => !p)}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              style={iconPill('#f59e0b28', '#f59e0b70', '#f59e0b')}>
               {isDark ? '☀' : '🌙'}
             </button>
-            <Link to="/app/settings/alerts" className="oe-navbtn" title="Alert settings" style={{
-              ...iconBtn,
-              textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
-              background: `${C.blue}22`,
-              border: `1px solid ${C.blue}60`,
-              color: C.blue,
-              fontWeight: 700,
-            }}>🔔</Link>
+
+            {/* Alerts bell — blue */}
+            <Link to="/app/settings/alerts" className="oe-navbtn"
+              title="Alert settings"
+              style={iconPill(`${C.blue}25`, `${C.blue}70`, C.blue)}>
+              🔔
+            </Link>
+
+            {/* User avatar + badges */}
             {userInitial && (
               <>
                 <div style={{
-                  width: 32, height: 32, borderRadius: '50%',
-                  background: `${C.green}20`, border: `1px solid ${C.green}40`,
+                  width: 34, height: 34, borderRadius: '50%',
+                  background: `${C.green}25`,
+                  border: `2px solid ${C.green}60`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 12, color: C.green, fontWeight: 700,
-                }}>{userInitial.toUpperCase()}</div>
-                <button className="oe-navbtn" onClick={openPortal} style={{
-                  ...btnBase,
-                  background: `${C.green}15`,
-                  border: `1px solid ${C.green}40`,
-                  color: C.green, fontSize: 9, letterSpacing: .5,
-                  borderRadius: 4, padding: '3px 8px', fontWeight: 600,
-                }}>PRO</button>
-                <button className="oe-navbtn" onClick={onSignOut} style={{
-                  ...btnBase,
-                  background: `${C.red}15`,
-                  border: `1px solid ${C.red}40`,
-                  color: C.red, borderRadius: 4, padding: '4px 9px',
-                  fontSize: 9, letterSpacing: .5, fontWeight: 600,
-                }}>OUT</button>
+                  fontSize: 13, color: C.green, fontWeight: 700,
+                  flexShrink: 0,
+                }}>
+                  {userInitial.toUpperCase()}
+                </div>
+
+                {/* PRO */}
+                <button className="oe-navbtn" onClick={openPortal}
+                  style={badge(`${C.green}20`, `${C.green}50`, C.green)}>
+                  PRO
+                </button>
+
+                {/* OUT — solid red, most visible */}
+                <button className="oe-navbtn" onClick={onSignOut}
+                  style={{
+                    ...base,
+                    padding: '6px 14px', borderRadius: 6,
+                    fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
+                    background: C.red,
+                    border: 'none',
+                    color: '#fff',
+                    boxShadow: `0 2px 8px ${C.red}55`,
+                  }}>
+                  OUT
+                </button>
               </>
             )}
           </div>
         </div>
       </div>
 
-      {/* ════════════════════════════════════════════════════════════
+      {/* ══════════════════════════════════════════════════════════════════════
           MOBILE BOTTOM TAB BAR
-      ════════════════════════════════════════════════════════════ */}
-      <div className="oe-bottomnav" style={{
+      ══════════════════════════════════════════════════════════════════════ */}
+      <div className="oe-bot" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90,
-        background: C.bgAlt, borderTop: `1px solid ${C.border}`,
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        background: C.bgAlt,
+        borderTop: `1px solid ${C.border}`,
+        boxShadow: '0 -2px 12px rgba(0,0,0,.08)',
       }}>
         {isMainApp ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)' }}>
             {[
-              { id: 'dash', icon: '◈', label: 'DASH' },
-              { id: 'scan', icon: '⌁', label: 'SCAN' },
-              { id: 'trades', icon: '≡', label: 'TRADES', link: '/app/trades' },
-              { id: 'tools', icon: '⚙', label: 'TOOLS' },
+              { id:'dash',   icon:'◈', label:'DASH'   },
+              { id:'scan',   icon:'⌁', label:'SCAN'   },
+              { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
+              { id:'tools',  icon:'⚙', label:'TOOLS'  },
             ].map(t => {
               const active = t.id === 'tools' ? showTools : tab === t.id
+              const col    = active ? C.green : C.dim
+
               if (t.link) return (
                 <Link key={t.id} to={t.link} style={{
-                  ...bottomTabBtn(false),
+                  ...mobileTab(false),
                   color: C.dim, textDecoration: 'none',
-                  borderTop: `2px solid transparent`,
                 }}>
-                  <span style={{ fontSize: 18, lineHeight: 1, color: C.dim }}>{t.icon}</span>
-                  <span style={{ fontSize: 10, letterSpacing: .5, fontFamily: "'Inter',sans-serif", fontWeight: 600, color: C.dim }}>{t.label}</span>
+                  <span style={{ fontSize:20, color:C.dim, lineHeight:1 }}>{t.icon}</span>
+                  <span style={{ fontSize:10, fontWeight:600, color:C.dim, letterSpacing:.4 }}>{t.label}</span>
                 </Link>
               )
+
               return (
                 <button key={t.id}
-                  onClick={() => t.id === 'tools' ? setShowTools(p => !p) : setTab(t.id)}
-                  style={bottomTabBtn(active)}
-                >
-                  <span style={{ fontSize: 18, lineHeight: 1, color: active ? C.green : C.dim }}>{t.icon}</span>
-                  <span style={{ fontSize: 10, letterSpacing: .5, fontFamily: "'Inter',sans-serif", fontWeight: 600, color: active ? C.green : C.dim }}>{t.label}</span>
+                  onClick={() => t.id === 'tools' ? setShowTools(p=>!p) : setTab(t.id)}
+                  style={mobileTab(active)}>
+                  <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
+                  <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
                 </button>
               )
             })}
           </div>
         ) : (
-          /* Sub-page minimal bottom bar */
+          /* Sub-page minimal bar */
           <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 16px',
+            display:'flex', alignItems:'center',
+            justifyContent:'space-between', padding:'8px 16px',
           }}>
             <Link to="/app" style={{
-              ...btnBase, color: C.green, textDecoration: 'none', fontSize: 11,
-              border: `1px solid ${C.green}40`, padding: '6px 14px', borderRadius: 4, letterSpacing: 1,
+              ...base, textDecoration:'none',
+              color: C.text, fontSize: 11,
+              background: C.cardAlt,
+              border: `1px solid ${C.border}`,
+              padding: '8px 16px', borderRadius: 6,
             }}>← BACK</Link>
-            <span style={{ fontSize: 10, color: C.dim, letterSpacing: 2 }}>
-              {isTradesPage ? 'TRADES' : 'ALERTS'}
+
+            <span style={{ fontSize:11, color:C.dim, letterSpacing:2, fontWeight:600 }}>
+              {subLabel}
             </span>
-            <button onClick={() => setIsDark(p => !p)} style={{
-              ...iconBtn, fontSize: 15,
-            }}>{isDark ? '☀' : '🌙'}</button>
+
+            <button onClick={() => setIsDark(p=>!p)} style={{
+              ...base,
+              width: 36, height: 36, borderRadius: 8,
+              background: '#f59e0b28', border: '1px solid #f59e0b70',
+              color: '#f59e0b', fontSize: 17,
+            }}>
+              {isDark ? '☀' : '🌙'}
+            </button>
           </div>
         )}
       </div>
