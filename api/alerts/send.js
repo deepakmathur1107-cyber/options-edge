@@ -159,8 +159,10 @@ console.log('prefs symbols raw:', JSON.stringify(prefs[0]?.symbols))
         if (!quote || !expiration) return
         const chain = await fetchOptionsChain(symbol, expiration)
         const contracts = chain
-          .map(o => ({ ...o, edgeScore: computeEdgeScore(o) }))
-          .filter(o => o.edgeScore !== null)
+  .map(o => ({ ...o, edgeScore: computeEdgeScore(o) }))
+console.log(`${symbol} chain length:`, chain.length, 'scored:', contracts.filter(o => o.edgeScore !== null).length, 'sample score:', contracts[0]?.edgeScore)
+const filteredContracts = contracts
+  .filter(o => o.edgeScore !== null)
           .sort((a, b) => b.edgeScore - a.edgeScore)
           .slice(0, 5)
           .map(o => ({
