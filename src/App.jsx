@@ -28,7 +28,7 @@ const LIGHT_THEME = {
 // Module-level C = dark theme default.
 // Must be declared here — before TF_CONFIG, EXIT_RULES etc. reference C.green/C.blue.
 // Inside App(), `const C = isDark ? DARK_THEME : LIGHT_THEME` shadows this for all JSX.
-const C = DARK_THEME
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50
