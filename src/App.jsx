@@ -1869,7 +1869,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
             {debugLog.length>0&&(
               <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:11,marginBottom:11,maxHeight:140,overflowY:'auto'}}>
-                <Lbl>📡 Live Tradier Feed</Lbl>
+                <Lbl C={C}>📡 Live Tradier Feed</Lbl>
                 {debugLog.map((l,i)=>(
                   <div key={i} style={{fontSize:11,color:l.startsWith('✅')?C.green:l.includes('ERROR')||l.includes('❌')?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.7}}>{l}</div>
                 ))}
@@ -2029,7 +2029,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                 {/* ── Chain stats grid ── */}
                 <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:6,padding:11,marginBottom:11}}>
-                  <Lbl color={C.blue}>📡 Live Chain — Tradier {tradierMode} · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
+                  <Lbl C={C} color={C.blue}>📡 Live Chain — Tradier {tradierMode} · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
                   <div className="scanrow">
                     {[
                       {l:'IV',     v:scanResult.iv,     c:C.orange},
@@ -2049,14 +2049,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                 {/* ── Why / Warnings ── */}
                 {scanResult.reasons?.length>0&&(
-                  <Card style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
-                    <Lbl color={C.green}>✅ SIGNALS</Lbl>
+                  <Card C={C} style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
+                    <Lbl C={C} color={C.green}>✅ SIGNALS</Lbl>
                     {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:11,color:C.subtext,lineHeight:1.7}}>✓ {r}</div>)}
                   </Card>
                 )}
                 {scanResult.warnings?.length>0&&(
-                  <Card color={`${C.orange}40`} style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
-                    <Lbl color={C.orange}>⚠️ WARNINGS</Lbl>
+                  <Card C={C} color={`${C.orange}40`} style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
+                    <Lbl C={C} color={C.orange}>⚠️ WARNINGS</Lbl>
                     {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:11,color:C.subtext,lineHeight:1.7}}>⚠ {w}</div>)}
                   </Card>
                 )}
@@ -2104,7 +2104,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {lastAlert&&(
                 <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:10,padding:'14px 16px',marginTop:10,boxShadow:C.shadowMd}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                    <Lbl color={C.green}>🚀 LATEST ALERT</Lbl>
+                    <Lbl C={C} color={C.green}>🚀 LATEST ALERT</Lbl>
                     <div style={{display:'flex',gap:6}}>
                       <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(lastAlert));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'4px 10px',borderRadius:3,fontSize:9,cursor:'pointer'}}>
                         {alertCopied?'✅ COPIED':'📋 COPY'}
@@ -2127,7 +2127,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
               {autoLog.length>0&&(
                 <div style={{background:C.bgDeep,borderRadius:8,padding:9,maxHeight:160,overflowY:'auto',marginTop:9,border:`1px solid ${C.border}`}}>
-                  <Lbl>Scanner Log</Lbl>
+                  <Lbl C={C}>Scanner Log</Lbl>
                   {autoLog.map((l,i)=>(
                     <div key={i} style={{fontSize:10,color:l.includes('🚀')?C.green:l.includes('❌')?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.8}}>{l}</div>
                   ))}
@@ -2471,7 +2471,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 <div className="si">
                   {/* Tradier — Phase 2: admin key, no user token needed */}
                   <Card style={{marginBottom:12}}>
-                    <Lbl color={C.green}>📡 MARKET DATA</Lbl>
+                    <Lbl C={C} color={C.green}>📡 MARKET DATA</Lbl>
                     <div style={{fontSize:11,color:C.subtext,lineHeight:1.8}}>
                       Live options data is provided automatically — no API token required.
                     </div>
@@ -2487,7 +2487,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                   {/* Anthropic */}
                   <Card style={{marginBottom:12}}>
-                    <Lbl color={C.orange}>🤖 CLAUDE AI — MORNING BRIEF</Lbl>
+                    <Lbl C={C} color={C.orange}>🤖 CLAUDE AI — MORNING BRIEF</Lbl>
                     <div style={{background:C.bgDeep,border:`1px solid ${C.orange}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
                       <strong style={{color:C.orange}}>Option A (recommended):</strong> Set <code style={{color:C.green}}>ANTHROPIC_API_KEY</code> in Vercel → Settings → Environment Variables → redeploy.{' '}
                       <strong style={{color:C.orange}}>Option B (instant):</strong> Paste your key below — stored locally in your browser only.
@@ -2498,7 +2498,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                   {/* Telegram */}
                   <Card style={{marginBottom:12}}>
-                    <Lbl color={C.blue}>📱 TELEGRAM AUTO-ALERTS</Lbl>
+                    <Lbl C={C} color={C.blue}>📱 TELEGRAM AUTO-ALERTS</Lbl>
                     <div style={{background:C.bgDeep,border:`1px solid ${C.blue}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
                       <strong style={{color:C.green}}>Setup:</strong> Telegram → @BotFather → /newbot → copy token. Add bot to channel as admin.
                     </div>
@@ -2525,23 +2525,23 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {toolsTab==='alert'&&(
                 <div className="si">
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
-                    <Field label="Trade Type" value={alert.type} onChange={v=>setAlert(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
-                    <Field label="Ticker" value={alert.ticker} onChange={v=>setAlert(p=>({...p,ticker:v.toUpperCase()}))} placeholder="NVDA"/>
-                    <Field label="Expiry" value={alert.expiry} onChange={v=>setAlert(p=>({...p,expiry:v}))} placeholder="May 16 2026"/>
-                    <Field label="Strike" value={alert.strike} onChange={v=>setAlert(p=>({...p,strike:v}))} placeholder="210C"/>
-                    <Field label="Entry" value={alert.entry} onChange={v=>setAlert(p=>({...p,entry:v}))} placeholder="$3.50 – $3.80"/>
-                    <Field label="Target" value={alert.target} onChange={v=>setAlert(p=>({...p,target:v}))} placeholder="$6.50 (+85%)"/>
-                    <Field label="Stop Loss" value={alert.stop} onChange={v=>setAlert(p=>({...p,stop:v}))} placeholder="$1.75 (-50%)"/>
-                    <Field label="Size" value={alert.size} onChange={v=>setAlert(p=>({...p,size:v}))} placeholder="1–3 contracts"/>
+                    <Field C={C} label="Trade Type" value={alert.type} onChange={v=>setAlert(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
+                    <Field C={C} label="Ticker" value={alert.ticker} onChange={v=>setAlert(p=>({...p,ticker:v.toUpperCase()}))} placeholder="NVDA"/>
+                    <Field C={C} label="Expiry" value={alert.expiry} onChange={v=>setAlert(p=>({...p,expiry:v}))} placeholder="May 16 2026"/>
+                    <Field C={C} label="Strike" value={alert.strike} onChange={v=>setAlert(p=>({...p,strike:v}))} placeholder="210C"/>
+                    <Field C={C} label="Entry" value={alert.entry} onChange={v=>setAlert(p=>({...p,entry:v}))} placeholder="$3.50 – $3.80"/>
+                    <Field C={C} label="Target" value={alert.target} onChange={v=>setAlert(p=>({...p,target:v}))} placeholder="$6.50 (+85%)"/>
+                    <Field C={C} label="Stop Loss" value={alert.stop} onChange={v=>setAlert(p=>({...p,stop:v}))} placeholder="$1.75 (-50%)"/>
+                    <Field C={C} label="Size" value={alert.size} onChange={v=>setAlert(p=>({...p,size:v}))} placeholder="1–3 contracts"/>
                   </div>
                   <div style={{display:'grid',gap:8,marginBottom:12}}>
-                    <Field label="Trade Thesis" value={alert.thesis} onChange={v=>setAlert(p=>({...p,thesis:v}))} placeholder="Why you're entering..." rows={2}/>
-                    <Field label="Catalyst" value={alert.catalyst} onChange={v=>setAlert(p=>({...p,catalyst:v}))} placeholder="Earnings, breakout..." rows={1}/>
-                    <Field label="Options Flow" value={alert.flow} onChange={v=>setAlert(p=>({...p,flow:v}))} placeholder="Unusual sweeps..." rows={1}/>
+                    <Field C={C} label="Trade Thesis" value={alert.thesis} onChange={v=>setAlert(p=>({...p,thesis:v}))} placeholder="Why you're entering..." rows={2}/>
+                    <Field C={C} label="Catalyst" value={alert.catalyst} onChange={v=>setAlert(p=>({...p,catalyst:v}))} placeholder="Earnings, breakout..." rows={1}/>
+                    <Field C={C} label="Options Flow" value={alert.flow} onChange={v=>setAlert(p=>({...p,flow:v}))} placeholder="Unusual sweeps..." rows={1}/>
                   </div>
                   <Card color={C.border} style={{background:C.panel}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
-                      <Lbl>📱 Preview</Lbl>
+                      <Lbl C={C}>📱 Preview</Lbl>
                       <div style={{display:'flex',gap:6}}>
                         <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildTgAlert(alert));setCopied(true);setTimeout(()=>setCopied(false),2000)}} style={{background:copied?`${C.green}20`:'transparent',border:`1px solid ${copied?C.green:C.border}`,color:copied?C.green:C.dim,padding:'5px 11px',borderRadius:3,fontSize:9,cursor:'pointer'}}>
                           {copied?'✅ COPIED':'📋 COPY'}
@@ -2638,7 +2638,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   ))}
                   <Card color={`${C.red}50`}>
-                    <Lbl color={C.red}>⚠️ CARDINAL RULES</Lbl>
+                    <Lbl C={C} color={C.red}>⚠️ CARDINAL RULES</Lbl>
                     {['Never widen your stop to give it more room','If unsure whether to exit — exit. Re-enter later','Always post exits to your Telegram channel','Partial exits: book 50% at target, trail the rest'].map((r,i)=>(
                       <div key={i} style={{display:'flex',gap:7,marginBottom:4,fontSize:11,color:C.subtext}}>
                         <span style={{color:C.red,flexShrink:0}}>→</span>{r}
@@ -2723,7 +2723,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
                           <div style={{background:C.bgDeep,border:`1px solid ${C.red}40`,borderRadius:5,padding:11}}>
-                            <Lbl color={C.red}>🔴 RESISTANCE</Lbl>
+                            <Lbl C={C} color={C.red}>🔴 RESISTANCE</Lbl>
                             {futData.resistance.length===0
                               ?<div style={{fontSize:11,color:C.dim}}>None found</div>
                               :futData.resistance.map((lvl,i)=>(
@@ -2735,7 +2735,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             }
                           </div>
                           <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:5,padding:11}}>
-                            <Lbl color={C.green}>🟢 SUPPORT</Lbl>
+                            <Lbl C={C} color={C.green}>🟢 SUPPORT</Lbl>
                             {futData.support.length===0
                               ?<div style={{fontSize:11,color:C.dim}}>None found</div>
                               :futData.support.map((lvl,i)=>(
@@ -2750,7 +2750,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                         {futData.tradeSetups.length>0&&(
                           <div>
-                            <Lbl>TRADE SETUPS</Lbl>
+                            <Lbl C={C}>TRADE SETUPS</Lbl>
                             {futData.tradeSetups.map((s,i)=>(
                               <div key={i} style={{background:C.card,border:`1px solid ${s.color}40`,borderRadius:5,padding:10,marginBottom:7}}>
                                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
