@@ -10,6 +10,7 @@ import { ClerkProvider, useAuth, useUser, SignIn, SignUp } from '@clerk/clerk-re
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import App from './App'
 import AlertSettings from './pages/AlertSettings'
+import TradeLog from './pages/TradeLog'
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
