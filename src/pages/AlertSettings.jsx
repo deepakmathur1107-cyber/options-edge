@@ -1,35 +1,30 @@
 /**
  * src/pages/AlertSettings.jsx
- *
- * Full-page alert preferences.
  * Route: /app/settings/alerts
+ * Now fully theme-aware via props.
  */
-
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import AppNav from '../components/AppNav'
 
-const SYMBOLS = ['SPY', 'QQQ', 'IWM', 'AAPL', 'TSLA', 'NVDA', 'AMZN', 'META']
-
+const SYMBOLS = ['SPY','QQQ','IWM','AAPL','TSLA','NVDA','AMZN','META']
 const DEFAULT_PREFS = {
   email_alerts:   false,
   alert_email:    '',
   min_edge_score: 50,
-  symbols:        ['SPY', 'QQQ'],
+  symbols:        ['SPY','QQQ'],
 }
 
-const iSt = {
-  width: '100%',
-  background: '#0d1a26',
-  border: '1px solid #1a2e3e',
-  borderRadius: 4,
-  color: '#c8d8e8',
-  padding: '9px 12px',
-  fontSize: 12,
-  fontFamily: 'inherit',
-  boxSizing: 'border-box',
-}
+export default function AlertSettings(props) {
+  const { getToken, isDark, setIsDark, C } = props
 
-export default function AlertSettings({ getToken }) {
+  const iSt = {
+    width: '100%', background: C.inputBg,
+    border: `1px solid ${C.border}`, borderRadius: 4,
+    color: C.text, padding: '9px 12px', fontSize: 12,
+    fontFamily: 'inherit', boxSizing: 'border-box',
+    transition: 'border-color .15s',
+  }
+
   const [prefs,   setPrefs]   = useState(DEFAULT_PREFS)
   const [loading, setLoading] = useState(true)
   const [saving,  setSaving]  = useState(false)
@@ -49,24 +44,20 @@ export default function AlertSettings({ getToken }) {
           email_alerts:   data.prefs.email_alerts   ?? false,
           alert_email:    data.prefs.alert_email     ?? '',
           min_edge_score: data.prefs.min_edge_score  ?? 50,
-          symbols:        data.prefs.symbols         ?? ['SPY', 'QQQ'],
+          symbols:        data.prefs.symbols         ?? ['SPY','QQQ'],
         })
-      } catch (e) {
-        setError(e.message)
-      } finally {
-        setLoading(false)
-      }
+      } catch (e) { setError(e.message) }
+      finally     { setLoading(false)   }
     }
     load()
   }, [getToken])
 
   async function handleSave() {
-    setSaving(true)
-    setError(null)
+    setSaving(true); setError(null)
     try {
       const token = await getToken()
       const res = await fetch('/api/user/prefs', {
-        method:  'POST',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -76,11 +67,8 @@ export default function AlertSettings({ getToken }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
+    } catch (e) { setError(e.message) }
+    finally     { setSaving(false)    }
   }
 
   function toggleSymbol(sym) {
@@ -92,99 +80,145 @@ export default function AlertSettings({ getToken }) {
     }))
   }
 
-  const C = {
-    green: '#00ff88', blue: '#00c8ff', orange: '#ff9500',
-    red: '#ff4466', dim: '#4a7a8a', card: '#0d1a26',
-    bg: '#090e14', border: '#1a2e3e', text: '#c8d8e8',
+  const labelSt = {
+    fontSize: 10, color: C.dim, letterSpacing: 1.2,
+    marginBottom: 5, display: 'block', textTransform: 'uppercase',
+  }
+  const cardSt = {
+    background: C.card, border: `1px solid ${C.border}`,
+    borderRadius: 8, padding: '18px 20px', marginBottom: 16,
   }
 
   return (
     <div style={{
       background: C.bg, minHeight: '100vh',
       fontFamily: "'IBM Plex Mono', monospace",
-      color: C.text, paddingBottom: 40,
+      color: C.text, transition: 'background .25s, color .25s',
+      paddingBottom: 80,
     }}>
+      <style>{`
+        input:focus,select:focus{outline:none;border-color:${C.green}!important}
+        select option{background:${C.inputBg};color:${C.text}}
+        ::-webkit-scrollbar{width:3px}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px}
+      `}</style>
 
-      {/* Header */}
-      <div style={{
-        borderBottom: `1px solid ${C.border}`,
-        padding: '12px 16px',
-        display: 'flex', alignItems: 'center', gap: 12,
-        background: '#06090f',
-      }}>
-        <Link to="/app" style={{
-          color: C.dim, textDecoration: 'none', fontSize: 11,
-          border: `1px solid ${C.border}`, padding: '4px 10px',
-          borderRadius: 3, letterSpacing: 0.5,
-        }}>
-          ← BACK
-        </Link>
-        <span style={{
-          fontFamily: "'Bebas Neue', sans-serif",
-          fontSize: 20, letterSpacing: 3, color: C.green,
-        }}>
-          OPTIONS EDGE
-        </span>
-        <span style={{ fontSize: 10, color: C.dim, letterSpacing: 1 }}>
-          / ALERT SETTINGS
-        </span>
-      </div>
+      <AppNav
+        isDark={isDark} setIsDark={setIsDark} C={C}
+        {...props}
+        tab={null} setTab={() => {}}
+        showTools={false} setShowTools={() => {}}
+      />
 
-      {/* Body */}
-      <div style={{ maxWidth: 560, margin: '0 auto', padding: '24px 16px' }}>
+      <div style={{ maxWidth: 600, margin: '0 auto', padding: '28px 16px' }}>
 
-        {loading ? (
-          <div style={{ fontSize: 11, color: C.dim, textAlign: 'center', paddingTop: 40 }}>
-            Loading preferences…
+        {/* Page title */}
+        <div style={{ marginBottom: 28 }}>
+          <h1 style={{
+            fontFamily: "'Bebas Neue', sans-serif",
+            fontSize: 28, letterSpacing: 3, color: C.green,
+            margin: 0, lineHeight: 1,
+          }}>ALERT SETTINGS</h1>
+          <p style={{ fontSize: 10, color: C.dim, marginTop: 6, letterSpacing: 1 }}>
+            Configure when and how to receive options edge alerts
+          </p>
+        </div>
+
+        {loading && (
+          <div style={{ textAlign: 'center', padding: 40, color: C.dim, fontSize: 12, letterSpacing: 2 }}>
+            LOADING…
           </div>
-        ) : (
+        )}
+
+        {!loading && (
           <>
-            {/* Email toggle */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
-              <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>EMAIL ALERTS</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            {/* Email alerts toggle */}
+            <div style={cardSt}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontSize: 12, color: C.text }}>Enable email alerts</div>
-                  <div style={{ fontSize: 10, color: C.dim, marginTop: 3 }}>
-                    Get notified when high-edge contracts are found
+                  <div style={{ fontSize: 13, color: C.text, marginBottom: 3, fontWeight: 600 }}>
+                    Email Alerts
+                  </div>
+                  <div style={{ fontSize: 10, color: C.dim }}>
+                    Receive high-conviction setups by email
                   </div>
                 </div>
-                <button
+                {/* Toggle switch */}
+                <div
                   onClick={() => setPrefs(p => ({ ...p, email_alerts: !p.email_alerts }))}
                   style={{
-                    width: 42, height: 24, borderRadius: 12, border: 'none',
-                    cursor: 'pointer', position: 'relative', flexShrink: 0,
-                    background: prefs.email_alerts ? '#00ff88' : '#1a2e3e',
-                    transition: 'background 0.2s',
+                    width: 44, height: 24, borderRadius: 12, cursor: 'pointer',
+                    background: prefs.email_alerts ? C.green : C.border,
+                    position: 'relative', transition: 'background .2s', flexShrink: 0,
                   }}
                 >
-                  <span style={{
-                    position: 'absolute', top: 4, width: 16, height: 16,
-                    borderRadius: '50%', background: '#fff',
-                    transition: 'left 0.2s',
-                    left: prefs.email_alerts ? '22px' : '4px',
-                  }} />
-                </button>
-              </div>
-              <div style={{ opacity: prefs.email_alerts ? 1 : 0.4, pointerEvents: prefs.email_alerts ? 'auto' : 'none' }}>
-                <div style={{ fontSize: 9, color: C.dim, letterSpacing: 1.5, marginBottom: 5 }}>SEND ALERTS TO</div>
-                <input
-                  type="email"
-                  value={prefs.alert_email}
-                  onChange={e => setPrefs(p => ({ ...p, alert_email: e.target.value }))}
-                  placeholder="you@example.com"
-                  style={iSt}
-                />
-                <div style={{ fontSize: 9, color: '#2a5060', marginTop: 6 }}>
-                  Emails sent weekdays at 9:00 am ET during market hours.
+                  <div style={{
+                    position: 'absolute', top: 3,
+                    left: prefs.email_alerts ? 23 : 3,
+                    width: 18, height: 18, borderRadius: '50%',
+                    background: prefs.email_alerts ? '#000' : C.bgAlt,
+                    transition: 'left .2s',
+                    boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+                  }}/>
                 </div>
               </div>
             </div>
 
-            {/* Symbols */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
-              <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>SYMBOLS TO WATCH</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {/* Email address */}
+            {prefs.email_alerts && (
+              <div style={cardSt}>
+                <label style={labelSt}>Alert Email Address</label>
+                <input
+                  style={iSt}
+                  type="email"
+                  placeholder="you@example.com"
+                  value={prefs.alert_email}
+                  onChange={e => setPrefs(p => ({ ...p, alert_email: e.target.value }))}
+                />
+              </div>
+            )}
+
+            {/* Min edge score */}
+            <div style={cardSt}>
+              <label style={labelSt}>
+                Minimum Edge Score — <span style={{ color: C.green }}>{prefs.min_edge_score}%</span>
+              </label>
+              <input
+                type="range" min={40} max={95} step={5}
+                value={prefs.min_edge_score}
+                onChange={e => setPrefs(p => ({ ...p, min_edge_score: Number(e.target.value) }))}
+                style={{ width: '100%', accentColor: C.green }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: C.dim, marginTop: 4 }}>
+                <span>40% — more alerts</span>
+                <span>95% — fewer, higher quality</span>
+              </div>
+              {/* Score band guidance */}
+              <div style={{
+                marginTop: 12, display: 'grid',
+                gridTemplateColumns: 'repeat(3,1fr)', gap: 6,
+              }}>
+                {[
+                  { range: '40–64%', label: 'Speculative', color: C.red },
+                  { range: '65–79%', label: 'Moderate',    color: C.orange },
+                  { range: '80%+',   label: 'High Conv.',  color: C.green },
+                ].map(b => (
+                  <div key={b.range} style={{
+                    background: C.cardAlt, borderRadius: 4, padding: '8px 10px',
+                    border: `1px solid ${prefs.min_edge_score >= parseInt(b.range) ? b.color + '50' : C.border}`,
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: 11, color: b.color, fontWeight: 600 }}>{b.range}</div>
+                    <div style={{ fontSize: 9, color: C.dim, marginTop: 2 }}>{b.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Symbols watchlist */}
+            <div style={cardSt}>
+              <label style={labelSt}>Watch Symbols ({prefs.symbols.length} selected)</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {SYMBOLS.map(sym => {
                   const active = prefs.symbols.includes(sym)
                   return (
@@ -192,96 +226,47 @@ export default function AlertSettings({ getToken }) {
                       key={sym}
                       onClick={() => toggleSymbol(sym)}
                       style={{
-                        padding: '6px 14px', borderRadius: 4,
-                        fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                        padding: '7px 14px', borderRadius: 4, cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: 11, letterSpacing: .8,
+                        background: active ? `${C.green}18` : C.cardAlt,
                         border: `1px solid ${active ? C.green : C.border}`,
-                        color:      active ? C.green : C.dim,
-                        background: active ? `${C.green}18` : 'transparent',
-                        fontFamily: 'inherit',
+                        color: active ? C.green : C.dim,
+                        transition: 'all .15s',
                       }}
-                    >
-                      {sym}
-                    </button>
+                    >{sym}</button>
                   )
                 })}
               </div>
-              <div style={{ fontSize: 9, color: '#2a5060', marginTop: 8 }}>
-                Tap to toggle. Scanner runs on all selected symbols.
+              <div style={{ fontSize: 9, color: C.dim, marginTop: 10 }}>
+                Alerts only fire for these symbols. Deselect all to watch everything.
               </div>
             </div>
 
-            {/* Edge score */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 10 }}>
-              <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 12 }}>MINIMUM EDGE SCORE</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
-                <span style={{ fontSize: 11, color: C.dim }}>Threshold</span>
-                <input
-                  type="range" min={30} max={80} step={5}
-                  value={prefs.min_edge_score}
-                  onChange={e => setPrefs(p => ({ ...p, min_edge_score: parseInt(e.target.value) }))}
-                  style={{ flex: 1, accentColor: C.green }}
-                />
-                <span style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: 20, color: C.text, minWidth: 32, textAlign: 'right',
-                }}>
-                  {prefs.min_edge_score}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#2a5060' }}>
-                <span>30 — more alerts</span>
-                <span>80 — fewer, higher quality</span>
-              </div>
-            </div>
-
-            {/* Schedule */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: '14px 16px', marginBottom: 16 }}>
-              <div style={{ fontSize: 9, color: C.dim, letterSpacing: 2, marginBottom: 10 }}>SCHEDULE</div>
-              <div style={{ fontSize: 10, color: '#4a7a8a', lineHeight: 1.9 }}>
-                ⏰ Weekdays at 9:00 am ET —{' '}
-                <code style={{ fontSize: 9, color: C.dim, background: '#06101a', padding: '1px 5px', borderRadius: 2 }}>
-                  0 14 * * 1-5
-                </code>
-                {' '}UTC
-              </div>
-              <div style={{ fontSize: 9, color: '#2a5060', marginTop: 6 }}>
-                Manual trigger:{' '}
-                <code style={{ fontSize: 9, color: C.dim }}>POST /api/alerts/send</code>
-                {' '}with{' '}
-                <code style={{ fontSize: 9, color: C.dim }}>x-cron-secret</code> header.
-              </div>
-            </div>
-
+            {/* Error */}
             {error && (
               <div style={{
-                fontSize: 11, color: C.red, background: '#1a0408',
-                border: `1px solid ${C.red}30`, borderRadius: 5,
-                padding: '9px 13px', marginBottom: 12,
-              }}>
-                {error}
-              </div>
+                background: `${C.red}15`, border: `1px solid ${C.red}40`,
+                borderRadius: 6, padding: '12px 16px', color: C.red,
+                fontSize: 12, marginBottom: 16,
+              }}>⚠ {error}</div>
             )}
 
-            {/* Save */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button
-                onClick={handleSave}
-                disabled={saving || prefs.symbols.length === 0}
-                style={{
-                  padding: '10px 22px', borderRadius: 5, fontSize: 12,
-                  letterSpacing: 1.5, cursor: 'pointer',
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  background: saving ? 'transparent' : `${C.green}22`,
-                  border: `1px solid ${saving || prefs.symbols.length === 0 ? C.border : C.green}`,
-                  color: saving || prefs.symbols.length === 0 ? C.dim : C.green,
-                }}
-              >
-                {saving ? 'SAVING…' : 'SAVE PREFERENCES'}
-              </button>
-              {saved && (
-                <span style={{ fontSize: 11, color: C.green }}>✓ Saved</span>
-              )}
-            </div>
+            {/* Save button */}
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              style={{
+                width: '100%', padding: '14px',
+                fontFamily: "'Bebas Neue', sans-serif",
+                fontSize: 16, letterSpacing: 2,
+                background: saved ? `${C.green}30` : `${C.green}20`,
+                border: `1px solid ${saved ? C.green : C.green + '80'}`,
+                color: C.green, borderRadius: 6, cursor: saving ? 'not-allowed' : 'pointer',
+                opacity: saving ? 0.6 : 1, transition: 'all .2s',
+              }}
+            >
+              {saving ? 'SAVING…' : saved ? '✓ SAVED' : 'SAVE PREFERENCES'}
+            </button>
           </>
         )}
       </div>
