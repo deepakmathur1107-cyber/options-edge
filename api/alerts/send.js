@@ -137,7 +137,16 @@ module.exports = async function handler(req, res) {
     if (prefsError) throw prefsError
     if (!prefs?.length) return res.status(200).json({ sent: 0, message: 'No subscribers' })
 
-    const allSymbols = [...new Set(prefs.flatMap(p => p.symbols || ['SPY', 'QQQ']))]
+    const allSymbols = [...new Set(prefs.flatMap(p => {
+  const syms = p.symbols
+  if (Array.isArray(syms)) return syms
+  if (typeof syms === 'string') {
+    try { return JSON.parse(syms) } catch { return syms.split(',').map(s => s.trim()) }
+  }
+  return ['SPY', 'QQQ']
+}))]
+console.log('allSymbols:', JSON.stringify(allSymbols))
+console.log('prefs symbols raw:', JSON.stringify(prefs[0]?.symbols))
     const scanResults = {}
 
     await Promise.all(allSymbols.map(async symbol => {
