@@ -1,4 +1,8 @@
 import { Link } from 'react-router-dom'
+
+<Link to="/app/trades" style={{ color: '#00c8ff', fontSize: 11, textDecoration: 'none' }}>
+  TRADE LOG
+</Link>
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
