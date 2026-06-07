@@ -3,34 +3,15 @@ import { Link } from 'react-router-dom'
 import AppNav from './components/AppNav'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
-<Link to="/app/trades" style={{ color: '#00c8ff', fontSize: 11, textDecoration: 'none' }}>
-  TRADE LOG
-</Link>
-import { useState, useEffect, useRef, useCallback } from 'react'
-
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
   try { return localStorage.getItem(key) || fallback } catch { return fallback }
 }
 
-// ─── Theme ────────────────────────────────────────────────────────────────────
-const DARK_THEME = {
-  green:'#00ff88', blue:'#00c8ff', orange:'#ff9500',
-  red:'#ff4466',   dim:'#4a7a8a',  card:'#0d1a26',
-  bg:'#090e14',    border:'#1a2e3e',
-  text:'#c8d8e8',  subtext:'#6a9aaa', isDark:true,
-}
-const LIGHT_THEME = {
-  green:'#007a3d', blue:'#0066cc', orange:'#c05800',
-  red:'#cc1133',   dim:'#5a7a8a',  card:'#f0f4f8',
-  bg:'#ffffff',    border:'#cbd5e0',
-  text:'#1a2e3e',  subtext:'#4a6070', isDark:false,
-}
-
-// Module-level C = dark theme default.
-// Must be declared here — before TF_CONFIG, EXIT_RULES etc. reference C.green/C.blue.
-// Inside App(), `const C = isDark ? DARK_THEME : LIGHT_THEME` shadows this for all JSX.
-
+// Module-level C = dark theme default (DARK_THEME imported from ./theme).
+// Keeps TF_CONFIG, EXIT_RULES, CAT_COLOR colours valid at module scope.
+// Inside App(), `const C = isDark ? DARK_THEME : LIGHT_THEME` shadows this for JSX.
+const C = DARK_THEME
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50
@@ -492,55 +473,61 @@ const EXIT_RULES = [
 ]
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
-const iSt = {
-  width:'100%', background:C.card, border:`1px solid ${C.border}`,
-  borderRadius:4, color:C.text, padding:'9px 12px',
-  fontSize:12, fontFamily:'inherit',
-}
 
-function Field({ label, value, onChange, placeholder, options, rows, type='text' }) {
+function Field({ label, value, onChange, placeholder, options, rows, type='text', C: lC }) {
+  const themeC = lC || C
+  const fSt = {
+    width:'100%', background:themeC.inputBg, border:`1px solid ${themeC.border}`,
+    borderRadius:4, color:themeC.text, padding:'9px 12px',
+    fontSize:12, fontFamily:'inherit', transition:'border-color .15s',
+  }
   return (
     <div>
-      <div style={{fontSize:9,color:C.dim,letterSpacing:1.5,marginBottom:4,textTransform:'uppercase'}}>{label}</div>
+      <div style={{fontSize:9,color:themeC.dim,letterSpacing:1.5,marginBottom:4,textTransform:'uppercase'}}>{label}</div>
       {options
-        ? <select value={value} onChange={e=>onChange(e.target.value)} style={iSt}>
+        ? <select value={value} onChange={e=>onChange(e.target.value)} style={fSt}>
             {options.map(o=><option key={o.v||o} value={o.v||o}>{o.l||o}</option>)}
           </select>
         : rows
-          ? <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...iSt,resize:'vertical'}}/>
-          : <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={iSt}/>
+          ? <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...fSt,resize:'vertical'}}/>
+          : <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={fSt}/>
       }
     </div>
   )
 }
 
-function Card({ color, children, style={} }) {
+function Card({ color, children, style={}, C: lC }) {
+  const themeC = lC || C
   return (
-    <div style={{background:C.card,border:`1px solid ${color||C.border}`,borderRadius:6,padding:14,...style}}>
+    <div style={{background:themeC.card,border:`1px solid ${color||themeC.border}`,borderRadius:6,padding:14,...style}}>
       {children}
     </div>
   )
 }
 
-function Lbl({ children, color=C.dim }) {
-  return <div style={{fontSize:9,color,letterSpacing:2,marginBottom:6,textTransform:'uppercase'}}>{children}</div>
+function Lbl({ children, color, C: lC }) {
+  const themeC = lC || C
+  return <div style={{fontSize:9,color:color??themeC.dim,letterSpacing:2,marginBottom:6,textTransform:'uppercase'}}>{children}</div>
 }
 
-function Pill({ label, active, color=C.green, onClick }) {
+function Pill({ label, active, color, onClick, C: lC }) {
+  const themeC = lC || C
+  const pillColor = color ?? themeC.green
   return (
     <button onClick={onClick} style={{
       padding:'7px 14px',borderRadius:4,fontSize:11,letterSpacing:.8,cursor:'pointer',
-      border:`1px solid ${active?color:C.border}`,color:active?color:C.dim,
-      background:active?`${color}18`:'transparent',
+      border:`1px solid ${active?pillColor:themeC.border}`,color:active?pillColor:themeC.dim,
+      background:active?`${pillColor}18`:'transparent',
     }}>{label}</button>
   )
 }
 
 // ─── P&L Sparkline ────────────────────────────────────────────────────────────
-function PnLChart({ trades }) {
+function PnLChart({ trades, C: lC }) {
+  const themeC = lC || C
   const closed = [...trades].filter(t=>t.status!=='Open').reverse()
   if (closed.length < 2) return (
-    <div style={{textAlign:'center',padding:'20px 0',fontSize:11,color:C.dim,border:`1px dashed ${C.border}`,borderRadius:6}}>
+    <div style={{textAlign:'center',padding:'20px 0',fontSize:11,color:themeC.dim,border:`1px dashed ${themeC.border}`,borderRadius:6}}>
       Log 2+ closed trades to see equity curve
     </div>
   )
@@ -556,7 +543,7 @@ function PnLChart({ trades }) {
   const toY = v => H - ((v-minV)/range)*H*0.85 - H*0.05
   const pts = cumPnL.map((p,i)=>`${(i/(cumPnL.length-1))*W},${toY(p.y)}`).join(' ')
   const lastY = cumPnL[cumPnL.length-1].y
-  const lineColor = lastY>=0?C.green:C.red
+  const lineColor = lastY>=0?themeC.green:themeC.red
   const zeroY = toY(0)
   return (
     <div style={{position:'relative'}}>
@@ -567,12 +554,12 @@ function PnLChart({ trades }) {
             <stop offset="100%" stopColor={lineColor} stopOpacity="0"/>
           </linearGradient>
         </defs>
-        <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke={C.border} strokeWidth={1} strokeDasharray="4,4"/>
+        <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke={themeC.border} strokeWidth={1} strokeDasharray="4,4"/>
         <polygon points={`0,${H} ${pts} ${W},${H}`} fill="url(#pgrd)"/>
         <polyline points={pts} fill="none" stroke={lineColor} strokeWidth={1.8}/>
         <circle cx={(cumPnL.length-1)/(cumPnL.length-1)*W} cy={toY(lastY)} r={3} fill={lineColor}/>
       </svg>
-      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.dim,marginTop:3,letterSpacing:.5}}>
+      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:themeC.dim,marginTop:3,letterSpacing:.5}}>
         <span>{closed[0]?.date||closed[0]?.ticker||''}</span>
         <span>{closed[closed.length-1]?.date||closed[closed.length-1]?.ticker||''}</span>
       </div>
@@ -646,13 +633,17 @@ export default function App(props={}) {
   }
 
   // ── theme ──
-  const [isDark, setIsDark] = useState(()=>ls('isDark','1')==='1')
-  useEffect(()=>{try{localStorage.setItem('isDark',isDark?'1':'0')}catch{}},[isDark])
-  const C = isDark ? DARK_THEME : LIGHT_THEME
+  const isDark    = props.isDark    ?? true
+  const setIsDark = props.setIsDark ?? (() => {})
+  const C         = isDark ? DARK_THEME : LIGHT_THEME
+  const iSt = {
+    width:'100%', background:C.inputBg, border:`1px solid ${C.border}`,
+    borderRadius:4, color:C.text, padding:'9px 12px',
+    fontSize:12, fontFamily:'inherit', transition:'border-color .15s',
+  }
 
   // ── main tab & tools panel ──
   const [tab,        setTab]        = useState('dash')
-  const [btFilter,   setBtFilter]   = useState('all')    // backtest filter
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
   const [showTools,  setShowTools]  = useState(false)
   const [toolsTab,   setToolsTab]   = useState('settings')
@@ -1468,7 +1459,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       grade:            r.grade||'',
     }
     setTrades(p=>[t,...p])
-    setTab('backtest')
+    setTab('dash')
     setPaperToast(`✅ ${t.ticker} logged as paper trade`)
     setTimeout(()=>setPaperToast(''), 3000)
   }
@@ -1583,90 +1574,42 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
-    <div style={{background:C.bg,minHeight:'100vh',fontFamily:"'IBM Plex Mono',monospace",color:C.text,paddingBottom:68,transition:'background .25s, color .25s'}}>
+    <div style={{background:C.bg,minHeight:'100vh',fontFamily:"'IBM Plex Mono',monospace",color:C.text,paddingBottom:16,transition:'background .25s, color .25s'}}>
       <style>{`
         *{box-sizing:border-box}
         .hv{cursor:pointer;transition:opacity .15s}.hv:hover{opacity:.8}
         .si{animation:si .25s ease}@keyframes si{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
         .pulse{animation:pu 1.1s infinite}@keyframes pu{0%,100%{opacity:1}50%{opacity:.35}}
-        input:focus,textarea:focus,select:focus{outline:none;border-color:#00ff88!important}
-        select option{background:#0d1a26}
+        input:focus,textarea:focus,select:focus{outline:none;border-color:${C.green}!important}
+        select option{background:${C.inputBg}}
         .scanrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:5px}
-        ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#0a1218}::-webkit-scrollbar-thumb{background:#1a3040;border-radius:2px}
+        ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:${C.bgDeep}}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px}
       `}</style>
 
-      {/* ═══════════════ STICKY HEADER ═══════════════════════════════════════ */}
-      <div style={{position:'sticky',top:0,zIndex:100,background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+      <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
 
-        {/* App title row */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px 9px'}}>
-          <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:3,color:C.green,lineHeight:1}}>OPTIONS EDGE</span>
-            <span style={{fontSize:8,color:C.dim,letterSpacing:2}}>v3.0</span>
-          </div>
-          <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            {autoOn && (
-              <span style={{fontSize:9,color:C.green,display:'flex',alignItems:'center',gap:4}}>
-                <span style={{width:6,height:6,borderRadius:'50%',background:C.green,display:'inline-block',boxShadow:`0 0 7px ${C.green}`}} className="pulse"/>
-                AUTO
-              </span>
+      {/* /ES /NQ price bar */}
+      <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:C.bgAlt}}>
+        {[
+          {sym:esBar?.label||'SPX',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
+          {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
+        ].map(({sym,data,color},i)=>(
+          <div key={sym} style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:2,color:C.dim}}>{sym}</span>
+            {data ? (
+              <>
+                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:1,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                <span style={{fontSize:10,color,fontWeight:600}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
+                <span style={{fontSize:10,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
+              </>
+            ) : (
+              <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
             )}
-            <span style={{fontSize:9,color:C.dim,letterSpacing:1}}>{tradierMode.toUpperCase()}</span>
-            <button className="hv" onClick={()=>setIsDark(p=>!p)} title={isDark?'Switch to light mode':'Switch to dark mode'} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:4,padding:'5px 9px',fontSize:13,cursor:'pointer',lineHeight:1}}>
-              {isDark?'☀':'🌙'}
-            </button>
-            <button className="hv" onClick={()=>{setShowTools(p=>!p);if(!showTools)setToolsTab('settings')}} style={{background:showTools?`${C.green}18`:'transparent',border:`1px solid ${showTools?C.green:C.border}`,color:showTools?C.green:C.dim,borderRadius:4,padding:'5px 11px',fontSize:11,letterSpacing:.5}}>
-              {showTools ? '✕ CLOSE' : '⚙ TOOLS'}
-            </button>
-            {/* User menu */}
-            <div style={{position:'relative',display:'flex',alignItems:'center',gap:6}}>
-              {(userInitial||userEmail)&&(
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <div style={{width:26,height:26,borderRadius:'50%',background:`${C.green}20`,border:`1px solid ${C.green}40`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:C.green,fontWeight:600}}>
-                    {(userInitial||userEmail||'U')[0].toUpperCase()}
-                  </div>
-                  <button className="hv" onClick={openPortal} title="Manage subscription" style={{background:'transparent',border:'none',color:C.dim,fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5,padding:'2px 4px'}}>PRO</button>
-                  <button className="hv" onClick={onSignOut} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,borderRadius:3,padding:'4px 8px',fontSize:9,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>OUT</button>
-                  <Link to="/app/settings/alerts" style={{
-                    background: 'transparent',
-                    border: `1px solid ${C.border}`,
-                    color: C.dim,
-                    borderRadius: 3, padding: '4px 8px',
-                    fontSize: 9, textDecoration: 'none',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    letterSpacing: 0.5,
-                  }}>
-                    🔔
-                  </Link>
-                </div>
-              )}
-            </div>
           </div>
-        </div>
-        
-        {/* /ES /NQ price bar */}
-        <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:isDark?'#070c12':'#eef2f7'}}>
-          {[
-            {sym:esBar?.label||'SPX',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
-            {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
-          ].map(({sym,data,color},i)=>(
-            <div key={sym} style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
-              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:2,color:C.dim}}>{sym}</span>
-              {data ? (
-                <>
-                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:1,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                  <span style={{fontSize:10,color,fontWeight:600}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
-                  <span style={{fontSize:10,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
-                </>
-              ) : (
-                <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
-              )}
-            </div>
-          ))}
-          <button className="hv" onClick={fetchPriceBar} disabled={barLoading} style={{padding:'0 12px',background:'transparent',border:'none',borderLeft:`1px solid ${C.border}`,color:barLoading?C.dim:C.blue,fontSize:13,cursor:'pointer',minWidth:36}} title="Refresh prices">
-            {barLoading?<span className="pulse">·</span>:'↺'}
-          </button>
-        </div>
+        ))}
+        <button className="hv" onClick={fetchPriceBar} disabled={barLoading} style={{padding:'0 12px',background:'transparent',border:'none',borderLeft:`1px solid ${C.border}`,color:barLoading?C.dim:C.blue,fontSize:13,cursor:'pointer',minWidth:36}} title="Refresh prices">
+          {barLoading?<span className="pulse">·</span>:'↺'}
+        </button>
       </div>
 
       {/* ═══════════════ MAIN CONTENT ════════════════════════════════════════ */}
@@ -1702,7 +1645,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
             {/* ── No data CTA ── */}
             {!esBar && !nqBar && !barLoading && (
-              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',gap:8}}>
+              <div style={{background:C.bgDeep,border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',gap:8}}>
                 <div>
                   <div style={{fontSize:10,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
                   <div style={{fontSize:9,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
@@ -1711,7 +1654,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               </div>
             )}
             {!esBar && !nqBar && barLoading && (
-              <div style={{background:'#04080e',border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
+              <div style={{background:C.bgDeep,border:`1px dashed ${C.border}`,borderRadius:6,padding:'11px 13px',marginBottom:12}}>
                 <div style={{fontSize:10,color:C.dim}}>⏳ Loading market data...</div>
               </div>
             )}
@@ -1737,7 +1680,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
                     <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:'#2a4a5a'}}/>
                   </div>
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#2a5060',marginTop:3}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:C.subtext,marginTop:3}}>
                     <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
                   </div>
                 </>
@@ -1751,7 +1694,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
                   <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>SPX / NDX INDEX SETUPS</div>
-                  <div style={{fontSize:9,color:'#2a5060',marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
+                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background:indexAlertsLoading?'transparent':`${C.green}18`,
@@ -1765,7 +1708,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 </button>
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
-                <div style={{fontSize:10,color:'#2a5060',textAlign:'center',padding:'10px 0'}}>
+                <div style={{fontSize:10,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
                   {'Hit GENERATE to scan SPX & NDX across all 4 timeframes'}
                 </div>
               )}
@@ -1773,7 +1716,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 const high=al.score>=90; const midHit=al.score>=75
                 const cardC=high?C.green:midHit?C.blue:C.dim
                 return (
-                  <div key={i} style={{background:'#06101a',border:`1px solid ${cardC}30`,borderRadius:4,padding:'9px 11px',marginBottom:6}}>
+                  <div key={i} style={{background:C.cardAlt,border:`1px solid ${cardC}30`,borderRadius:4,padding:'9px 11px',marginBottom:6}}>
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,color:cardC,letterSpacing:2}}>{al.sym}</span>
                       <span style={{fontSize:10,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
@@ -1782,7 +1725,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
                     </div>
                     <div style={{display:'flex',gap:10,fontSize:10,color:C.dim,marginBottom:4,flexWrap:'wrap'}}>
-                      <span>Entry: <span style={{color:'#8ab0c0'}}>{al.entry}</span></span>
+                      <span>Entry: <span style={{color:C.subtext}}>{al.entry}</span></span>
                       <span>Tgt: <span style={{color:C.green}}>{al.target}</span></span>
                       <span>Stp: <span style={{color:C.red}}>{al.stop}</span></span>
                     </div>
@@ -1804,7 +1747,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
                 <div>
                   <div style={{fontSize:9,color:C.dim,letterSpacing:2}}>MORNING READOUT</div>
-                  <div style={{fontSize:9,color:'#2a5060',marginTop:2}}>Claude AI brief {'·'} premarket news {'·'} key levels</div>
+                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>Claude AI brief {'·'} premarket news {'·'} key levels</div>
                 </div>
                 <button className="hv" onClick={fetchMorningBrief} disabled={briefLoading} style={{
                   background:briefLoading?'transparent':`${C.orange}18`,
@@ -1817,9 +1760,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 </button>
               </div>
               {morningBrief ? (
-                <pre style={{fontSize:10,lineHeight:1.85,color:'#8ab0c0',margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word',borderTop:`1px solid ${C.border}`,paddingTop:9,fontFamily:"'IBM Plex Mono',monospace"}}>{morningBrief}</pre>
+                <pre style={{fontSize:10,lineHeight:1.85,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word',borderTop:`1px solid ${C.border}`,paddingTop:9,fontFamily:"'IBM Plex Mono',monospace"}}>{morningBrief}</pre>
               ) : (
-                <div style={{fontSize:10,color:'#2a5060',textAlign:'center',padding:'8px 0'}}>
+                <div style={{fontSize:10,color:C.subtext,textAlign:'center',padding:'8px 0'}}>
                   Set ANTHROPIC_API_KEY in Vercel env vars to enable
                 </div>
               )}
@@ -1844,7 +1787,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
 
             {/* ── Journal summary ── */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:4}}>
               {[
                 {l:'TOTAL P&L',v:(jStats.pnl>=0?'+':'-')+'$'+Math.abs(jStats.pnl).toFixed(0),c:jStats.pnl>=0?C.green:C.red},
                 {l:'WIN RATE', v:jStats.wr+'%',c:jStats.wr>=60?C.green:jStats.wr>=45?C.orange:C.red},
@@ -1856,6 +1799,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 </div>
               ))}
             </div>
+            <Link to="/app/trades" style={{display:'block',textAlign:'center',padding:'10px',borderRadius:6,marginBottom:4,border:`1px solid ${C.blue}40`,color:C.blue,fontSize:11,letterSpacing:1.5,textDecoration:'none',background:`${C.blue}10`}}>≡ VIEW FULL TRADE LOG & BACKTEST →</Link>
           </div>
         )}
 
@@ -1920,7 +1864,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {scanErr&&<div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:6,padding:11,color:C.red,fontSize:12,marginBottom:11,lineHeight:1.6}}>{scanErr}</div>}
 
             {debugLog.length>0&&(
-              <div style={{background:'#02080e',border:`1px solid ${C.border}`,borderRadius:6,padding:11,marginBottom:11,maxHeight:140,overflowY:'auto'}}>
+              <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:11,marginBottom:11,maxHeight:140,overflowY:'auto'}}>
                 <Lbl>📡 Live Tradier Feed</Lbl>
                 {debugLog.map((l,i)=>(
                   <div key={i} style={{fontSize:11,color:l.startsWith('✅')?C.green:l.includes('ERROR')||l.includes('❌')?C.red:'#4a8a9a',fontFamily:'monospace',lineHeight:1.7}}>{l}</div>
@@ -2080,7 +2024,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 )}
 
                 {/* ── Chain stats grid ── */}
-                <div style={{background:'#030d18',border:`1px solid ${C.blue}40`,borderRadius:6,padding:11,marginBottom:11}}>
+                <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:6,padding:11,marginBottom:11}}>
                   <Lbl color={C.blue}>📡 Live Chain — Tradier {tradierMode} · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
                   <div className="scanrow">
                     {[
@@ -2103,7 +2047,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {scanResult.reasons?.length>0&&(
                   <Card style={{marginBottom:7}}>
                     <Lbl color={C.green}>✅ SIGNALS</Lbl>
-                    {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:11,color:isDark?'#8ab0c0':'#2a5070',lineHeight:1.7}}>✓ {r}</div>)}
+                    {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:11,color:C.subtext,lineHeight:1.7}}>✓ {r}</div>)}
                   </Card>
                 )}
                 {scanResult.warnings?.length>0&&(
@@ -2123,7 +2067,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <span style={{width:6,height:6,borderRadius:'50%',background:autoOn?C.green:C.dim,display:'inline-block',boxShadow:autoOn?`0 0 8px ${C.green}`:'none'}}/>
                     AUTO-SCANNER {autoOn?'ACTIVE':'— OFF'}
                   </div>
-                  <div style={{fontSize:9,color:'#2a5a6a',marginTop:2}}>
+                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>
                     Every {scanFreq} min · {minScore}%+ conviction · {tgToken&&tgChatId?'✅ TG connected':'⚠️ No TG'}
                   </div>
                 </div>
@@ -2154,7 +2098,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <Field label="Watchlist (blank = full S&P 500)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY"/>
 
               {lastAlert&&(
-                <div style={{background:'#020e06',border:`1px solid ${C.green}40`,borderRadius:6,padding:'10px 12px',marginTop:10}}>
+                <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:6,padding:'10px 12px',marginTop:10}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                     <Lbl color={C.green}>🚀 LATEST ALERT</Lbl>
                     <div style={{display:'flex',gap:6}}>
@@ -2178,7 +2122,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               )}
 
               {autoLog.length>0&&(
-                <div style={{background:'#01060b',borderRadius:5,padding:9,maxHeight:160,overflowY:'auto',marginTop:9,border:`1px solid ${C.border}`}}>
+                <div style={{background:C.bgDeep,borderRadius:5,padding:9,maxHeight:160,overflowY:'auto',marginTop:9,border:`1px solid ${C.border}`}}>
                   <Lbl>Scanner Log</Lbl>
                   {autoLog.map((l,i)=>(
                     <div key={i} style={{fontSize:10,color:l.includes('🚀')?C.green:l.includes('❌')?C.red:'#2a5a6a',fontFamily:'monospace',lineHeight:1.8}}>{l}</div>
@@ -2189,111 +2133,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           </div>
         )}
 
-        {/* ── JOURNAL TAB ─────────────────────────────────────────────────── */}
-        {tab==='journal' && (
-          <div className="si">
-            {/* Stats row */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:12}}>
-              {[
-                {l:'TOTAL P&L',v:(jStats.pnl>=0?'+':'-')+'$'+Math.abs(jStats.pnl).toFixed(0),c:jStats.pnl>=0?C.green:C.red},
-                {l:'WIN RATE', v:jStats.wr+'%',c:jStats.wr>=60?C.green:jStats.wr>=45?C.orange:C.red},
-                {l:'CLOSED',   v:String(jStats.total),c:C.dim},
-                {l:'AVG WIN',  v:'+$'+jStats.aw.toFixed(0),c:C.green},
-                {l:'AVG LOSS', v:'-$'+jStats.al.toFixed(0),c:C.red},
-                {l:'OPEN',     v:String(jStats.open),c:C.blue},
-              ].map((s,i)=>(
-                <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
-                  <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{s.l}</div>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:s.c,letterSpacing:1}}>{s.v}</div>
-                </div>
-              ))}
-            </div>
+        {/* journal tab removed — see /app/trades */}
 
-            {/* P&L Chart */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:12}}>
-              <Lbl>EQUITY CURVE</Lbl>
-              <PnLChart trades={trades}/>
-            </div>
-
-            {/* Filter + add */}
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:6}}>
-              <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
-                {['All','Open','Closed','Stopped'].map(f=><Pill key={f} label={f} active={jFilter===f} color={C.blue} onClick={()=>setJFilter(f)}/>)}
-              </div>
-              <button className="hv" onClick={()=>setShowAdd(p=>!p)} style={{background:showAdd?`${C.green}20`:'transparent',border:`1px solid ${showAdd?C.green:C.border}`,color:showAdd?C.green:C.dim,padding:'6px 12px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>+ LOG TRADE</button>
-            </div>
-
-            {showAdd&&(
-              <Card color={`${C.green}40`} style={{marginBottom:12}}>
-                <Lbl color={C.green}>NEW TRADE ENTRY</Lbl>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:7,marginBottom:7}}>
-                  <Field label="Ticker" value={newTrade.ticker} onChange={v=>setNewTrade(p=>({...p,ticker:v.toUpperCase()}))} placeholder="NVDA"/>
-                  <Field label="Type" value={newTrade.type} onChange={v=>setNewTrade(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']}/>
-                  <Field label="Status" value={newTrade.status} onChange={v=>setNewTrade(p=>({...p,status:v}))} options={['Open','Closed','Stopped']}/>
-                  <Field label="Strike" value={newTrade.strike} onChange={v=>setNewTrade(p=>({...p,strike:v}))} placeholder="$210C"/>
-                  <Field label="Expiry" value={newTrade.expiry} onChange={v=>setNewTrade(p=>({...p,expiry:v}))} placeholder="Jun 20 2026"/>
-                  <Field label="Date Entered" value={newTrade.date} onChange={v=>setNewTrade(p=>({...p,date:v}))} placeholder="May 27 2026"/>
-                  <Field label="Entry $" value={newTrade.entry} onChange={v=>setNewTrade(p=>({...p,entry:v}))} placeholder="$3.50"/>
-                  <Field label="Exit $" value={newTrade.exitPrice} onChange={v=>setNewTrade(p=>({...p,exitPrice:v}))} placeholder="$6.50"/>
-                  <Field label="P&L $" value={newTrade.pnl} onChange={v=>setNewTrade(p=>({...p,pnl:v}))} placeholder="+320"/>
-                  <Field label="Qty" value={newTrade.contracts} onChange={v=>setNewTrade(p=>({...p,contracts:v}))} placeholder="2"/>
-                  <Field label="App Conviction %" value={newTrade.conviction} onChange={v=>setNewTrade(p=>({...p,conviction:v}))} placeholder="90"/>
-                  <Field label="IV at Entry %" value={newTrade.iv} onChange={v=>setNewTrade(p=>({...p,iv:v}))} placeholder="38"/>
-                  <Field label="Stock Move % at Entry" value={newTrade.chgPctAtEntry} onChange={v=>setNewTrade(p=>({...p,chgPctAtEntry:v}))} placeholder="+1.2"/>
-                  <Field label="Break-even Move % Req" value={newTrade.breakevenReqPct} onChange={v=>setNewTrade(p=>({...p,breakevenReqPct:v}))} placeholder="4.3"/>
-                </div>
-                <div style={{marginBottom:8}}>
-                  <Field label="Notes" value={newTrade.notes} onChange={v=>setNewTrade(p=>({...p,notes:v}))} placeholder="What worked, what didn't..." rows={2}/>
-                </div>
-                <div style={{display:'flex',gap:7}}>
-                  <button className="hv" onClick={addTrade} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 18px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>SAVE</button>
-                  <button className="hv" onClick={()=>setShowAdd(false)} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>CANCEL</button>
-                </div>
-              </Card>
-            )}
-
-            {/* Trade list */}
-            {(jFilter==='All'?trades:trades.filter(t=>t.status===jFilter)).length===0
-              ? <div style={{color:C.dim,fontSize:12,textAlign:'center',padding:24,border:`1px dashed ${C.border}`,borderRadius:6}}>No trades yet. Hit <span style={{color:C.green}}>+ LOG TRADE</span> to start.</div>
-              : (jFilter==='All'?trades:trades.filter(t=>t.status===jFilter)).map(t=>{
-                  const pnl=parseFloat(t.pnl||0)
-                  const stC=t.status==='Open'?C.blue:t.status==='Closed'?C.green:C.red
-                  return (
-                    <div key={t.id} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${stC}`,borderRadius:4,padding:'10px 13px',marginBottom:6}}>
-                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:6}}>
-                        <div style={{display:'flex',gap:9,alignItems:'center',flexWrap:'wrap'}}>
-                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:C.text,letterSpacing:2}}>${t.ticker}</span>
-                          <span style={{fontSize:9,color:stC,border:`1px solid ${stC}40`,padding:'2px 6px',borderRadius:3}}>{t.status.toUpperCase()}</span>
-                          <span style={{fontSize:11,color:C.dim}}>{t.type}</span>
-                          {t.expiry&&<span style={{fontSize:10,color:C.dim}}>{t.expiry}</span>}
-                          {t.date&&<span style={{fontSize:9,color:'#2a4a5a'}}>{t.date}</span>}
-                        </div>
-                        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                          {t.pnl&&<span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:pnl>=0?C.green:C.red}}>{pnl>=0?'+':'-'}${Math.abs(pnl)}</span>}
-                          <button className="hv" onClick={()=>setTrades(p=>p.filter(x=>x.id!==t.id))} style={{background:'transparent',border:'none',color:'#2a4a5a',fontSize:12,cursor:'pointer'}}>✕</button>
-                        </div>
-                      </div>
-                      {(t.entry||t.exitPrice)&&(
-                        <div style={{display:'flex',gap:12,marginTop:5,fontSize:11,color:C.dim}}>
-                          {t.entry&&<span>Entry: <span style={{color:'#8ab0c0'}}>{t.entry}</span></span>}
-                          {t.exitPrice&&<span>Exit: <span style={{color:'#8ab0c0'}}>{t.exitPrice}</span></span>}
-                          {t.contracts&&<span>Qty: <span style={{color:'#8ab0c0'}}>{t.contracts}</span></span>}
-                        </div>
-                      )}
-                      {t.notes&&<div style={{marginTop:5,fontSize:11,color:'#4a6a7a',lineHeight:1.5,borderTop:`1px solid ${C.border}`,paddingTop:5}}>{t.notes}</div>}
-                    </div>
-                  )
-                })
-            }
-          </div>
-        )}
       </div>
 
-      {/* ═══════════════ BACKTEST TAB ══════════════════════════════════════════ */}
-      {tab==='backtest' && (
+      {/* backtest tab removed — see /app/trades */}
+      {false /*placeholder - content removed*/ && (
         <div className="si">
           {(()=>{
-            // ── derive all analytics from trades array ─────────────────────
             const all   = trades
             const closed= all.filter(t=>t.status!=='Open')
             const wins  = closed.filter(t=>parseFloat(t.pnl||0)>0)
@@ -2350,7 +2197,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {closed.length===0 ? (
                   <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,padding:24,textAlign:'center'}}>
                     <div style={{fontSize:13,color:C.dim,marginBottom:8}}>No closed trades yet</div>
-                    <div style={{fontSize:11,color:'#3a5a6a',lineHeight:1.8}}>
+                    <div style={{fontSize:11,color:C.subtext,lineHeight:1.8}}>
                       Two ways to build your track record:<br/>
                       <span style={{color:C.orange}}>①</span> Tap <strong style={{color:C.orange}}>📋 PAPER TRADE</strong> on any scan result — logs it instantly<br/>
                       <span style={{color:C.green}}>②</span> Use <strong style={{color:C.green}}>+ LOG TRADE</strong> in the Journal tab to enter past trades manually
@@ -2465,7 +2312,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             </div>
                           )
                         })}
-                        <div style={{fontSize:9,color:'#2a5060',marginTop:6,lineHeight:1.8}}>
+                        <div style={{fontSize:9,color:C.subtext,marginTop:6,lineHeight:1.8}}>
                           MSTR lesson: buying high IV (66%) loses even when direction is right, because IV crush overwhelms the premium gain.
                         </div>
                       </div>
@@ -2491,7 +2338,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             </div>
                           )
                         })}
-                        <div style={{fontSize:9,color:'#2a5060',marginTop:6,lineHeight:1.8}}>
+                        <div style={{fontSize:9,color:C.subtext,marginTop:6,lineHeight:1.8}}>
                           GOOGL needed +4.3% — historically that puts you in the bottom 30% of probability outcomes. Sticking to trades requiring {'<'}3% move improves win rate dramatically.
                         </div>
                       </div>
@@ -2529,7 +2376,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                   <span style={{fontSize:9,color:stC,border:`1px solid ${stC}40`,padding:'1px 5px',borderRadius:2}}>{t.status}</span>
                                   <span style={{fontSize:10,color:C.dim}}>{t.type}</span>
                                   {t.strike&&<span style={{fontSize:10,color:C.dim}}>{t.strike}</span>}
-                                  {t.expiry&&<span style={{fontSize:9,color:'#2a4a5a'}}>{t.expiry}</span>}
+                                  {t.expiry&&<span style={{fontSize:9,color:C.dim}}>{t.expiry}</span>}
                                   {t.conviction&&<span style={{fontSize:9,color:C.blue,border:`1px solid ${C.blue}30`,padding:'1px 5px',borderRadius:2}}>{t.conviction}%</span>}
                                   {blocked_&&<span style={{fontSize:8,color:C.red,border:`1px solid ${C.red}40`,padding:'1px 5px',borderRadius:2}}>🚫 BLOCKED</span>}
                                 </div>
@@ -2539,13 +2386,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 </div>
                               </div>
                               <div style={{display:'flex',gap:10,marginTop:5,fontSize:10,color:C.dim,flexWrap:'wrap'}}>
-                                {t.entry&&<span>Entry: <span style={{color:'#8ab0c0'}}>{t.entry}</span></span>}
-                                {t.exitPrice&&<span>Exit: <span style={{color:'#8ab0c0'}}>{t.exitPrice}</span></span>}
+                                {t.entry&&<span>Entry: <span style={{color:C.subtext}}>{t.entry}</span></span>}
+                                {t.exitPrice&&<span>Exit: <span style={{color:C.subtext}}>{t.exitPrice}</span></span>}
                                 {t.iv&&<span>IV: <span style={{color:parseFloat(t.iv)>55?C.red:parseFloat(t.iv)>40?C.orange:C.green}}>{t.iv}%</span></span>}
                                 {t.chgPctAtEntry&&<span>Stk Δ: <span style={{color:Math.abs(parseFloat(t.chgPctAtEntry))>2?C.red:'#8ab0c0'}}>{t.chgPctAtEntry}%</span></span>}
                                 {t.breakevenReqPct&&<span>BE req: <span style={{color:parseFloat(t.breakevenReqPct)>5?C.red:parseFloat(t.breakevenReqPct)>3?C.orange:C.green}}>+{t.breakevenReqPct}%</span></span>}
                               </div>
-                              {t.notes&&<div style={{marginTop:4,fontSize:10,color:'#3a5a6a',lineHeight:1.5}}>{t.notes}</div>}
+                              {t.notes&&<div style={{marginTop:4,fontSize:10,color:C.subtext,lineHeight:1.5}}>{t.notes}</div>}
                             </div>
                           )
                         })
@@ -2569,32 +2416,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         }}>{paperToast}</div>
       )}
 
-      {/* ═══════════════ BOTTOM TAB BAR ══════════════════════════════════════ */}
-      <div style={{
-        position:'fixed',bottom:0,left:0,right:0,zIndex:90,
-        background:isDark?'#06090f':'#eef2f7',borderTop:`1px solid ${C.border}`,
-        display:'grid',gridTemplateColumns:'1fr 1fr 1fr',
-      }}>
-        {[
-          {id:'dash',     icon:'◈', label:'DASH'},
-          {id:'scan',     icon:'⌁', label:'SCAN'},
-          {id:'journal',  icon:'≡', label:'JOURNAL'},
-          {id:'backtest', icon:'◎', label:'BACKTEST'},
-        ].map(t=>{
-          const active=tab===t.id
-          return (
-            <button key={t.id} onClick={()=>setTab(t.id)} style={{
-              display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
-              padding:'11px 4px',gap:3,background:'transparent',border:'none',cursor:'pointer',
-              borderTop:`2px solid ${active?C.green:'transparent'}`,
-              transition:'border-color .2s',
-            }}>
-              <span style={{fontSize:17,lineHeight:1,color:active?C.green:C.dim}}>{t.icon}</span>
-              <span style={{fontSize:9,letterSpacing:.5,fontFamily:"'IBM Plex Mono',monospace",color:active?C.green:C.dim,textTransform:'uppercase'}}>{t.label}</span>
-            </button>
-          )
-        })}
-      </div>
 
       {/* ═══════════════ TOOLS / SETTINGS SLIDE-IN PANEL ════════════════════ */}
       {showTools&&(
@@ -2612,13 +2433,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
             {/* Panel header */}
-            <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:isDark?'#06090f':'#eef2f7',flexShrink:0}}>
+            <div style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:C.bgAlt,flexShrink:0}}>
               <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,color:C.green}}>TOOLS</span>
               <button className="hv" onClick={()=>setShowTools(false)} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'4px 10px',borderRadius:3,fontSize:11,cursor:'pointer'}}>✕ CLOSE</button>
             </div>
 
             {/* Panel sub-tabs */}
-            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:isDark?'#070c12':'#eef2f7'}}>
+            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.bgAlt}}>
               {[
                 {id:'settings',l:'Settings'},
                 {id:'alert',   l:'Alert'},
@@ -2645,7 +2466,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {/* Tradier — Phase 2: admin key, no user token needed */}
                   <Card style={{marginBottom:12}}>
                     <Lbl color={C.green}>📡 MARKET DATA</Lbl>
-                    <div style={{fontSize:11,color:'#8ab0c0',lineHeight:1.8}}>
+                    <div style={{fontSize:11,color:C.subtext,lineHeight:1.8}}>
                       Live options data is provided automatically — no API token required.
                     </div>
                     <div style={{fontSize:10,color:C.dim,marginTop:8}}>
@@ -2712,7 +2533,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <Field label="Catalyst" value={alert.catalyst} onChange={v=>setAlert(p=>({...p,catalyst:v}))} placeholder="Earnings, breakout..." rows={1}/>
                     <Field label="Options Flow" value={alert.flow} onChange={v=>setAlert(p=>({...p,flow:v}))} placeholder="Unusual sweeps..." rows={1}/>
                   </div>
-                  <Card color={C.border} style={{background:'#050c14'}}>
+                  <Card color={C.border} style={{background:C.panel}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
                       <Lbl>📱 Preview</Lbl>
                       <div style={{display:'flex',gap:6}}>
@@ -2725,7 +2546,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       </div>
                     </div>
                     {tgStatus&&<div style={{fontSize:10,color:C.green,marginBottom:7}}>{tgStatus}</div>}
-                    <pre style={{fontSize:10,lineHeight:1.8,color:'#8ab0c0',margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{buildTgAlert(alert)}</pre>
+                    <pre style={{fontSize:10,lineHeight:1.8,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{buildTgAlert(alert)}</pre>
                   </Card>
                 </div>
               )}
@@ -2763,7 +2584,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           </div>
                           <div>
                             <div style={{fontSize:11,color:checked[item.id]?'#c8d8e8':'#8ab0c0'}}>{item.l}</div>
-                            <div style={{fontSize:10,color:'#3a5a6a',marginTop:1}}>{item.d}</div>
+                            <div style={{fontSize:10,color:C.subtext,marginTop:1}}>{item.d}</div>
                           </div>
                         </div>
                       ))}
@@ -2783,13 +2604,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div key={i} style={{marginBottom:14}}>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:s.c,letterSpacing:2,marginBottom:6}}>{s.t}</div>
                       {s.rules.map((r,j)=>(
-                        <div key={j} style={{display:'flex',gap:8,marginBottom:4,fontSize:11,color:'#8ab0c0'}}>
+                        <div key={j} style={{display:'flex',gap:8,marginBottom:4,fontSize:11,color:C.subtext}}>
                           <span style={{color:s.c,flexShrink:0}}>→</span>{r}
                         </div>
                       ))}
                     </div>
                   ))}
-                  <div style={{background:'#050c14',border:`1px dashed ${C.border}`,borderRadius:4,padding:11,fontSize:11,color:'#6a9aaa',lineHeight:1.7}}>
+                  <div style={{background:C.panel,border:`1px dashed ${C.border}`,borderRadius:4,padding:11,fontSize:11,color:'#6a9aaa',lineHeight:1.7}}>
                     <span style={{fontSize:9,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
                     Require <span style={{color:C.green}}>2+ TA</span> + <span style={{color:C.blue}}>1 flow</span> or <span style={{color:C.orange}}>1 catalyst</span> before entry.
                   </div>
@@ -2805,7 +2626,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       {sec.rules.map((r,j)=>(
                         <div key={j} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${sec.color}`,borderRadius:4,padding:'8px 12px',display:'grid',gridTemplateColumns:'100px 1fr',gap:8,alignItems:'center',marginBottom:4}}>
                           <span style={{fontSize:9,color:sec.color,letterSpacing:.8,fontWeight:600}}>{r.tr.toUpperCase()}</span>
-                          <span style={{fontSize:11,color:'#8ab0c0',lineHeight:1.5}}>{r.a}</span>
+                          <span style={{fontSize:11,color:C.subtext,lineHeight:1.5}}>{r.a}</span>
                         </div>
                       ))}
                     </div>
@@ -2813,7 +2634,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <Card color={`${C.red}50`}>
                     <Lbl color={C.red}>⚠️ CARDINAL RULES</Lbl>
                     {['Never widen your stop to give it more room','If unsure whether to exit — exit. Re-enter later','Always post exits to your Telegram channel','Partial exits: book 50% at target, trail the rest'].map((r,i)=>(
-                      <div key={i} style={{display:'flex',gap:7,marginBottom:4,fontSize:11,color:'#8ab0c0'}}>
+                      <div key={i} style={{display:'flex',gap:7,marginBottom:4,fontSize:11,color:C.subtext}}>
                         <span style={{color:C.red,flexShrink:0}}>→</span>{r}
                       </div>
                     ))}
@@ -2939,16 +2760,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                     {l:'TARGET',v:s.target,c:C.green},
                                     {l:'STOP',v:s.stop,c:C.red},
                                   ].map((f,j)=>(
-                                    <div key={j} style={{background:'#06101a',borderRadius:3,padding:'5px 7px'}}>
+                                    <div key={j} style={{background:C.cardAlt,borderRadius:3,padding:'5px 7px'}}>
                                       <div style={{fontSize:7,color:C.dim,letterSpacing:1.5,marginBottom:1}}>{f.l}</div>
                                       <div style={{fontSize:10,color:f.c,fontWeight:600}}>{f.v}</div>
                                     </div>
                                   ))}
                                 </div>
                                 <div style={{display:'flex',gap:12,marginTop:6,fontSize:10,color:C.dim}}>
-                                  <span>IV: <span style={{color:'#8ab0c0'}}>{s.iv}</span></span>
-                                  <span>Δ: <span style={{color:'#8ab0c0'}}>{s.delta}</span></span>
-                                  <span>OI: <span style={{color:'#8ab0c0'}}>{s.oi.toLocaleString()}</span></span>
+                                  <span>IV: <span style={{color:C.subtext}}>{s.iv}</span></span>
+                                  <span>Δ: <span style={{color:C.subtext}}>{s.delta}</span></span>
+                                  <span>OI: <span style={{color:C.subtext}}>{s.oi.toLocaleString()}</span></span>
                                 </div>
                               </div>
                             ))}
