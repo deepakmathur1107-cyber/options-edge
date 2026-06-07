@@ -5,6 +5,13 @@
  * POST   /api/user/trades          → create a trade
  * PUT    /api/user/trades?id=<id>  → update a trade
  * DELETE /api/user/trades?id=<id>  → delete a trade
+ *
+ * Exact column names from trades table:
+ * id, clerk_user_id, ticker, type, status, entry, close_price, pnl,
+ * contracts, strike, expiration, conviction, iv_at_entry, chg_pct_at_entry,
+ * be_req_pct, hard_block_count, grade, notes, created_at, option_type,
+ * strategy, premium, close_date, updated_at, action,
+ * entry_price, exit_price, closed_at
  */
 
 const { createClient } = require('@supabase/supabase-js')
@@ -81,44 +88,54 @@ module.exports = async function handler(req, res) {
   if (req.method === 'POST') {
     const body = req.body || {}
 
-    // Support both TradeLog field names and legacy App.jsx journal field names
-    const symbol      = body.symbol      || body.ticker  || ''
-    const option_type = body.option_type || body.type    || 'call'
-    const action      = body.action      || body.side    || 'buy'
-    const expiration  = body.expiration  || body.expiry  || null
-    const contracts   = body.contracts   != null ? body.contracts : 1
-    const notes       = body.notes       || null
-    const status      = body.status      || 'open'
-    const strategy    = body.strategy    || null
-    const grade       = body.grade       || null
+    // Normalise incoming field names — TradeLog sends symbol/entry_price,
+    // legacy App.jsx journal sends ticker/entry/premium
+    const ticker      = (body.symbol      || body.ticker  || '').toString().toUpperCase().trim()
+    const option_type = body.option_type  || body.type    || 'call'
+    const action      = body.action       || body.side    || 'buy'
+    const expiration  = body.expiration   || body.expiry  || null
+    const contracts   = body.contracts    != null ? body.contracts : 1
+    const notes       = body.notes        || null
+    const status      = body.status       || 'open'
+    const strategy    = body.strategy     || null
+    const grade       = body.grade        || null
 
-    // entry_price (TradeLog) OR premium OR entry (legacy journal)
-    const premiumRaw = body.entry_price != null ? body.entry_price
-                     : body.premium     != null ? body.premium
-                     : body.entry       != null ? body.entry
-                     : null
+    // Entry price: accept entry_price (TradeLog), premium, or entry (legacy)
+    const entry_price = body.entry_price  != null ? toNum(body.entry_price)
+                      : body.premium      != null ? toNum(body.premium)
+                      : body.entry        != null ? toNum(body.entry)
+                      : null
+
+    // Keep legacy `entry` text field in sync (stores formatted string)
+    const entry_text  = body.entry        || (entry_price != null ? String(entry_price) : null)
+
+    if (!ticker) return res.status(400).json({ error: 'ticker / symbol is required' })
 
     const { data, error } = await supabase
       .from('trades')
       .insert({
         clerk_user_id:    userId,
-        symbol:           symbol.toString().toUpperCase().trim(),
+        ticker,
         option_type,
         action,
         strategy,
-        strike:           body.strike      != null ? Number(body.strike)    : null,
-        expiration,
-        contracts:        Number(contracts) || 1,
-        entry_price:      toNum(premiumRaw),
-        notes,
+        grade,
         status,
+        notes,
+        expiration,
+        contracts:        body.contracts  != null ? String(contracts) : '1',
+        strike:           body.strike     != null ? String(body.strike) : null,
+        entry:            entry_text,
+        entry_price,
+        premium:          entry_price,    // keep premium in sync
         pnl:              toNum(body.pnl),
         conviction:       toNum(body.conviction),
         iv_at_entry:      toNum(body.iv),
         chg_pct_at_entry: toNum(body.chgPctAtEntry),
         be_req_pct:       toNum(body.breakevenReqPct),
         hard_block_count: toNum(body.hardBlockCount) || 0,
-        grade,
+        // type mirrors option_type for legacy reads
+        type:             option_type,
       })
       .select()
       .single()
@@ -137,20 +154,32 @@ module.exports = async function handler(req, res) {
 
     if (body.status      !== undefined) updates.status      = body.status
     if (body.notes       !== undefined) updates.notes       = body.notes
-    if (body.contracts   !== undefined) updates.contracts   = Number(body.contracts)
     if (body.pnl         !== undefined) updates.pnl         = toNum(body.pnl)
+    if (body.contracts   !== undefined) updates.contracts   = String(body.contracts)
+    if (body.grade       !== undefined) updates.grade       = body.grade
 
-    // Closed timestamp — accept either field name
-    if (body.closed_at   !== undefined) updates.closed_at   = body.closed_at
-    if (body.close_date  !== undefined) updates.closed_at   = body.close_date
+    // Exit / close price — accept exit_price (TradeLog) or close_price (legacy)
+    const exitVal = body.exit_price  != null ? toNum(body.exit_price)
+                  : body.close_price != null ? toNum(body.close_price)
+                  : undefined
+    if (exitVal !== undefined) {
+      updates.exit_price  = exitVal
+      updates.close_price = String(exitVal)  // keep legacy field in sync
+    }
 
-    // Exit price — accept exit_price (TradeLog) or close_price (legacy)
-    if (body.exit_price  !== undefined) updates.exit_price  = toNum(body.exit_price)
-    if (body.close_price !== undefined) updates.exit_price  = toNum(body.close_price)
+    // Closed timestamp
+    if (body.closed_at  !== undefined) updates.closed_at  = body.closed_at
+    if (body.close_date !== undefined) updates.close_date = body.close_date
 
     // Entry price update
-    if (body.entry_price !== undefined) updates.entry_price = toNum(body.entry_price)
-    if (body.premium     !== undefined) updates.entry_price = toNum(body.premium)
+    if (body.entry_price !== undefined) {
+      updates.entry_price = toNum(body.entry_price)
+      updates.premium     = toNum(body.entry_price)
+    }
+    if (body.premium !== undefined) {
+      updates.premium     = toNum(body.premium)
+      updates.entry_price = toNum(body.premium)
+    }
 
     if (!Object.keys(updates).length) {
       return res.status(400).json({ error: 'No valid fields to update' })
