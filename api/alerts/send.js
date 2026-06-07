@@ -55,20 +55,25 @@ async function fetchOptionsChain(symbol, expiration) {
 
 function computeEdgeScore(option) {
   const { greeks, volume, open_interest, bid, ask } = option
-  if (!greeks || bid == null || ask == null) return null
+  if (bid == null || ask == null || bid === 0) return null
   const mid = (bid + ask) / 2
+  if (mid === 0) return null
   const spread = ask - bid
   const spreadPct = mid > 0 ? spread / mid : 1
-  const delta = Math.abs(greeks.delta || 0)
-  const theta = Math.abs(greeks.theta || 0)
-  const iv = greeks.smv_vol || greeks.bid_iv || 0
+  const delta = Math.abs(greeks?.delta || 0)
+  const theta = Math.abs(greeks?.theta || 0)
+  const iv = greeks?.smv_vol || greeks?.bid_iv || 0
   const oi = open_interest || 0
   const vol = volume || 0
-  const deltaScore = delta >= 0.2 && delta <= 0.4 ? 20 : delta >= 0.1 && delta <= 0.5 ? 10 : 0
+
+  const deltaScore = delta >= 0.2 && delta <= 0.4 ? 20
+    : delta >= 0.1 && delta <= 0.5 ? 10
+    : delta > 0 ? 5 : 0
   const thetaScore = mid > 0 ? Math.min(20, (theta / mid) * 200) : 0
-  const spreadScore = spreadPct < 0.05 ? 20 : spreadPct < 0.1 ? 12 : spreadPct < 0.2 ? 6 : 0
-  const liquidityScore = oi > 500 && vol > 100 ? 20 : oi > 100 ? 10 : 0
-  const ivScore = iv > 0.15 && iv < 0.6 ? 20 : 0
+  const spreadScore = spreadPct < 0.05 ? 20 : spreadPct < 0.1 ? 12 : spreadPct < 0.2 ? 6 : spreadPct < 0.5 ? 2 : 0
+  const liquidityScore = oi > 500 && vol > 100 ? 20 : oi > 100 ? 12 : oi > 0 ? 6 : 0
+  const ivScore = iv > 0.15 && iv < 0.6 ? 20 : iv > 0 ? 8 : 0
+
   return Math.round(deltaScore + thetaScore + spreadScore + liquidityScore + ivScore)
 }
 
