@@ -48,9 +48,12 @@ export default function AppNav({
 
   const iconBtn = {
     ...btnBase,
-    background: 'transparent', border: `1px solid ${C.border}`,
-    color: C.dim, borderRadius: 4, padding: '6px 10px',
+    background: isDark ? '#1a2e3e' : '#e8edf4',
+    border: `1px solid ${C.border}`,
+    color: C.text,
+    borderRadius: 6, padding: '6px 10px',
     fontSize: 14, lineHeight: 1,
+    transition: 'all .15s',
   }
 
   const subLabel = isTradesPage ? '/ TRADES' : '/ ALERT SETTINGS'
@@ -144,16 +147,31 @@ export default function AppNav({
             )}
             {tradierMode && (
               <span style={{
-                fontSize: 8, color: C.dim, letterSpacing: 1,
-                padding: '3px 7px', border: `1px solid ${C.border}`, borderRadius: 3,
+                fontSize: 8, fontWeight: 700, letterSpacing: 1,
+                padding: '4px 9px', borderRadius: 4,
+                background: tradierMode === 'sandbox' ? `${C.orange}20` : `${C.green}20`,
+                border: `1px solid ${tradierMode === 'sandbox' ? C.orange+'60' : C.green+'60'}`,
+                color: tradierMode === 'sandbox' ? C.orange : C.green,
               }}>{tradierMode.toUpperCase()}</span>
             )}
-            <button className="oe-navbtn" onClick={() => setIsDark(p => !p)} style={iconBtn}
-              title={isDark ? 'Light mode' : 'Dark mode'}>
+            <button className="oe-navbtn" onClick={() => setIsDark(p => !p)}
+              title={isDark ? 'Light mode' : 'Dark mode'}
+              style={{
+                ...iconBtn,
+                background: '#f59e0b22',
+                border: `1px solid #f59e0b60`,
+                color: '#f59e0b',
+                fontWeight: 700,
+              }}>
               {isDark ? '☀' : '🌙'}
             </button>
             <Link to="/app/settings/alerts" className="oe-navbtn" title="Alert settings" style={{
-              ...iconBtn, textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+              ...iconBtn,
+              textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+              background: `${C.blue}22`,
+              border: `1px solid ${C.blue}60`,
+              color: C.blue,
+              fontWeight: 700,
             }}>🔔</Link>
             {userInitial && (
               <>
@@ -164,12 +182,18 @@ export default function AppNav({
                   fontSize: 12, color: C.green, fontWeight: 700,
                 }}>{userInitial.toUpperCase()}</div>
                 <button className="oe-navbtn" onClick={openPortal} style={{
-                  ...btnBase, background: 'transparent', border: 'none',
-                  color: C.dim, fontSize: 9, letterSpacing: .5,
+                  ...btnBase,
+                  background: `${C.green}15`,
+                  border: `1px solid ${C.green}40`,
+                  color: C.green, fontSize: 9, letterSpacing: .5,
+                  borderRadius: 4, padding: '3px 8px', fontWeight: 600,
                 }}>PRO</button>
                 <button className="oe-navbtn" onClick={onSignOut} style={{
-                  ...btnBase, background: 'transparent', border: `1px solid ${C.border}`,
-                  color: C.dim, borderRadius: 3, padding: '4px 9px', fontSize: 9, letterSpacing: .5,
+                  ...btnBase,
+                  background: `${C.red}15`,
+                  border: `1px solid ${C.red}40`,
+                  color: C.red, borderRadius: 4, padding: '4px 9px',
+                  fontSize: 9, letterSpacing: .5, fontWeight: 600,
                 }}>OUT</button>
               </>
             )}

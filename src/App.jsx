@@ -878,6 +878,12 @@ export default function App(props={}) {
       const tradeType=scanType==='Any'?(bearish?'Put':'Call'):scanType
 
       const step=autoStep(price)
+      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
+      const isSpread = SPREAD_TYPES.includes(scanType)
+      const tradeData = isSpread
+        ? buildSpreadResult(chain, price, step, scanType, tfCfg)
+        : buildNakedResult (chain, price, step, optType, tfCfg)
+      if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
       const strikePct=bearish?(2-tfCfg.strikePct):tfCfg.strikePct
       const tgtStrike=Math.round(price*strikePct/step)*step
       const side=chain.filter(o=>o.option_type===optType)
@@ -1041,13 +1047,6 @@ export default function App(props={}) {
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ All data from Tradier ${tradierMode}`)
 
-      // Build result: spread if explicitly selected, else naked option
-      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
-      const isSpread = SPREAD_TYPES.includes(scanType)
-      const tradeData = isSpread
-        ? buildSpreadResult(chain, price, step, scanType, tfCfg)
-        : buildNakedResult (chain, price, step, optType, tfCfg)
-      if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
       dbg(`   ✓ Structure: ${tradeData.structureType}`)
       dbg(`   ✓ Strike: ${tradeData.strikeStr} | Entry: ${tradeData.entry}`)
       if (tradeData.legs) tradeData.legs.forEach(l=>dbg(`      ${l}`))
@@ -1699,9 +1698,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontSize:9,color:C.subtext,marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
-                  background:indexAlertsLoading?'transparent':`${C.green}18`,
-                  border:`1px solid ${indexAlertsLoading?C.border:C.green}`,
-                  color:indexAlertsLoading?C.dim:C.green,
+                  background: indexAlertsLoading ? C.cardAlt : C.green,
+                  border: `1px solid ${indexAlertsLoading ? C.border : C.green}`,
+                  color: indexAlertsLoading ? C.dim : '#000',
+                  fontWeight: 700,
                   padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
                   cursor:indexAlertsLoading?'not-allowed':'pointer',
                   fontFamily:"'Bebas Neue',sans-serif",
@@ -1752,9 +1752,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontSize:9,color:C.subtext,marginTop:2}}>Claude AI brief {'·'} premarket news {'·'} key levels</div>
                 </div>
                 <button className="hv" onClick={fetchMorningBrief} disabled={briefLoading} style={{
-                  background:briefLoading?'transparent':`${C.orange}18`,
-                  border:`1px solid ${briefLoading?C.border:C.orange}`,
-                  color:briefLoading?C.dim:C.orange,
+                  background: briefLoading ? C.cardAlt : C.orange,
+                  border: `1px solid ${briefLoading ? C.border : C.orange}`,
+                  color: briefLoading ? C.dim : '#000',
+                  fontWeight: 700,
                   padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
                   cursor:briefLoading?'default':'pointer',fontFamily:"'Bebas Neue',sans-serif",
                 }}>
@@ -1774,7 +1775,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
                 <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
-                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>OPEN</button>
+                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:9,color:'#000',background:C.blue,border:'none',padding:'4px 10px',borderRadius:4,cursor:'pointer',fontWeight:700}}>OPEN</button>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:clColor,letterSpacing:1,lineHeight:1}}>{clScore}%</div>
@@ -1857,9 +1858,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <button className="hv" onClick={runScan} disabled={scanning||!scanTicker} style={{
               width:'100%',padding:'15px',borderRadius:10,fontSize:15,letterSpacing:2,cursor:'pointer',
               fontFamily:"'Bebas Neue',sans-serif",marginBottom:12,
-              background:scanning?`${C.green}10`:`${C.green}22`,
-              border:`1px solid ${scanning||!scanTicker?C.border:C.green}`,
-              color:scanning||!scanTicker?C.dim:C.green,
+              background: scanning ? `${C.green}15` : !scanTicker ? C.cardAlt : C.green,
+              border: `1px solid ${scanning||!scanTicker ? C.border : C.green}`,
+              color: scanning ? C.dim : !scanTicker ? C.dim : '#000',
+              fontWeight: 700,
               boxShadow:scanning?'none':C.shadow,
             }}>
               {scanning?<span className="pulse">🔴 FETCHING LIVE DATA — ${scanTicker}...</span>:`🔍 SCAN $${scanTicker||'TICKER'} — LIVE TRADIER DATA`}
@@ -1895,8 +1897,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
-                    <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:`${C.orange}20`,border:`1px solid ${C.orange}`,color:C.orange,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
+                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
+                    <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
                       <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
                     )}
@@ -2076,9 +2078,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </div>
                 </div>
                 <button className="hv" onClick={toggleAuto} style={{
-                  background:autoOn?`${C.red}20`:`${C.green}20`,
-                  border:`1px solid ${autoOn?C.red:C.green}`,
-                  color:autoOn?C.red:C.green,
+                  background: autoOn ? C.red : C.green,
+                  border: `none`,
+                  color: '#000',
+                  fontWeight: 700,
                   padding:'8px 18px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer',
                   fontFamily:"'Bebas Neue',sans-serif",
                 }}>{autoOn?'⏹ STOP':'▶ START'}</button>

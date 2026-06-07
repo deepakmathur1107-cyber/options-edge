@@ -5,7 +5,7 @@
  * Clerk dev instance serves at /app base path until custom domain + Clerk Production.
  */
 import { useState, useEffect } from 'react'
-import { ClerkProvider, useAuth, useUser, SignIn, SignUp } from '@clerk/clerk-react'
+import { ClerkProvider, useAuth, useUser, SignIn, SignUp, useClerk } from '@clerk/clerk-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import App from './App'
 import AlertSettings from './pages/AlertSettings'
@@ -21,6 +21,7 @@ const ls = (key, fallback = '') => {
 function AuthShell() {
   const { getToken, isLoaded, isSignedIn } = useAuth()
   const { user } = useUser()
+  const { signOut } = useClerk()
 
   // ── Theme lives here — shared across all pages ──────────────────────────
   const [isDark, setIsDark] = useState(() => ls('isDark', '1') === '1')
@@ -65,7 +66,7 @@ function AuthShell() {
     userEmail:   user?.primaryEmailAddress?.emailAddress ?? '',
     userInitial: user?.firstName?.[0] ?? user?.primaryEmailAddress?.emailAddress?.[0] ?? '',
     openPortal,
-    onSignOut: () => window.location.href = '/sign-out',
+    onSignOut: () => signOut(() => window.location.href = '/'),
 
     // Theme — passed to every page so they all stay in sync
     isDark,
