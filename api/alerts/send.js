@@ -142,6 +142,7 @@ module.exports = async function handler(req, res) {
 
     await Promise.all(allSymbols.map(async symbol => {
       try {
+        console.log('Scanning symbol:', symbol)
         const [quote, expiration] = await Promise.all([
           fetchQuote(symbol),
           fetchNearestExpiration(symbol),
@@ -162,7 +163,8 @@ module.exports = async function handler(req, res) {
             edgeScore: o.edgeScore,
           }))
         scanResults[symbol] = contracts
-      } catch {}
+      } catch (e) {console.error('Scan failed for', symbol, e.message)
+                  }
     }))
 
     let sent = 0
