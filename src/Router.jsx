@@ -1,8 +1,9 @@
 /**
  * src/Router.jsx
- * 
+ *
  * - isDark lives here, shared to all pages
- * - Sign out goes to /sign-in (not / which bounces back to /app)
+ * - Auth guard: unauthenticated users are redirected to /sign-in
+ * - Sign out goes to /sign-in
  * - authProps.getToken is a stable wrapper that always returns a fresh JWT
  */
 import { useState, useEffect } from 'react'
@@ -11,15 +12,23 @@ import {
   SignIn, SignUp, useClerk,
 } from '@clerk/clerk-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import App          from './App'
+import App           from './App'
 import AlertSettings from './pages/AlertSettings'
-import TradeLog     from './pages/TradeLog'
+import TradeLog      from './pages/TradeLog'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 
 const ls = (key, fallback = '') => {
   try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
+}
+
+// ── Auth guard ────────────────────────────────────────────────────────────────
+// Wraps any protected route. Redirects to /sign-in if not signed in.
+function Protected({ children, isLoaded, isSignedIn }) {
+  if (!isLoaded) return null                          // wait for Clerk
+  if (!isSignedIn) return <Navigate to="/sign-in" replace />
+  return children
 }
 
 function AuthShell() {
@@ -62,7 +71,7 @@ function AuthShell() {
     } catch (e) { console.error('Portal error:', e) }
   }
 
-  // ── Sign out → /sign-in (NOT / which bounces back to /app) ───────────────
+  // ── Sign out ──────────────────────────────────────────────────────────────
   const handleSignOut = () => {
     signOut().then(() => {
       window.location.href = '/sign-in'
@@ -72,7 +81,6 @@ function AuthShell() {
   }
 
   // ── Stable getToken wrapper ───────────────────────────────────────────────
-  // Always returns a fresh token or null. Never throws.
   const stableGetToken = async () => {
     try {
       const token = await getToken({ skipCache: true })
@@ -98,17 +106,34 @@ function AuthShell() {
     C,
   }
 
+  const guard = { isLoaded, isSignedIn }
+
   return (
     <Routes>
-      <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
-      <Route path="/app/trades"          element={<TradeLog      {...authProps} />} />
-      <Route path="/app"                 element={<App           {...authProps} />} />
+      {/* ── Protected routes ── */}
+      <Route path="/app/settings/alerts" element={
+        <Protected {...guard}><AlertSettings {...authProps} /></Protected>
+      } />
+      <Route path="/app/trades" element={
+        <Protected {...guard}><TradeLog {...authProps} /></Protected>
+      } />
+      <Route path="/app" element={
+        <Protected {...guard}><App {...authProps} /></Protected>
+      } />
+
+      {/* ── Auth routes ── */}
       <Route path="/sign-in/*"
         element={<SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/app" />} />
       <Route path="/sign-up/*"
         element={<SignUp routing="path" path="/sign-up" fallbackRedirectUrl="/app" />} />
-      <Route path="/"  element={<Navigate to="/app" replace />} />
-      <Route path="*"  element={<Navigate to="/app" replace />} />
+
+      {/* ── Catch-all: unauthenticated → sign-in, authenticated → app ── */}
+      <Route path="/" element={
+        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
+      } />
+      <Route path="*" element={
+        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
+      } />
     </Routes>
   )
 }
@@ -117,8 +142,6 @@ export default function Router() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
-      fallbackRedirectUrl="/app"
-      fallbackRedirectUrl="/app"
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
     >
