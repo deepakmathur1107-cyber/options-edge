@@ -5,7 +5,6 @@
  * NOTE: Clerk dev instance serves app at /app base path.
  * All routes prefixed with /app until custom domain + Clerk Production is set up.
  */
-
 import { ClerkProvider, useAuth, useUser, SignIn, SignUp } from '@clerk/clerk-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import App from './App'
@@ -46,13 +45,14 @@ function AuthShell() {
 
   return (
     <Routes>
-    <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
-    <Route path="/app"                 element={<App {...authProps} />} />
-    <Route path="/sign-in/*"           element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
-    <Route path="/sign-up/*"           element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
-    <Route path="/"                    element={<Navigate to="/app" replace />} />
-    <Route path="*"                    element={<Navigate to="/app" replace />} />
-  </Routes>
+      <Route path="/app/settings/alerts" element={<AlertSettings {...authProps} />} />
+      <Route path="/app/trades"          element={<TradeLog {...authProps} />} />
+      <Route path="/app"                 element={<App {...authProps} />} />
+      <Route path="/sign-in/*"           element={<SignIn routing="path" path="/sign-in" afterSignInUrl="/app" />} />
+      <Route path="/sign-up/*"           element={<SignUp routing="path" path="/sign-up" afterSignUpUrl="/app" />} />
+      <Route path="/"                    element={<Navigate to="/app" replace />} />
+      <Route path="*"                    element={<Navigate to="/app" replace />} />
+    </Routes>
   )
 }
 
