@@ -52,6 +52,12 @@ async function hasActiveSubscription(userId) {
   return ['active', 'trialing'].includes(data.status)
 }
 
+function toNum(val) {
+  if (val == null) return null
+  const n = Number(String(val).replace(/[^0-9.-]/g, ''))
+  return isNaN(n) ? null : n
+}
+
 module.exports = async function handler(req, res) {
   const userId = await getUserId(req)
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
@@ -59,7 +65,7 @@ module.exports = async function handler(req, res) {
   const subscribed = await hasActiveSubscription(userId)
   if (!subscribed) return res.status(402).json({ error: 'Subscription required' })
 
-  // ── GET ──────────────────────────────────────────────────────────────────
+  // ── GET ───────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('trades')
@@ -71,38 +77,48 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ trades: data })
   }
 
-  // ── POST ─────────────────────────────────────────────────────────────────
+  // ── POST ──────────────────────────────────────────────────────────────────
   if (req.method === 'POST') {
-    const {
-      symbol, option_type, strategy, strike, expiration,
-      contracts, premium, notes, status,
-      // Legacy fields from App.jsx journal
-      ticker, type, entry, exitPrice, pnl,
-      expiry, date, conviction, iv, chgPctAtEntry,
-      breakevenReqPct, hardBlockCount, grade,
-    } = req.body || {}
+    const body = req.body || {}
+
+    // Support both TradeLog field names and legacy App.jsx journal field names
+    const symbol      = body.symbol      || body.ticker  || ''
+    const option_type = body.option_type || body.type    || 'call'
+    const action      = body.action      || body.side    || 'buy'
+    const expiration  = body.expiration  || body.expiry  || null
+    const contracts   = body.contracts   != null ? body.contracts : 1
+    const notes       = body.notes       || null
+    const status      = body.status      || 'open'
+    const strategy    = body.strategy    || null
+    const grade       = body.grade       || null
+
+    // entry_price (TradeLog) OR premium OR entry (legacy journal)
+    const premiumRaw = body.entry_price != null ? body.entry_price
+                     : body.premium     != null ? body.premium
+                     : body.entry       != null ? body.entry
+                     : null
 
     const { data, error } = await supabase
       .from('trades')
       .insert({
-        clerk_user_id: userId,
-        symbol: (symbol || ticker || '').toUpperCase(),
-        option_type: option_type || type || 'call',
-        strategy: strategy || null,
-        strike: strike ? Number(strike) : null,
-        expiration: expiration || expiry || null,
-        contracts: Number(contracts || 1),
-        premium: premium != null ? Number(premium)
-          : entry ? Number(String(entry).replace(/[^0-9.]/g, '')) : null,
-        notes: notes || null,
-        status: status || 'open',
-        pnl: pnl ? Number(String(pnl).replace(/[^0-9.-]/g, '')) : null,
-        conviction: conviction ? Number(conviction) : null,
-        iv_at_entry: iv ? Number(iv) : null,
-        chg_pct_at_entry: chgPctAtEntry ? Number(chgPctAtEntry) : null,
-        be_req_pct: breakevenReqPct ? Number(breakevenReqPct) : null,
-        hard_block_count: hardBlockCount ? Number(hardBlockCount) : 0,
-        grade: grade || null,
+        clerk_user_id:    userId,
+        symbol:           symbol.toString().toUpperCase().trim(),
+        option_type,
+        action,
+        strategy,
+        strike:           body.strike      != null ? Number(body.strike)    : null,
+        expiration,
+        contracts:        Number(contracts) || 1,
+        entry_price:      toNum(premiumRaw),
+        notes,
+        status,
+        pnl:              toNum(body.pnl),
+        conviction:       toNum(body.conviction),
+        iv_at_entry:      toNum(body.iv),
+        chg_pct_at_entry: toNum(body.chgPctAtEntry),
+        be_req_pct:       toNum(body.breakevenReqPct),
+        hard_block_count: toNum(body.hardBlockCount) || 0,
+        grade,
       })
       .select()
       .single()
@@ -111,23 +127,40 @@ module.exports = async function handler(req, res) {
     return res.status(201).json({ trade: data })
   }
 
-  // ── PUT ──────────────────────────────────────────────────────────────────
+  // ── PUT ───────────────────────────────────────────────────────────────────
   if (req.method === 'PUT') {
     const { id } = req.query
     if (!id) return res.status(400).json({ error: 'id required' })
 
-    const allowed = ['status', 'close_price', 'close_date', 'notes', 'contracts', 'premium', 'pnl']
+    const body = req.body || {}
     const updates = {}
-    for (const key of allowed) {
-      if (req.body?.[key] !== undefined) updates[key] = req.body[key]
-    }
+
+    if (body.status      !== undefined) updates.status      = body.status
+    if (body.notes       !== undefined) updates.notes       = body.notes
+    if (body.contracts   !== undefined) updates.contracts   = Number(body.contracts)
+    if (body.pnl         !== undefined) updates.pnl         = toNum(body.pnl)
+
+    // Closed timestamp — accept either field name
+    if (body.closed_at   !== undefined) updates.closed_at   = body.closed_at
+    if (body.close_date  !== undefined) updates.closed_at   = body.close_date
+
+    // Exit price — accept exit_price (TradeLog) or close_price (legacy)
+    if (body.exit_price  !== undefined) updates.exit_price  = toNum(body.exit_price)
+    if (body.close_price !== undefined) updates.exit_price  = toNum(body.close_price)
+
+    // Entry price update
+    if (body.entry_price !== undefined) updates.entry_price = toNum(body.entry_price)
+    if (body.premium     !== undefined) updates.entry_price = toNum(body.premium)
+
     if (!Object.keys(updates).length) {
       return res.status(400).json({ error: 'No valid fields to update' })
     }
 
+    updates.updated_at = new Date().toISOString()
+
     const { data, error } = await supabase
       .from('trades')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', id)
       .eq('clerk_user_id', userId)
       .select()
@@ -138,7 +171,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ trade: data })
   }
 
-  // ── DELETE ───────────────────────────────────────────────────────────────
+  // ── DELETE ────────────────────────────────────────────────────────────────
   if (req.method === 'DELETE') {
     const { id } = req.query
     if (!id) return res.status(400).json({ error: 'id required' })
