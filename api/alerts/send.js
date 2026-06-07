@@ -192,7 +192,8 @@ const filteredContracts = contracts
       : typeof pref.symbols === 'string' 
       ? pref.symbols.split(',').map(s => s.trim()).filter(Boolean)
       : ['SPY', 'QQQ']
-      const matching = userSymbols.flatMap(s => scanResults[s] || []).filter(c => c.edgeScore >= minScore)
+      const matching = userSymbols.flatMap(s => scanResults[s] || []).slice(0, 3)
+console.log('matching contracts:', JSON.stringify(matching))
       if (!matching.length) return
 
       await resend.emails.send({
