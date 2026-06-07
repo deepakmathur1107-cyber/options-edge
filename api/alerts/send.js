@@ -14,7 +14,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-const TRADIER_TOKEN = process.env.TRADIER_API_TOKEN
+const TRADIER_TOKEN = process.env.TRADIER_TOKEN
 const TRADIER_BASE = 'https://sandbox.tradier.com/v1'
 const FROM_EMAIL = process.env.ALERT_FROM_EMAIL || 'onboarding@resend.dev'
 
