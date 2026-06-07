@@ -81,12 +81,14 @@ export default function AlertSettings(props) {
   }
 
   const labelSt = {
-    fontSize: 10, color: C.dim, letterSpacing: 1.2,
+    fontSize: 11, color: C.dim, letterSpacing: 0,
     marginBottom: 5, display: 'block', textTransform: 'uppercase',
+    fontFamily: "'Inter',sans-serif", fontWeight: 600,
   }
   const cardSt = {
     background: C.card, border: `1px solid ${C.border}`,
-    borderRadius: 8, padding: '18px 20px', marginBottom: 16,
+    borderRadius: 10, padding: '20px 24px', marginBottom: 16,
+    boxShadow: isDark ? '0 1px 3px rgba(0,0,0,.4)' : '0 1px 3px rgba(0,0,0,.08)',
   }
 
   return (
@@ -97,6 +99,7 @@ export default function AlertSettings(props) {
       paddingBottom: 80,
     }}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         input:focus,select:focus{outline:none;border-color:${C.green}!important}
         select option{background:${C.inputBg};color:${C.text}}
         ::-webkit-scrollbar{width:3px}
@@ -110,13 +113,13 @@ export default function AlertSettings(props) {
         showTools={false} setShowTools={() => {}}
       />
 
-      <div style={{ maxWidth: 600, margin: '0 auto', padding: '28px 16px' }}>
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: '28px 16px' }}>
 
         {/* Page title */}
         <div style={{ marginBottom: 28 }}>
           <h1 style={{
             fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: 28, letterSpacing: 3, color: C.green,
+            fontSize: 32, letterSpacing: 3, color: C.green,
             margin: 0, lineHeight: 1,
           }}>ALERT SETTINGS</h1>
           <p style={{ fontSize: 10, color: C.dim, marginTop: 6, letterSpacing: 1 }}>
@@ -147,15 +150,15 @@ export default function AlertSettings(props) {
                 <div
                   onClick={() => setPrefs(p => ({ ...p, email_alerts: !p.email_alerts }))}
                   style={{
-                    width: 44, height: 24, borderRadius: 12, cursor: 'pointer',
+                    width: 52, height: 28, borderRadius: 14, cursor: 'pointer',
                     background: prefs.email_alerts ? C.green : C.border,
                     position: 'relative', transition: 'background .2s', flexShrink: 0,
                   }}
                 >
                   <div style={{
                     position: 'absolute', top: 3,
-                    left: prefs.email_alerts ? 23 : 3,
-                    width: 18, height: 18, borderRadius: '50%',
+                    left: prefs.email_alerts ? 27 : 3,
+                    width: 22, height: 22, borderRadius: '50%',
                     background: prefs.email_alerts ? '#000' : C.bgAlt,
                     transition: 'left .2s',
                     boxShadow: '0 1px 3px rgba(0,0,0,.3)',
@@ -204,12 +207,13 @@ export default function AlertSettings(props) {
                   { range: '80%+',   label: 'High Conv.',  color: C.green },
                 ].map(b => (
                   <div key={b.range} style={{
-                    background: C.cardAlt, borderRadius: 4, padding: '8px 10px',
+                    background: C.cardAlt, borderRadius: 8, padding: '8px 10px',
                     border: `1px solid ${prefs.min_edge_score >= parseInt(b.range) ? b.color + '50' : C.border}`,
                     textAlign: 'center',
+                    boxShadow: isDark ? '0 1px 3px rgba(0,0,0,.3)' : '0 1px 3px rgba(0,0,0,.06)',
                   }}>
-                    <div style={{ fontSize: 11, color: b.color, fontWeight: 600 }}>{b.range}</div>
-                    <div style={{ fontSize: 9, color: C.dim, marginTop: 2 }}>{b.label}</div>
+                    <div style={{ fontSize: 12, color: b.color, fontWeight: 700, fontFamily: "'Inter',sans-serif" }}>{b.range}</div>
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 2, fontFamily: "'Inter',sans-serif" }}>{b.label}</div>
                   </div>
                 ))}
               </div>
@@ -227,11 +231,15 @@ export default function AlertSettings(props) {
                       onClick={() => toggleSymbol(sym)}
                       style={{
                         padding: '7px 14px', borderRadius: 4, cursor: 'pointer',
-                        fontFamily: 'inherit', fontSize: 11, letterSpacing: .8,
+                        fontFamily: "'Inter',sans-serif", fontWeight: 600, fontSize: 12,
+                        height: '38px', letterSpacing: .5,
                         background: active ? `${C.green}18` : C.cardAlt,
                         border: `1px solid ${active ? C.green : C.border}`,
                         color: active ? C.green : C.dim,
                         transition: 'all .15s',
+                        boxShadow: active
+                          ? (isDark ? '0 1px 3px rgba(0,0,0,.4)' : '0 1px 3px rgba(0,0,0,.08)')
+                          : 'none',
                       }}
                     >{sym}</button>
                   )
@@ -256,13 +264,14 @@ export default function AlertSettings(props) {
               onClick={handleSave}
               disabled={saving}
               style={{
-                width: '100%', padding: '14px',
+                width: '100%', padding: '16px',
                 fontFamily: "'Bebas Neue', sans-serif",
-                fontSize: 16, letterSpacing: 2,
+                fontSize: 17, letterSpacing: 2,
                 background: saved ? `${C.green}30` : `${C.green}20`,
                 border: `1px solid ${saved ? C.green : C.green + '80'}`,
                 color: C.green, borderRadius: 6, cursor: saving ? 'not-allowed' : 'pointer',
                 opacity: saving ? 0.6 : 1, transition: 'all .2s',
+                boxShadow: `0 4px 12px ${C.green}40`,
               }}
             >
               {saving ? 'SAVING…' : saved ? '✓ SAVED' : 'SAVE PREFERENCES'}

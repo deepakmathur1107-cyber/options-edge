@@ -32,6 +32,12 @@ export const DARK_THEME = {
   inputBg: '#0d1a26',
 
   isDark: true,
+
+  shadow:   '0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3)',
+  shadowMd: '0 4px 12px rgba(0,0,0,.5), 0 2px 4px rgba(0,0,0,.3)',
+  shadowLg: '0 10px 24px rgba(0,0,0,.6), 0 4px 8px rgba(0,0,0,.4)',
+  radius:   '10px',
+  radiusSm: '6px',
 }
 
 export const LIGHT_THEME = {
@@ -62,6 +68,12 @@ export const LIGHT_THEME = {
   inputBg: '#ffffff',
 
   isDark: false,
+
+  shadow:   '0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05)',
+  shadowMd: '0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05)',
+  shadowLg: '0 10px 24px rgba(0,0,0,.1), 0 4px 8px rgba(0,0,0,.06)',
+  radius:   '10px',
+  radiusSm: '6px',
 }
 
 export const getTheme = (isDark) => isDark ? DARK_THEME : LIGHT_THEME

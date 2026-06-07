@@ -27,12 +27,14 @@ export default function AppNav({
 
   const topTabBtn = (active) => ({
     ...btnBase,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 600,
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '5px 13px', borderRadius: 4,
     background: active ? `${C.green}18` : 'transparent',
     border: `1px solid ${active ? C.green : 'transparent'}`,
     color: active ? C.green : C.dim,
-    fontSize: 11, letterSpacing: 1,
+    fontSize: 12, letterSpacing: 0.3,
   })
 
   const bottomTabBtn = (active) => ({
@@ -41,12 +43,13 @@ export default function AppNav({
     background: 'transparent', border: 'none', cursor: 'pointer',
     borderTop: `2px solid ${active ? C.green : 'transparent'}`,
     transition: 'border-color .2s', flex: 1,
+    height: '58px', paddingBottom: 'env(safe-area-inset-bottom, 0px)',
   })
 
   const iconBtn = {
     ...btnBase,
     background: 'transparent', border: `1px solid ${C.border}`,
-    color: C.dim, borderRadius: 4, padding: '5px 9px',
+    color: C.dim, borderRadius: 4, padding: '6px 10px',
     fontSize: 14, lineHeight: 1,
   }
 
@@ -55,6 +58,7 @@ export default function AppNav({
   return (
     <>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         @keyframes navpulse{0%,100%{opacity:1}50%{opacity:.35}}
         @media(max-width:767px){.oe-topnav{display:none!important}}
         @media(min-width:768px){.oe-bottomnav{display:none!important}}
@@ -68,18 +72,18 @@ export default function AppNav({
       <div className="oe-topnav" style={{
         position: 'sticky', top: 0, zIndex: 100,
         background: C.bgAlt, borderBottom: `1px solid ${C.border}`,
-        boxShadow: isDark ? '0 1px 0 #0a1520' : '0 1px 4px rgba(0,0,0,.06)',
+        boxShadow: isDark ? '0 2px 8px rgba(0,0,0,.3)' : '0 2px 8px rgba(0,0,0,.06)',
       }}>
         <div style={{
           maxWidth: 1100, margin: '0 auto', padding: '0 20px',
-          height: 52, display: 'flex', alignItems: 'center', gap: 6,
+          height: 56, display: 'flex', alignItems: 'center', gap: 6,
         }}>
 
           {/* Logo */}
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginRight: 12, flexShrink: 0 }}>
             <span style={{
               fontFamily: "'Bebas Neue', sans-serif",
-              fontSize: 21, letterSpacing: 3, color: C.green, lineHeight: 1,
+              fontSize: 21, letterSpacing: 4, color: C.green, lineHeight: 1,
             }}>OPTIONS EDGE</span>
             <span style={{ fontSize: 8, color: C.dim, letterSpacing: 2 }}>v3.0</span>
           </div>
@@ -154,10 +158,10 @@ export default function AppNav({
             {userInitial && (
               <>
                 <div style={{
-                  width: 28, height: 28, borderRadius: '50%',
+                  width: 32, height: 32, borderRadius: '50%',
                   background: `${C.green}20`, border: `1px solid ${C.green}40`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, color: C.green, fontWeight: 700,
+                  fontSize: 12, color: C.green, fontWeight: 700,
                 }}>{userInitial.toUpperCase()}</div>
                 <button className="oe-navbtn" onClick={openPortal} style={{
                   ...btnBase, background: 'transparent', border: 'none',
@@ -197,7 +201,7 @@ export default function AppNav({
                   borderTop: `2px solid transparent`,
                 }}>
                   <span style={{ fontSize: 18, lineHeight: 1, color: C.dim }}>{t.icon}</span>
-                  <span style={{ fontSize: 9, letterSpacing: .5, fontFamily: "'IBM Plex Mono',monospace", color: C.dim }}>{t.label}</span>
+                  <span style={{ fontSize: 10, letterSpacing: .5, fontFamily: "'Inter',sans-serif", fontWeight: 600, color: C.dim }}>{t.label}</span>
                 </Link>
               )
               return (
@@ -206,7 +210,7 @@ export default function AppNav({
                   style={bottomTabBtn(active)}
                 >
                   <span style={{ fontSize: 18, lineHeight: 1, color: active ? C.green : C.dim }}>{t.icon}</span>
-                  <span style={{ fontSize: 9, letterSpacing: .5, fontFamily: "'IBM Plex Mono',monospace", color: active ? C.green : C.dim }}>{t.label}</span>
+                  <span style={{ fontSize: 10, letterSpacing: .5, fontFamily: "'Inter',sans-serif", fontWeight: 600, color: active ? C.green : C.dim }}>{t.label}</span>
                 </button>
               )
             })}
