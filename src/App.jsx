@@ -483,7 +483,7 @@ function Field({ label, value, onChange, placeholder, options, rows, type='text'
   }
   return (
     <div>
-      <div style={{fontSize:9,color:themeC.dim,letterSpacing:1.5,marginBottom:4,textTransform:'uppercase'}}>{label}</div>
+      <div style={{fontSize:11,fontWeight:600,color:themeC.dim,letterSpacing:0.5,marginBottom:4,textTransform:'uppercase',fontFamily:"'Inter',sans-serif"}}>{label}</div>
       {options
         ? <select value={value} onChange={e=>onChange(e.target.value)} style={fSt}>
             {options.map(o=><option key={o.v||o} value={o.v||o}>{o.l||o}</option>)}
@@ -507,7 +507,7 @@ function Card({ color, children, style={}, C: lC }) {
 
 function Lbl({ children, color, C: lC }) {
   const themeC = lC || C
-  return <div style={{fontSize:9,color:color??themeC.dim,letterSpacing:2,marginBottom:6,textTransform:'uppercase'}}>{children}</div>
+  return <div style={{fontSize:11,fontWeight:600,color:color??themeC.dim,letterSpacing:0.5,marginBottom:6,textTransform:'uppercase',fontFamily:"'Inter',sans-serif"}}>{children}</div>
 }
 
 function Pill({ label, active, color, onClick, C: lC }) {
@@ -1680,7 +1680,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </div>
                   <div style={{position:'relative',height:6,background:C.border,borderRadius:3,overflow:'hidden'}}>
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
-                    <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:'#2a4a5a'}}/>
+                    <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:C.border}}/>
                   </div>
                   <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:C.subtext,marginTop:3}}>
                     <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
@@ -1809,10 +1809,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         {tab==='scan' && (
           <div className="si">
             {usageLimitHit && (
-              <div style={{background:'#1a0810',border:`1px solid ${C.orange}50`,borderRadius:6,padding:'10px 13px',marginBottom:11,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+              <div style={{background:C.bgDeep,border:`1px solid ${C.orange}50`,borderRadius:6,padding:'10px 13px',marginBottom:11,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
                 <div>
                   <div style={{fontSize:11,color:C.orange,marginBottom:2}}>⚡ Daily scan limit reached ({usageCount}/{scanLimit})</div>
-                  <div style={{fontSize:10,color:'#7a5020'}}>Free tier: {scanLimit} scans/day. Resets at midnight UTC.</div>
+                  <div style={{fontSize:10,color:C.subtext}}>Free tier: {scanLimit} scans/day. Resets at midnight UTC.</div>
                 </div>
                 <button className="hv" onClick={()=>window.location.href='/app'} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>UPGRADE →</button>
               </div>
@@ -1846,12 +1846,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {/* Ticker + Type */}
             <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:9,marginBottom:11}}>
               <div>
-                <div style={{fontSize:9,color:C.dim,letterSpacing:1.5,marginBottom:4}}>TICKER SYMBOL</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>Ticker Symbol</div>
                 <input value={scanTicker} onChange={e=>{setScanTicker(e.target.value.toUpperCase());setScanResult(null)}}
                   placeholder="NVDA, AAPL, SPY..." onKeyDown={e=>e.key==='Enter'&&runScan()}
                   style={{...iSt,fontSize:24,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:2,padding:'14px 16px',borderRadius:10,boxShadow:scanTicker?C.shadow:'none'}}/>
               </div>
-              <Field label="Type" value={scanType} onChange={setScanType} options={['Any','Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
+              <Field label="Type" value={scanType} onChange={setScanType} options={['Any','Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']} C={C}/>
             </div>
 
             <button className="hv" onClick={runScan} disabled={scanning||!scanTicker} style={{
@@ -1865,7 +1865,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {scanning?<span className="pulse">🔴 FETCHING LIVE DATA — ${scanTicker}...</span>:`🔍 SCAN $${scanTicker||'TICKER'} — LIVE TRADIER DATA`}
             </button>
 
-            {scanErr&&<div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:6,padding:11,color:C.red,fontSize:12,marginBottom:11,lineHeight:1.6}}>{scanErr}</div>}
+            {scanErr&&<div style={{background:C.bgDeep,border:`1px solid ${C.red}40`,borderRadius:6,padding:11,color:C.red,fontSize:12,marginBottom:11,lineHeight:1.6}}>{scanErr}</div>}
 
             {debugLog.length>0&&(
               <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:11,marginBottom:11,maxHeight:140,overflowY:'auto'}}>
@@ -1908,22 +1908,22 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {scanResult.hardBlocks?.length>0&&(
                   <div style={{marginBottom:11}}>
                     {scanResult.hardBlocks.map((b,i)=>(
-                      <div key={i} style={{background:'#1a0408',border:`1px solid ${C.red}60`,borderRadius:5,padding:'9px 13px',marginBottom:5,display:'flex',gap:8,alignItems:'flex-start'}}>
+                      <div key={i} style={{background:C.bgDeep,border:`1px solid ${C.red}60`,borderRadius:5,padding:'9px 13px',marginBottom:5,display:'flex',gap:8,alignItems:'flex-start'}}>
                         <span style={{fontSize:14,flexShrink:0}}>🚫</span>
                         <div>
                           <div style={{fontSize:9,color:C.red,letterSpacing:1.5,marginBottom:2}}>SKIP THIS TRADE</div>
-                          <div style={{fontSize:11,color:'#e08080',lineHeight:1.6}}>{b}</div>
+                          <div style={{fontSize:11,color:C.red,lineHeight:1.6}}>{b}</div>
                         </div>
                       </div>
                     ))}
-                    <div style={{fontSize:9,color:'#5a3040',padding:'4px 8px',borderRadius:3,background:'#0e0406',border:`1px solid ${C.red}30`}}>
+                    <div style={{fontSize:9,color:C.subtext,padding:'4px 8px',borderRadius:3,background:C.bgDeep,border:`1px solid ${C.red}30`}}>
                       Hard blocks cap conviction at 48% regardless of other signals. Fix the issue above before entering.
                     </div>
                   </div>
                 )}
 
                 {/* ── PRIMARY TRADE BOX: strike + real option prices ── */}
-                <div style={{background:isDark?'#030e06':'#f0f9f4',border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11,boxShadow:C.shadowMd}}>
+                <div style={{background:isDark?C.bgDeep:C.cardAlt,border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11,boxShadow:C.shadowMd}}>
                   <div style={{fontSize:8,color:C.green,letterSpacing:2,marginBottom:8}}>
                     {scanResult.isSpread ? 'SPREAD EXECUTION' : 'OPTION TRADE'}
                     {' — '}{scanResult.tradeType}
@@ -1949,7 +1949,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                   {/* Break-even row */}
                   {!scanResult.isSpread&&scanResult.breakeven&&(
-                    <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:10,padding:'6px 10px',borderRadius:4,background:isDark?'#060c10':'#e8f0f8',border:`1px solid ${C.blue}30`}}>
+                    <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:10,padding:'6px 10px',borderRadius:4,background:C.bgDeep,border:`1px solid ${C.blue}30`}}>
                       <div>
                         <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>BREAK-EVEN AT EXPIRY</div>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:C.blue,letterSpacing:1}}>${scanResult.breakeven}</div>
@@ -1982,7 +1982,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       ))}
                     </div>
                   ) : (
-                    <div style={{background:'#020810',borderRadius:4,padding:'8px 10px',marginBottom:10,fontSize:9,color:'#4a7a8a',lineHeight:1.5}}>
+                    <div style={{background:C.bgDeep,borderRadius:4,padding:'8px 10px',marginBottom:10,fontSize:9,color:C.subtext,lineHeight:1.5}}>
                       <span style={{color:C.blue,letterSpacing:1}}>NET COST — </span>
                       Debit/credit shown per leg below. Buy the spread at net debit or collect net credit.
                     </div>
@@ -2005,7 +2005,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                 {/* ── Legs breakdown (only for spreads) ── */}
                 {scanResult.isSpread&&scanResult.legsList?.length>0&&(
-                  <div style={{background:'#020c18',border:`1px solid ${C.blue}40`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
+                  <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
                     <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
                     {scanResult.legsList.map((leg,i)=>{
                       const isNet  = leg.startsWith('NET')||leg.startsWith('TOTAL')
@@ -2014,13 +2014,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       return (
                         <div key={i} style={{
                           display:'flex',alignItems:'flex-start',gap:8,padding:'6px 9px',borderRadius:3,marginBottom:4,
-                          background:isNet?'#02080e':isBuy?'#021006':isSell?'#100202':'transparent',
+                          background:isNet?C.bgDeep:isBuy?`${C.green}08`:isSell?`${C.red}08`:'transparent',
                           border:`1px solid ${isNet?C.blue+'40':isBuy?C.green+'30':isSell?C.red+'30':C.border}`,
                         }}>
                           <span style={{fontSize:11,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.dim,flexShrink:0,width:16}}>
                             {isNet?'$':isBuy?'↑':isSell?'↓':'·'}
                           </span>
-                          <span style={{fontSize:10,color:isNet?C.blue:isBuy?'#8ae0a0':isSell?'#e08080':C.subtext,fontFamily:'monospace',lineHeight:1.7,wordBreak:'break-all'}}>{leg}</span>
+                          <span style={{fontSize:10,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.7,wordBreak:'break-all'}}>{leg}</span>
                         </div>
                       )
                     })}
@@ -2033,7 +2033,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div className="scanrow">
                     {[
                       {l:'IV',     v:scanResult.iv,     c:C.orange},
-                      {l:'DELTA',  v:scanResult.delta,  c:'#c8d8e8'},
+                      {l:'DELTA',  v:scanResult.delta,  c:C.text},
                       {l:'THETA',  v:scanResult.theta,  c:C.red},
                       {l:'VOL',    v:scanResult.volume, c:C.dim},
                       {l:'O.I.',   v:scanResult.oi,     c:C.dim},
@@ -2057,7 +2057,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {scanResult.warnings?.length>0&&(
                   <Card color={`${C.orange}40`} style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
                     <Lbl color={C.orange}>⚠️ WARNINGS</Lbl>
-                    {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:11,color:isDark?'#c08040':'#7a5020',lineHeight:1.7}}>⚠ {w}</div>)}
+                    {scanResult.warnings.map((w,i)=><div key={i} style={{fontSize:11,color:C.subtext,lineHeight:1.7}}>⚠ {w}</div>)}
                   </Card>
                 )}
               </div>
@@ -2067,7 +2067,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div style={{marginTop:18,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
-                  <div style={{fontSize:9,color:autoOn?C.green:C.dim,letterSpacing:2,display:'flex',alignItems:'center',gap:6}}>
+                  <div style={{fontSize:11,fontWeight:600,color:autoOn?C.green:C.dim,letterSpacing:0.5,fontFamily:"'Inter',sans-serif",display:'flex',alignItems:'center',gap:6}}>
                     <span style={{width:6,height:6,borderRadius:'50%',background:autoOn?C.green:C.dim,display:'inline-block',boxShadow:autoOn?`0 0 8px ${C.green}`:'none'}}/>
                     AUTO-SCANNER {autoOn?'ACTIVE':'— OFF'}
                   </div>
@@ -2086,20 +2086,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:9}}>
                 <div>
-                  <div style={{fontSize:9,color:C.dim,letterSpacing:1.5,marginBottom:4}}>MIN CONVICTION</div>
+                  <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Min Conviction</div>
                   <select value={minScore} onChange={e=>setMinScore(Number(e.target.value))} style={iSt}>
                     {[60,70,75,80,85,90,95].map(v=><option key={v} value={v}>{v}%+</option>)}
                   </select>
                 </div>
                 <div>
-                  <div style={{fontSize:9,color:C.dim,letterSpacing:1.5,marginBottom:4}}>FREQUENCY</div>
+                  <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
                   <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
               </div>
 
-              <Field label="Watchlist (blank = full S&P 500)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY"/>
+              <Field label="Watchlist (blank = full S&P 500)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY" C={C}/>
 
               {lastAlert&&(
                 <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:10,padding:'14px 16px',marginTop:10,boxShadow:C.shadowMd}}>
@@ -2444,7 +2444,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
 
             {/* Panel sub-tabs */}
-            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.bgAlt}}>
+            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel}}>
               {[
                 {id:'settings',l:'Settings'},
                 {id:'alert',   l:'Alert'},
@@ -2488,7 +2488,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {/* Anthropic */}
                   <Card style={{marginBottom:12}}>
                     <Lbl color={C.orange}>🤖 CLAUDE AI — MORNING BRIEF</Lbl>
-                    <div style={{background:'#0a0c06',border:`1px solid ${C.orange}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:'#8a7a50',lineHeight:1.8}}>
+                    <div style={{background:C.bgDeep,border:`1px solid ${C.orange}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
                       <strong style={{color:C.orange}}>Option A (recommended):</strong> Set <code style={{color:C.green}}>ANTHROPIC_API_KEY</code> in Vercel → Settings → Environment Variables → redeploy.{' '}
                       <strong style={{color:C.orange}}>Option B (instant):</strong> Paste your key below — stored locally in your browser only.
                     </div>
@@ -2499,7 +2499,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {/* Telegram */}
                   <Card style={{marginBottom:12}}>
                     <Lbl color={C.blue}>📱 TELEGRAM AUTO-ALERTS</Lbl>
-                    <div style={{background:'#020c14',border:`1px solid ${C.blue}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:'#5a8aaa',lineHeight:1.8}}>
+                    <div style={{background:C.bgDeep,border:`1px solid ${C.blue}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
                       <strong style={{color:C.green}}>Setup:</strong> Telegram → @BotFather → /newbot → copy token. Add bot to channel as admin.
                     </div>
                     <div style={{display:'grid',gap:8,marginBottom:10}}>
@@ -2585,7 +2585,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           style={{display:'flex',gap:9,padding:'9px 12px',borderRadius:8,marginBottom:4,
                             background:checked[item.id]?`${CAT_COLOR[cat]}0a`:C.card,
                             border:`1px solid ${checked[item.id]?CAT_COLOR[cat]+'40':C.border}`}}>
-                          <div style={{width:14,height:14,borderRadius:2,border:`2px solid ${checked[item.id]?CAT_COLOR[cat]:'#2a4a5a'}`,background:checked[item.id]?CAT_COLOR[cat]:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:1}}>
+                          <div style={{width:14,height:14,borderRadius:2,border:`2px solid ${checked[item.id]?CAT_COLOR[cat]:C.border}`,background:checked[item.id]?CAT_COLOR[cat]:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:1}}>
                             {checked[item.id]&&<span style={{color:'#000',fontSize:8,fontWeight:700}}>✓</span>}
                           </div>
                           <div>
@@ -2616,7 +2616,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       ))}
                     </div>
                   ))}
-                  <div style={{background:C.panel,border:`1px dashed ${C.border}`,borderRadius:4,padding:11,fontSize:11,color:'#6a9aaa',lineHeight:1.7}}>
+                  <div style={{background:C.panel,border:`1px dashed ${C.border}`,borderRadius:4,padding:11,fontSize:11,color:C.subtext,lineHeight:1.7}}>
                     <span style={{fontSize:9,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
                     Require <span style={{color:C.green}}>2+ TA</span> + <span style={{color:C.blue}}>1 flow</span> or <span style={{color:C.orange}}>1 catalyst</span> before entry.
                   </div>
@@ -2677,9 +2677,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </button>
 
                   {futErr&&(
-                    <div style={{background:'#1a0a10',border:`1px solid ${C.red}40`,borderRadius:5,padding:10,marginBottom:10,lineHeight:1.6}}>
+                    <div style={{background:C.bgDeep,border:`1px solid ${C.red}40`,borderRadius:5,padding:10,marginBottom:10,lineHeight:1.6}}>
                       <div style={{color:C.red,fontSize:11,marginBottom:5}}>{futErr}</div>
-                      <div style={{fontSize:10,color:'#6a3040'}}>
+                      <div style={{fontSize:10,color:C.subtext}}>
                         <strong style={{color:C.orange}}>Tip:</strong> Futures + index symbols need Tradier production tier.
                         The ETF proxy (SPY/QQQ etc.) always works — it's loaded as final fallback automatically.
                         If all 3 fail, your token is missing or invalid — add it in Settings.
@@ -2707,7 +2707,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,marginBottom:10}}>
                           {[
-                            {l:'OPEN',  v:'$'+futData.open.toFixed(2),  c:'#c8d8e8'},
+                            {l:'OPEN',  v:'$'+futData.open.toFixed(2),  c:C.text},
                             {l:'HIGH',  v:'$'+futData.hi.toFixed(2),    c:C.green},
                             {l:'LOW',   v:'$'+futData.lo.toFixed(2),    c:C.red},
                             {l:'52W HI',v:'$'+futData.hi52.toFixed(2),  c:C.green},
@@ -2722,7 +2722,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         </div>
 
                         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
-                          <div style={{background:'#04080d',border:`1px solid ${C.red}40`,borderRadius:5,padding:11}}>
+                          <div style={{background:C.bgDeep,border:`1px solid ${C.red}40`,borderRadius:5,padding:11}}>
                             <Lbl color={C.red}>🔴 RESISTANCE</Lbl>
                             {futData.resistance.length===0
                               ?<div style={{fontSize:11,color:C.dim}}>None found</div>
@@ -2734,7 +2734,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                               ))
                             }
                           </div>
-                          <div style={{background:'#020d06',border:`1px solid ${C.green}40`,borderRadius:5,padding:11}}>
+                          <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:5,padding:11}}>
                             <Lbl color={C.green}>🟢 SUPPORT</Lbl>
                             {futData.support.length===0
                               ?<div style={{fontSize:11,color:C.dim}}>None found</div>
