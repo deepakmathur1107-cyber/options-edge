@@ -17,9 +17,9 @@ const supabase = createClient(
 )
 
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN
-const TRADIER_BASE  = TRADIER_MODE === 'sandbox'
+const TRADIER_BASE = process.env.TRADIER_MODE === 'sandbox'
   ? 'https://sandbox.tradier.com/v1'
-  : 'https://api.tradier.com/v1'
+  : 'https://api.tradier.com/v1';
 const FROM_EMAIL    = process.env.ALERT_FROM_EMAIL || 'onboarding@resend.dev'
 
 // ─── Tradier helpers ──────────────────────────────────────────────────────────
