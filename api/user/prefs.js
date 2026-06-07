@@ -63,7 +63,7 @@ async function hasActiveSubscription(userId) {
   const { data, error } = await supabase
     .from('subscriptions')
     .select('status')
-    .eq('clerk_user_id', userId)
+    .eq('clerk_id', userId)
     .single()
   if (error || !data) return false
   return ['active', 'trialing'].includes(data.status)
@@ -81,7 +81,7 @@ module.exports = async function handler(req, res) {
     const { data, error } = await supabase
       .from('alert_prefs')
       .select('*')
-      .eq('clerk_user_id', userId)
+      .eq('clerk_id', userId)
       .single()
 
     if (error && error.code !== 'PGRST116') {
