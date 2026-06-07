@@ -873,17 +873,13 @@ export default function App(props={}) {
       dbg(`   ✓ ${chain.length} contracts`)
 
       const chgPct=parseFloat(quote.change_percentage||0)
+      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
+      const isSpread     = SPREAD_TYPES.includes(scanType)
       const bearish=scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
       const optType=bearish?'put':'call'
       const tradeType=scanType==='Any'?(bearish?'Put':'Call'):scanType
 
       const step=autoStep(price)
-      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
-      const isSpread = SPREAD_TYPES.includes(scanType)
-      const tradeData = isSpread
-        ? buildSpreadResult(chain, price, step, scanType, tfCfg)
-        : buildNakedResult (chain, price, step, optType, tfCfg)
-      if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
       const strikePct=bearish?(2-tfCfg.strikePct):tfCfg.strikePct
       const tgtStrike=Math.round(price*strikePct/step)*step
       const side=chain.filter(o=>o.option_type===optType)
@@ -1017,6 +1013,11 @@ export default function App(props={}) {
       // ── DTE / IV incompatibility ─────────────────────────────────────────
       if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
       else if(dte>=21&&dte<=60){score+=5;reasons.push(`${dte} DTE — good buffer`)}
+
+      const tradeData = isSpread
+        ? buildSpreadResult(chain, price, step, scanType, tfCfg)
+        : buildNakedResult (chain, price, step, optType, tfCfg)
+      if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
 
       // ── Break-even reality: feeds directly into score ────────────────────
       if(!isSpread && tradeData && tradeData.mid>0){
