@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import AppNav from './components/AppNav'
+import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
@@ -649,7 +650,6 @@ export default function App(props={}) {
   const [toolsTab,   setToolsTab]   = useState('settings')
 
   // ── settings ──
-  const [anthropicKey,  setAnthropicKey]  = useState(()=>ls('anthropicKey'))
   const [tradierToken, setTradierToken] = useState(()=>ls('tradierToken'))
   const [tradierMode,  setTradierMode]  = useState(()=>ls('tradierMode','production'))
   const [tgToken,      setTgToken]      = useState(()=>ls('tgToken'))
@@ -2521,15 +2521,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
 
                   {/* Anthropic */}
-                  <Card style={{marginBottom:12}}>
-                    <Lbl C={C} color={C.orange}>🤖 CLAUDE AI — MORNING BRIEF</Lbl>
-                    <div style={{background:C.bgDeep,border:`1px solid ${C.orange}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
-                      <strong style={{color:C.orange}}>Option A (recommended):</strong> Set <code style={{color:C.green}}>ANTHROPIC_API_KEY</code> in Vercel → Settings → Environment Variables → redeploy.{' '}
-                      <strong style={{color:C.orange}}>Option B (instant):</strong> Paste your key below — stored locally in your browser only.
-                    </div>
-                    <Field label="Anthropic API Key (claude.ai/settings → API Keys)" value={anthropicKey} onChange={setAnthropicKey} placeholder="sk-ant-api03-..." type="password"/>
-                    {anthropicKey&&<div style={{fontSize:10,color:C.green,marginTop:6}}>✓ Key set — Morning Brief will use this key</div>}
-                  </Card>
+                  <MorningBrief getToken={getToken} />
 
                   {/* Telegram */}
                   <Card style={{marginBottom:12}}>
