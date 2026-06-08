@@ -21,3 +21,15 @@
     }
   ]
 }
+{
+  "crons": [
+    {
+      "path": "/api/alerts/send",
+      "schedule": "0 14 * * 1-5"
+    },
+    {
+      "path": "/api/brief/generate",
+      "schedule": "0 13-21 * * 1-5"
+    }
+  ]
+}
