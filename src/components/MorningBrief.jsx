@@ -1,7 +1,7 @@
 /**
  * src/components/MorningBrief.jsx
  *
- * Displays the cached morning brief fetched from /api/brief/latest.
+ * Displays the cached morning brief fetched from /api/brief.
  * Format: Tone → Why → Events → Levels → Bias → Risk Trigger
  * Mobile-first: conclusion (bias) shown first, details expandable.
  */
@@ -38,7 +38,7 @@ export default function MorningBrief({ getToken }) {
     async function load() {
       try {
         const token = await getToken()
-        const res = await fetch('/api/brief/latest', {
+        const res = await fetch('/api/brief', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
         if (res.status === 404) {
