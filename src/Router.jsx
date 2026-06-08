@@ -1,13 +1,3 @@
-/**
- * src/Router.jsx
- *
- * - isDark lives here, shared to all pages
- * - Auth guard: unauthenticated users -> /sign-in
- * - Paywall: authenticated users with no active subscription -> Stripe checkout
- * - Admin bypass: VITE_ADMIN_CLERK_IDS skips subscription check entirely
- * - Clerk SignIn/SignUp styled to match app dark theme
- * - Sign out -> /sign-in
- */
 import { useState, useEffect, useCallback } from 'react'
 import {
   ClerkProvider, useAuth, useUser,
@@ -28,6 +18,7 @@ const ls = (key, fallback = '') => {
   try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
 }
 
+// ── Clerk appearance ──────────────────────────────────────────────────────────
 const clerkAppearance = {
   variables: {
     colorBackground:      '#0d1117',
@@ -50,41 +41,27 @@ const clerkAppearance = {
       borderRadius: '12px',
     },
     headerTitle: {
-      color:         '#e6edf3',
-      fontWeight:    700,
-      letterSpacing: '2px',
-      fontSize:      '24px',
+      color: '#e6edf3', fontWeight: 700,
+      letterSpacing: '2px', fontSize: '24px',
     },
-    headerSubtitle:  { color: '#8b949e' },
+    headerSubtitle: { color: '#8b949e' },
     socialButtonsBlockButton: {
-      border:     '1px solid #30363d',
-      background: '#1c2128',
-      color:      '#e6edf3',
+      border: '1px solid #30363d', background: '#1c2128', color: '#e6edf3',
     },
     socialButtonsBlockButtonText: { color: '#e6edf3' },
     dividerLine:  { background: '#30363d' },
     dividerText:  { color: '#8b949e' },
     formFieldLabel: {
-      color:         '#8b949e',
-      fontSize:      '11px',
-      fontWeight:    600,
-      letterSpacing: '0.5px',
-      textTransform: 'uppercase',
+      color: '#8b949e', fontSize: '11px',
+      fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase',
     },
     formFieldInput: {
-      background:   '#0d1117',
-      border:       '1px solid #30363d',
-      color:        '#e6edf3',
-      borderRadius: '6px',
+      background: '#0d1117', border: '1px solid #30363d',
+      color: '#e6edf3', borderRadius: '6px',
     },
     formButtonPrimary: {
-      background:    '#00ff88',
-      color:         '#000',
-      fontWeight:    700,
-      letterSpacing: '1px',
-      fontSize:      '14px',
-      borderRadius:  '6px',
-      border:        'none',
+      background: '#00ff88', color: '#000', fontWeight: 700,
+      letterSpacing: '1px', fontSize: '14px', borderRadius: '6px', border: 'none',
     },
     footerActionLink:          { color: '#00ff88' },
     identityPreviewText:       { color: '#e6edf3' },
@@ -92,17 +69,24 @@ const clerkAppearance = {
     formFieldSuccessText:      { color: '#00ff88' },
     alertText:                 { color: '#ff6b6b' },
     otpCodeFieldInput: {
-      background: '#0d1117',
-      border:     '1px solid #30363d',
-      color:      '#e6edf3',
+      background: '#0d1117', border: '1px solid #30363d', color: '#e6edf3',
     },
   },
 }
 
-function Protected({ children, isLoaded, isSignedIn }) {
-  if (!isLoaded) return null
-  if (!isSignedIn) return <Navigate to="/sign-in" replace />
-  return children
+// ── Pure UI components — defined OUTSIDE AuthShell so React never recreates them ──
+
+function LoadingScreen({ C, message }) {
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+      background: C.bg, fontFamily: "'IBM Plex Mono', monospace",
+      fontSize: 12, color: C.dim, letterSpacing: 2,
+    }}>
+      {message || 'LOADING...'}
+    </div>
+  )
 }
 
 function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
@@ -135,7 +119,7 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
           }}>PRO PLAN — 7-DAY FREE TRIAL</div>
           <div style={{
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 42,
-            color: C.text, letterSpacing: 1, lineHeight: 1, marginBottom: 4,
+            color: C.text, lineHeight: 1, marginBottom: 4,
           }}>$29<span style={{ fontSize: 16, color: C.dim }}>/mo</span></div>
           <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
             Cancel anytime · No charge for 7 days
@@ -177,7 +161,7 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
             border: 'none', color: '#000', fontWeight: 700,
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 16,
             letterSpacing: 2, cursor: loading ? 'not-allowed' : 'pointer',
-            marginBottom: 12, transition: 'opacity .15s',
+            marginBottom: 12,
           }}
         >
           {loading ? 'REDIRECTING TO CHECKOUT...' : 'START FREE TRIAL'}
@@ -186,7 +170,6 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
         <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
           Secured by Stripe · No card charged for 7 days
         </div>
-
         <button
           onClick={onSignOut}
           style={{
@@ -194,27 +177,30 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
             color: C.subtext, fontSize: 11, cursor: 'pointer',
             textDecoration: 'underline',
           }}
-        >
-          Sign out
-        </button>
+        >Sign out</button>
       </div>
     </div>
   )
 }
 
-function LoadingScreen({ C, message }) {
+// ── SubscriptionGate — defined OUTSIDE AuthShell ──────────────────────────────
+// Receives all state as props. Never redefined on re-render = no flicker.
+function SubscriptionGate({ children, isSignedIn, subStatus, isActive, C, startTrial, checkoutLoading, paywallErr, handleSignOut }) {
+  if (!isSignedIn) return <Navigate to="/sign-in" replace />
+  if (subStatus === null) return <LoadingScreen C={C} message="CHECKING SUBSCRIPTION..." />
+  if (isActive) return children
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex',
-      alignItems: 'center', justifyContent: 'center',
-      background: C.bg, fontFamily: "'IBM Plex Mono', monospace",
-      fontSize: 12, color: C.dim, letterSpacing: 2,
-    }}>
-      {message || 'LOADING...'}
-    </div>
+    <PaywallScreen
+      C={C}
+      onStartTrial={startTrial}
+      loading={checkoutLoading}
+      error={paywallErr}
+      onSignOut={handleSignOut}
+    />
   )
 }
 
+// ── Auth shell ────────────────────────────────────────────────────────────────
 function AuthShell() {
   const { getToken, isLoaded, isSignedIn, userId } = useAuth()
   const { user }    = useUser()
@@ -230,7 +216,6 @@ function AuthShell() {
   const C = isDark ? DARK_THEME : LIGHT_THEME
 
   const [subStatus,       setSubStatus]       = useState(null)
-  const [subLoading,      setSubLoading]       = useState(false)
   const [paywallErr,      setPaywallErr]       = useState('')
   const [checkoutLoading, setCheckoutLoading]  = useState(false)
 
@@ -239,25 +224,31 @@ function AuthShell() {
     catch { return null }
   }, [getToken])
 
+  // Check subscription once on sign-in
   useEffect(() => {
-    if (!isLoaded || !isSignedIn) return
-
+    if (!isLoaded || !isSignedIn) {
+      setSubStatus(null)
+      return
+    }
+    // Admin client-side bypass
     if (userId && ADMIN_IDS.includes(userId)) {
       setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
       return
     }
-
-    setSubLoading(true)
     stableGetToken().then(token => {
-      if (!token) { setSubLoading(false); return }
-      return fetch('/api/user/subscription', {
+      if (!token) {
+        // No token — default to active so we don't block
+        setSubStatus({ status: 'active', plan: 'pro' })
+        return
+      }
+      fetch('/api/user/subscription', {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(r => r.json())
-        .then(d => { setSubStatus(d); setSubLoading(false) })
-        .catch(() => { setSubStatus({ status: 'active', plan: 'pro' }); setSubLoading(false) })
+        .then(d => setSubStatus(d))
+        .catch(() => setSubStatus({ status: 'active', plan: 'pro' }))
     })
-  }, [isLoaded, isSignedIn, userId])
+  }, [isLoaded, isSignedIn, userId]) // stableGetToken intentionally omitted — stable ref
 
   const openPortal = async () => {
     try {
@@ -270,7 +261,7 @@ function AuthShell() {
     } catch (e) { console.error('Portal error:', e) }
   }
 
-  const startTrial = async () => {
+  const startTrial = useCallback(async () => {
     setCheckoutLoading(true)
     setPaywallErr('')
     try {
@@ -291,13 +282,19 @@ function AuthShell() {
       setPaywallErr('Network error: ' + e.message)
       setCheckoutLoading(false)
     }
-  }
+  }, [stableGetToken, user])
 
-  const handleSignOut = () => {
+  const handleSignOut = useCallback(() => {
     signOut()
       .then(() => { window.location.href = '/sign-in' })
       .catch(() => { window.location.href = '/sign-in' })
-  }
+  }, [signOut])
+
+  if (!isLoaded) return <LoadingScreen C={C} message="LOADING..." />
+
+  const isActive = subStatus?.status === 'active'
+                || subStatus?.status === 'trialing'
+                || subStatus?.isAdmin === true
 
   const authProps = {
     getToken:    stableGetToken,
@@ -314,79 +311,59 @@ function AuthShell() {
     C,
   }
 
-  if (!isLoaded) return <LoadingScreen C={C} />
-
-  const isActive = subStatus?.status === 'active'
-                || subStatus?.status === 'trialing'
-                || subStatus?.isAdmin === true
-
-  function SubscriptionGate({ children }) {
-    if (!isSignedIn) return <Navigate to="/sign-in" replace />
-    if (subStatus === null) {
-      return <LoadingScreen C={C} message="CHECKING SUBSCRIPTION..." />
-    }
-    if (isActive) return children
-    return (
-      <PaywallScreen
-        C={C}
-        onStartTrial={startTrial}
-        loading={checkoutLoading}
-        error={paywallErr}
-        onSignOut={handleSignOut}
-      />
-    )
+  // Gate props passed to the stable SubscriptionGate component
+  const gateProps = {
+    isSignedIn,
+    subStatus,
+    isActive,
+    C,
+    startTrial,
+    checkoutLoading,
+    paywallErr,
+    handleSignOut,
   }
+
+  const signInPage = (
+    <div style={{
+      minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: '#0d1117', padding: 24,
+    }}>
+      <div style={{
+        fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
+        color: '#00ff88', letterSpacing: 3, marginBottom: 24,
+      }}>OPTIONS EDGE</div>
+      <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" fallbackRedirectUrl="/app" />
+    </div>
+  )
+
+  const signUpPage = (
+    <div style={{
+      minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: '#0d1117', padding: 24,
+    }}>
+      <div style={{
+        fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
+        color: '#00ff88', letterSpacing: 3, marginBottom: 24,
+      }}>OPTIONS EDGE</div>
+      <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" fallbackRedirectUrl="/app" />
+    </div>
+  )
 
   return (
     <Routes>
       <Route path="/app/settings/alerts" element={
-        <SubscriptionGate><AlertSettings {...authProps} /></SubscriptionGate>
+        <SubscriptionGate {...gateProps}><AlertSettings {...authProps} /></SubscriptionGate>
       } />
       <Route path="/app/trades" element={
-        <SubscriptionGate><TradeLog {...authProps} /></SubscriptionGate>
+        <SubscriptionGate {...gateProps}><TradeLog {...authProps} /></SubscriptionGate>
       } />
       <Route path="/app" element={
-        <SubscriptionGate><App {...authProps} /></SubscriptionGate>
+        <SubscriptionGate {...gateProps}><App {...authProps} /></SubscriptionGate>
       } />
-
-      <Route path="/sign-in/*" element={
-        <div style={{
-          minHeight: '100vh', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          background: '#0d1117', padding: 24,
-        }}>
-          <div style={{
-            fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
-            color: '#00ff88', letterSpacing: 3, marginBottom: 24,
-          }}>OPTIONS EDGE</div>
-          <SignIn
-            appearance={clerkAppearance}
-            routing="path"
-            path="/sign-in"
-            fallbackRedirectUrl="/app"
-          />
-        </div>
-      } />
-
-      <Route path="/sign-up/*" element={
-        <div style={{
-          minHeight: '100vh', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          background: '#0d1117', padding: 24,
-        }}>
-          <div style={{
-            fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
-            color: '#00ff88', letterSpacing: 3, marginBottom: 24,
-          }}>OPTIONS EDGE</div>
-          <SignUp
-            appearance={clerkAppearance}
-            routing="path"
-            path="/sign-up"
-            fallbackRedirectUrl="/app"
-          />
-        </div>
-      } />
-
+      <Route path="/sign-in/*" element={signInPage} />
+      <Route path="/sign-up/*" element={signUpPage} />
       <Route path="/" element={
         isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
       } />
