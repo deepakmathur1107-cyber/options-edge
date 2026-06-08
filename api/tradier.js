@@ -1,7 +1,6 @@
-// api/tradier.js — Phase 2
-// Admin users: full access, no cache (always fresh data)
-// Pro users: full access, Redis cache
-// Free users: 4 scans/day limit
+// api/tradier.js
+// Fixed: cache returns correct data shape
+// Fixed: no-token requests use server TRADIER_TOKEN directly (no user auth needed for market data)
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN  || ''
@@ -13,25 +12,31 @@ const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const FREE_LIMIT  = 4
 
-// ─── Redis helpers ────────────────────────────────────────────────────────────
+// ─── Redis helpers ─────────────────────────────────────────────────────────────
 async function cacheGet(key) {
   if (!REDIS_URL || !REDIS_TOKEN) return null
   try {
     const r = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`,
       { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
     const d = await r.json()
-    return d.result ? JSON.parse(d.result) : null
+    // d.result is the raw stored string — parse it to get the actual data object
+    if (!d.result) return null
+    const parsed = typeof d.result === 'string' ? JSON.parse(d.result) : d.result
+    // Guard against accidentally returning the Redis wrapper {value, ex}
+    if (parsed && typeof parsed === 'object' && 'value' in parsed && 'ex' in parsed) {
+      // This is the raw Upstash SET response — unwrap the value
+      return typeof parsed.value === 'string' ? JSON.parse(parsed.value) : parsed.value
+    }
+    return parsed
   } catch { return null }
 }
 
 async function cacheSet(key, value, ttl) {
   if (!REDIS_URL || !REDIS_TOKEN) return
   try {
-    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}`, {
-      method:  'POST',
-      headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ value: JSON.stringify(value), ex: ttl })
-    })
+    // Use Upstash REST SET with EX
+    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}?ex=${ttl}`,
+      { method: 'GET', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
   } catch {}
 }
 
@@ -45,7 +50,6 @@ async function usageIncr(clerkId) {
     })
     const d = await r.json()
     const count = d.result || 0
-    // Set expiry on first increment
     if (count === 1) {
       await fetch(`${REDIS_URL}/expire/${encodeURIComponent(key)}`, {
         method: 'POST',
@@ -63,7 +67,7 @@ function getTTL(path) {
   return 30
 }
 
-// ─── Clerk JWT verify (inline — no module dependency) ────────────────────────
+// ─── Clerk JWT verify ──────────────────────────────────────────────────────────
 function b64d(str) {
   const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
   const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
@@ -100,7 +104,7 @@ async function getClerkId(authHeader) {
 async function getPlan(clerkId) {
   const url = process.env.SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key || !clerkId) return 'pro'  // no DB = full access
+  if (!url || !key || !clerkId) return 'pro'
   try {
     const { createClient } = require('@supabase/supabase-js')
     const sb = createClient(url, key)
@@ -108,10 +112,10 @@ async function getPlan(clerkId) {
       .select('status').eq('clerk_id', clerkId).maybeSingle()
     const s = data?.status || 'inactive'
     return (s==='active'||s==='trialing') ? 'pro' : 'free'
-  } catch { return 'pro' }  // DB error = assume pro, don't block
+  } catch { return 'pro' }
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
+// ─── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin',  '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -122,20 +126,21 @@ module.exports = async function handler(req, res) {
   const tradierPath = req.query.path
   if (!tradierPath) return res.status(400).json({ error: 'Missing ?path= param' })
 
-  // ── Token resolution ──────────────────────────────────────────────────────
+  // ── Token resolution ────────────────────────────────────────────────────────
   const legacyToken = req.headers['x-tradier-token'] || ''
   const activeToken = legacyToken || TRADIER_TOKEN
   if (!activeToken) {
-    return res.status(401).json({ error: 'No Tradier token. Set TRADIER_TOKEN in Vercel env vars.' })
+    return res.status(500).json({ error: 'No Tradier token configured. Set TRADIER_TOKEN in Vercel env vars.' })
   }
 
-  // ── Admin check ───────────────────────────────────────────────────────────
+  // ── Admin check ─────────────────────────────────────────────────────────────
   const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
   const clerkId   = await getClerkId(req.headers.authorization)
   const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
 
-  // ── Usage gate (free users only, skip for admin/pro) ─────────────────────
-  if (!isAdmin && clerkId) {
+  // ── Usage gate (free users only) ─────────────────────────────────────────────
+  // If no clerkId at all — still allow, server token covers market data access
+  if (clerkId && !isAdmin) {
     const plan = await getPlan(clerkId)
     if (plan === 'free') {
       const count = await usageIncr(clerkId)
@@ -150,13 +155,13 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // ── Build URL ─────────────────────────────────────────────────────────────
+  // ── Build Tradier URL ───────────────────────────────────────────────────────
   const qs    = new URLSearchParams(req.query)
   qs.delete('path')
   const qsStr = qs.toString()
   const url   = `${TRADIER_BASE}${tradierPath}${qsStr ? '?' + qsStr : ''}`
 
-  // ── Cache (skip for admin — always get fresh data) ────────────────────────
+  // ── Cache check (skip for admin — always fresh) ─────────────────────────────
   const cKey = ('tr:'+tradierPath+(qsStr?'?'+qsStr:''))
     .replace(/[^\w:._%-]/g,'_').slice(0,200)
 
@@ -168,8 +173,8 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // ── Call Tradier ──────────────────────────────────────────────────────────
-  console.log(`[tradier] ${isAdmin?'ADMIN':'user'} ${TRADIER_MODE} → ${tradierPath}`)
+  // ── Call Tradier ────────────────────────────────────────────────────────────
+  console.log(`[tradier] ${isAdmin?'ADMIN':clerkId?'user':'server'} ${TRADIER_MODE} -> ${tradierPath}`)
 
   try {
     const upstream = await fetch(url, {
