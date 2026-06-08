@@ -1,4 +1,4 @@
-// api/middleware/auth.js
+// api/_lib/auth.js
 // Shared auth helper used by all API functions.
 // Returns { clerkId, isAdmin, plan, allowed }
 
