@@ -1694,7 +1694,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                 <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION</div>
                 <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
-                  style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 9px',borderRadius:3,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace"}}>
+                  style={{fontSize:11,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}50`,padding:'5px 12px',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontWeight:600}}>
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}
                 </button>
               </div>
@@ -1734,7 +1734,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   border: `1px solid ${indexAlertsLoading ? C.border : C.green}`,
                   color: indexAlertsLoading ? C.dim : '#000',
                   fontWeight: 700,
-                  padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
+                  padding:'8px 18px',borderRadius:4,fontSize:12,letterSpacing:.8,
                   cursor:indexAlertsLoading?'not-allowed':'pointer',
                   fontFamily:"'Bebas Neue',sans-serif",
                 }}>
@@ -1788,7 +1788,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   border: `1px solid ${briefLoading ? C.border : C.orange}`,
                   color: briefLoading ? C.dim : '#000',
                   fontWeight: 700,
-                  padding:'6px 12px',borderRadius:4,fontSize:9,letterSpacing:.8,
+                  padding:'8px 18px',borderRadius:4,fontSize:12,letterSpacing:.8,
                   cursor:briefLoading?'default':'pointer',fontFamily:"'Bebas Neue',sans-serif",
                 }}>
                   {briefLoading?<span className="pulse">GENERATING</span>:'GENERATE'}
@@ -1807,7 +1807,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
                 <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
-                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:9,color:'#000',background:C.blue,border:'none',padding:'4px 10px',borderRadius:4,cursor:'pointer',fontWeight:700}}>OPEN</button>
+                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:12,color:'#000',background:C.blue,border:'none',padding:'8px 18px',borderRadius:4,cursor:'pointer',fontWeight:700,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:.8}}>OPEN</button>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:clColor,letterSpacing:1,lineHeight:1}}>{clScore}%</div>
