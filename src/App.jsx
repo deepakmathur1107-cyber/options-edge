@@ -672,6 +672,7 @@ export default function App(props={}) {
   const [esBar, setEsBar] = useState(null)
   const [nqBar, setNqBar] = useState(null)
   const [barLoading, setBarLoading] = useState(false)
+  const [lastRefreshed, setLastRefreshed] = useState(null)
 
   // ── index alerts & conviction ──
   const [indexAlerts,        setIndexAlerts]        = useState([])
@@ -839,11 +840,24 @@ export default function App(props={}) {
       setMarketConviction({ score:bull, direction:dir, spxChg, ndxChg,
         color: dir==='BULLISH'?C.green:dir==='BEARISH'?C.red:C.orange })
     }
+    setLastRefreshed(Date.now())
     setBarLoading(false)
   },[tradierToken, tradierMode, getAuthToken])
 
   // Run on mount only — fetchPriceBar already captures getAuthToken via closure
   useEffect(()=>{ fetchPriceBar() },[])
+  // ── Auto-refresh price bar every 30s when tab is visible ──────────────────
+useEffect(() => {
+  const tick = () => {
+    if (document.visibilityState === 'visible') fetchPriceBar()
+  }
+  const interval = setInterval(tick, 30_000)
+  document.addEventListener('visibilitychange', tick)
+  return () => {
+    clearInterval(interval)
+    document.removeEventListener('visibilitychange', tick)
+  }
+}, [fetchPriceBar])
 
   // ─── Single ticker scan ───────────────────────────────────────────────────
   const runScan = async()=>{
@@ -1652,8 +1666,29 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontSize:10,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
                   <div style={{fontSize:9,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
                 </div>
-                <button className="hv" onClick={fetchPriceBar} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>↺ RETRY</button>
-              </div>
+                // ── Add this state near your other price bar state ──
+                const [nextRefresh, setNextRefresh] = useState(30)
+
+              // ── Add this useEffect right after the auto-refresh useEffect ──
+                useEffect(() => {
+  const countdown = setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    setNextRefresh(prev => {
+      if (prev <= 1) return 30   // reset when it hits 0
+      return prev - 1
+    })
+  }, 1_000)
+  return () => clearInterval(countdown)
+}, [])
+
+// ── Reset countdown to 30 whenever a refresh actually fires ──
+// Add this single line inside fetchPriceBar, right next to setLastRefreshed:
+setNextRefresh(30)
+      <button className="hv" onClick={() => { fetchPriceBar(); setNextRefresh(30) }}
+  style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>
+  {barLoading ? '⏳ refreshing...' : `↺ ${nextRefresh}s`}
+</button>        
+      </div>
             )}
             {!esBar && !nqBar && barLoading && (
               <div style={{background:C.bgDeep,border:`1px dashed ${C.border}`,borderRadius:10,padding:'11px 13px',marginBottom:12,boxShadow:C.shadow}}>
