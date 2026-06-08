@@ -1,254 +1,235 @@
 /**
- * api/alerts/send.js  — Vercel Serverless Function (internal / cron use)
+ * api/alerts/send.js — Vercel Serverless Function (Cron)
  *
- * POST /api/alerts/send
- * Header: x-cron-secret: <CRON_SECRET>
+ * Cron: "0 14 * * 1-5"  (9 AM ET weekdays)
+ * Manual: POST /api/alerts/send  with header  x-cron-secret: <CRON_SECRET>
  *
- * Scans Tradier for liquid options contracts and emails subscribers.
+ * Supabase table: alert_prefs
+ * Columns used: clerk_user_id, email_alerts, alert_email, min_edge_score,
+ *               symbols (comma-separated text), sms_on, phone_number
  */
 
-const { Resend } = require('resend')
 const { createClient } = require('@supabase/supabase-js')
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+const TRADIER_BASE  = 'https://api.tradier.com/v1'
+const TRADIER_TOKEN = process.env.TRADIER_TOKEN
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-const TRADIER_TOKEN = process.env.TRADIER_TOKEN
-const TRADIER_BASE = process.env.TRADIER_MODE === 'sandbox'
-  ? 'https://sandbox.tradier.com/v1'
-  : 'https://api.tradier.com/v1';
-const FROM_EMAIL    = process.env.ALERT_FROM_EMAIL || 'onboarding@resend.dev'
+const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'AAPL']
 
-// ─── Tradier helpers ──────────────────────────────────────────────────────────
+// ── Twilio SMS ────────────────────────────────────────────────────────────
+async function sendSms(to, body) {
+  const sid   = process.env.TWILIO_ACCOUNT_SID
+  const token = process.env.TWILIO_AUTH_TOKEN
+  const from  = process.env.TWILIO_FROM_NUMBER
+  if (!sid || !token || !from) {
+    console.warn('SMS skipped: Twilio env vars not set')
+    return false
+  }
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
+      },
+      body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
+    }
+  )
+  if (!res.ok) { console.error('Twilio error:', await res.json().catch(() => ({}))); return false }
+  return true
+}
 
-async function tradierGet(path) {
-  const res = await fetch(`${TRADIER_BASE}${path}`, {
+// ── Resend email ──────────────────────────────────────────────────────────
+async function sendEmail(to, subject, html) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
     headers: {
-      Authorization: `Bearer ${TRADIER_TOKEN}`,
-      Accept: 'application/json',
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify({
+      from: process.env.ALERT_FROM_EMAIL || 'alerts@optionsedgeflow.com',
+      to, subject, html,
+    }),
   })
-  if (!res.ok) throw new Error(`Tradier ${res.status} ${path}`)
-  return res.json()
+  return res.ok
 }
 
-async function getQuote(symbol) {
-  const json = await tradierGet(`/markets/quotes?symbols=${symbol}&greeks=false`)
-  return json?.quotes?.quote || null
-}
-
-async function getNearestExpiration(symbol) {
-  const json = await tradierGet(
-    `/markets/options/expirations?symbol=${symbol}&includeAllRoots=false`
+// ── Tradier options chain ─────────────────────────────────────────────────
+async function fetchChain(symbol) {
+  const expRes = await fetch(
+    `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=true`,
+    { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
   )
-  const dates = json?.expirations?.date || []
-  const arr   = Array.isArray(dates) ? dates : [dates]
-  const today = Date.now()
-  // Pick first expiration at least 1 day out
-  const valid = arr.filter(d => (new Date(d) - today) / 86_400_000 >= 1)
-  return valid[0] || arr[0] || null
-}
+  if (!expRes.ok) return []
+  const expData = await expRes.json()
+  const expirations = expData?.expirations?.date
+  if (!expirations?.length) return []
+  const expiry = Array.isArray(expirations) ? expirations[0] : expirations
 
-async function getChain(symbol, expiration) {
-  const json = await tradierGet(
-    `/markets/options/chains?symbol=${symbol}&expiration=${expiration}&greeks=true`
+  const chainRes = await fetch(
+    `${TRADIER_BASE}/markets/options/chains?symbol=${symbol}&expiration=${expiry}&greeks=true`,
+    { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
   )
-  const opts = json?.options?.option || []
-  return Array.isArray(opts) ? opts : [opts]
+  if (!chainRes.ok) return []
+  return (await chainRes.json())?.options?.option || []
 }
 
-// ─── Contract selection ───────────────────────────────────────────────────────
-// Pick the 3 most liquid contracts with a valid bid/ask.
-// In production (live Tradier), Greeks will be real and we can add delta scoring.
-// For sandbox, we just select by open interest + volume.
+// ── Edge scoring ──────────────────────────────────────────────────────────
+function computeEdgeScore(c) {
+  const delta  = Math.abs(c?.greeks?.delta  ?? 0)
+  const iv     = c?.greeks?.smv_vol          ?? 0
+  const oi     = c?.open_interest            ?? 0
+  const volume = c?.volume                   ?? 0
+  const bid    = c?.bid                      ?? 0
+  const ask    = c?.ask                      ?? 0
 
-function selectContracts(chain, symbol) {
-  return chain
-    .filter(o => o.bid > 0 && o.ask > 0 && (o.open_interest > 0 || o.volume > 0))
-    .sort((a, b) => {
-      const scoreA = (a.open_interest || 0) + (a.volume || 0) * 2
-      const scoreB = (b.open_interest || 0) + (b.volume || 0) * 2
-      return scoreB - scoreA
-    })
-    .slice(0, 3)
-    .map(o => ({
-      symbol,
-      type:       o.option_type,
-      strike:     o.strike,
-      expiration: o.expiration_date,
-      bid:        o.bid,
-      ask:        o.ask,
-      mid:        +((o.bid + o.ask) / 2).toFixed(2),
-      volume:     o.volume     || 0,
-      oi:         o.open_interest || 0,
-      iv:         o.greeks?.smv_vol || o.greeks?.mid_iv || null,
-      delta:      o.greeks?.delta  || null,
-      edgeScore:  50, // neutral score — real scoring needs live Greeks
-    }))
+  if (delta === 0 || iv === 0) {
+    return Math.min(100, Math.round((Math.log1p(oi) * 5) + (Math.log1p(volume) * 10)))
+  }
+  const deltaScore  = delta >= 0.3 && delta <= 0.7 ? 30 : 10
+  const ivScore     = iv >= 0.2 && iv <= 0.6 ? 25 : 10
+  const liqScore    = Math.min(25, Math.round(Math.log1p(oi + volume) * 3))
+  const spreadScore = (ask - bid) < 0.10 ? 20 : (ask - bid) < 0.25 ? 10 : 0
+  return Math.min(100, deltaScore + ivScore + liqScore + spreadScore)
 }
 
-// ─── Email template ───────────────────────────────────────────────────────────
-
-function buildEmailHtml(contracts) {
-  const rows = contracts.map(c => `
+// ── Email HTML ────────────────────────────────────────────────────────────
+function buildEmailHtml(alerts) {
+  const rows = alerts.map(a => `
     <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">${c.symbol}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">${c.type.toUpperCase()}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">$${c.strike}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">${c.expiration}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">$${c.mid}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #2d2d2d">
-        OI: ${c.oi.toLocaleString()} · Vol: ${c.volume.toLocaleString()}
-      </td>
+      <td style="padding:8px 12px;border-bottom:1px solid #1a2e3e;font-weight:700;color:#00ff88;font-family:monospace">${a.symbol}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #1a2e3e;color:#c8d8e8;font-family:monospace">${a.type} ${a.strike} ${a.expiry}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #1a2e3e;color:#00c8ff;font-family:monospace">${a.score}%</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #1a2e3e;color:#c8d8e8;font-family:monospace">$${a.mid?.toFixed(2) ?? '—'}</td>
     </tr>`).join('')
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#0a0a0a;font-family:'Helvetica Neue',Arial,sans-serif;color:#e4e4e7">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 20px">
-    <tr><td align="center">
-      <table width="620" cellpadding="0" cellspacing="0"
-             style="background:#111;border:1px solid #222;border-radius:12px;overflow:hidden">
-
-        <tr><td style="padding:24px 32px;border-bottom:1px solid #222">
-          <span style="font-size:20px;font-weight:700;letter-spacing:-0.5px">
-            ⚡ Options <span style="color:#10b981">Edge</span> — Daily Scan
-          </span>
-        </td></tr>
-
-        <tr><td style="padding:24px 32px">
-          <p style="margin:0 0 16px;color:#a1a1aa;font-size:14px">
-            Most liquid contracts found in today's scan.
-          </p>
-          <table width="100%" cellpadding="0" cellspacing="0"
-                 style="border-collapse:collapse;font-size:13px">
-            <thead>
-              <tr style="color:#71717a;text-transform:uppercase;font-size:11px;letter-spacing:0.05em">
-                <th style="padding:8px 12px;text-align:left">Symbol</th>
-                <th style="padding:8px 12px;text-align:left">Type</th>
-                <th style="padding:8px 12px;text-align:left">Strike</th>
-                <th style="padding:8px 12px;text-align:left">Exp</th>
-                <th style="padding:8px 12px;text-align:left">Mid</th>
-                <th style="padding:8px 12px;text-align:left">Activity</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </td></tr>
-
-        <tr><td style="padding:20px 32px;border-top:1px solid #222;text-align:center">
-          <a href="https://options-edge-theta.vercel.app/app"
-             style="display:inline-block;padding:10px 24px;background:#10b981;
-                    color:#000;text-decoration:none;border-radius:8px;
-                    font-weight:600;font-size:13px">
-            Open Dashboard →
-          </a>
-        </td></tr>
-
-        <tr><td style="padding:16px 32px;border-top:1px solid #1a1a1a;text-align:center">
-          <p style="margin:0;color:#52525b;font-size:11px">
-            Options Edge ·
-            <a href="https://options-edge-theta.vercel.app/app/settings/alerts"
-               style="color:#52525b">Manage alerts</a>
-            · Not financial advice.
-          </p>
-        </td></tr>
-
+  return `
+    <div style="background:#090e14;color:#c8d8e8;font-family:Inter,sans-serif;padding:32px;max-width:600px;margin:0 auto">
+      <h1 style="font-family:'Bebas Neue',sans-serif;color:#00ff88;letter-spacing:3px;margin-bottom:4px">OPTIONS EDGE ALERT</h1>
+      <p style="color:#4a7a8a;font-size:12px;font-family:monospace;margin-top:0">${new Date().toLocaleString('en-US',{timeZone:'America/New_York'})} ET</p>
+      <table style="width:100%;border-collapse:collapse;background:#0d1a26;border:1px solid #1a2e3e;border-radius:6px">
+        <thead><tr style="background:#0d2030">
+          <th style="padding:10px 12px;text-align:left;font-size:11px;color:#4a7a8a;font-family:monospace">SYMBOL</th>
+          <th style="padding:10px 12px;text-align:left;font-size:11px;color:#4a7a8a;font-family:monospace">CONTRACT</th>
+          <th style="padding:10px 12px;text-align:left;font-size:11px;color:#4a7a8a;font-family:monospace">EDGE</th>
+          <th style="padding:10px 12px;text-align:left;font-size:11px;color:#4a7a8a;font-family:monospace">MID</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
       </table>
-    </td></tr>
-  </table>
-</body></html>`
+      <p style="color:#4a7a8a;font-size:11px;font-family:monospace;margin-top:24px">
+        Not financial advice.<br>
+        <a href="https://optionsedgeflow.com/app/settings/alerts" style="color:#00c8ff">Manage alert preferences</a>
+      </p>
+    </div>`
 }
 
-// ─── Handler ──────────────────────────────────────────────────────────────────
+// ── SMS text ──────────────────────────────────────────────────────────────
+function buildSmsText(alerts) {
+  const lines = alerts.slice(0, 3).map(a =>
+    `${a.symbol} ${a.type} ${a.strike} ${a.expiry} — ${a.score}% edge @ $${a.mid?.toFixed(2) ?? '?'}`
+  )
+  return `OptionsEdge (${new Date().toLocaleDateString('en-US',{timeZone:'America/New_York'})}):\n${lines.join('\n')}\noptionsedgeflow.com/app`
+}
 
+// ── Handler ───────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' })
-  }
+  const secret = req.headers['x-cron-secret'] || (req.headers['authorization'] || '').replace('Bearer ', '')
+  if (secret !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Unauthorized' })
 
-  const secret = req.headers['x-cron-secret']
-  if (!secret || secret !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
+  const scannedAt = new Date().toISOString()
 
   try {
-    // 1. Get subscribers with email alerts enabled
-    const { data: prefs, error: prefsError } = await supabase
+    // 1. Fetch users with email or SMS alerts on
+    const { data: users, error: usersErr } = await supabase
       .from('alert_prefs')
       .select('*')
-      .eq('email_alerts', true)
+      .or('email_alerts.eq.true,sms_on.eq.true')
 
-    if (prefsError) throw prefsError
-    if (!prefs?.length) {
-      return res.status(200).json({ sent: 0, message: 'No subscribers' })
+    if (usersErr) {
+      console.error('Supabase fetch error:', usersErr)
+      return res.status(500).json({ error: usersErr.message })
     }
 
-    // 2. Collect unique symbols across all subscribers
-    const allSymbols = [...new Set(
-      prefs.flatMap(p => {
-        const s = p.symbols
-        if (Array.isArray(s)) return s
-        if (typeof s === 'string') {
-          try { return JSON.parse(s) } catch { return s.split(',').map(x => x.trim()) }
-        }
-        return ['SPY', 'QQQ']
-      })
-    )]
+    console.log(`Users with alerts enabled: ${users?.length ?? 0}`)
+    if (!users?.length) {
+      return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
+    }
 
-    // 3. Scan each symbol
-    const scanResults = {}
-    await Promise.all(allSymbols.map(async symbol => {
+    // 2. Collect all unique symbols
+    const allSymbols = new Set(DEFAULT_SYMBOLS)
+    for (const u of users) {
+      if (u.symbols) u.symbols.split(',').map(s => s.trim()).filter(Boolean).forEach(s => allSymbols.add(s))
+    }
+    const symbols = [...allSymbols]
+    console.log('Scanning:', symbols)
+
+    // 3. Fetch chains and score
+    const alertsBySymbol = {}
+    for (const sym of symbols) {
       try {
-        const [quote, expiration] = await Promise.all([
-          getQuote(symbol),
-          getNearestExpiration(symbol),
-        ])
-        if (!quote || !expiration) return
-        const chain     = await getChain(symbol, expiration)
-        const contracts = selectContracts(chain, symbol)
-        if (contracts.length > 0) {
-          scanResults[symbol] = contracts
-        }
+        const chain = await fetchChain(sym)
+        const scored = chain
+          .map(c => ({
+            symbol: sym,
+            type:   c.option_type === 'call' ? 'CALL' : 'PUT',
+            strike: c.strike,
+            expiry: c.expiration_date,
+            score:  computeEdgeScore(c),
+            mid:    ((c.bid ?? 0) + (c.ask ?? 0)) / 2,
+          }))
+          .filter(c => c.score >= 40)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3)
+        if (scored.length) alertsBySymbol[sym] = scored
       } catch (e) {
-        console.error(`Scan failed for ${symbol}:`, e.message)
+        console.error(`Chain failed for ${sym}:`, e.message)
       }
-    }))
+    }
 
-    // 4. Send emails to matching subscribers
+    // 4. Notify each user
     let sent = 0
-    await Promise.all(prefs.map(async pref => {
-      if (!pref.alert_email) return
+    for (const user of users) {
+      const watchlist = user.symbols
+        ? user.symbols.split(',').map(s => s.trim()).filter(Boolean)
+        : DEFAULT_SYMBOLS
+      const minScore = user.min_edge_score ?? 50
 
-      const userSymbols = Array.isArray(pref.symbols)
-        ? pref.symbols
-        : typeof pref.symbols === 'string'
-          ? (() => { try { return JSON.parse(pref.symbols) } catch { return pref.symbols.split(',').map(s => s.trim()) } })()
-          : ['SPY', 'QQQ']
+      const userAlerts = watchlist
+        .flatMap(sym => alertsBySymbol[sym] || [])
+        .filter(a => a.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10)
 
-      const matching = userSymbols.flatMap(s => scanResults[s] || [])
-      if (!matching.length) return
+      if (!userAlerts.length) { console.log(`No alerts for ${user.clerk_user_id}`); continue }
 
-      await resend.emails.send({
-        from:    FROM_EMAIL,
-        to:      pref.alert_email,
-        subject: `⚡ Options Edge: ${matching.length} contract${matching.length > 1 ? 's' : ''} found`,
-        html:    buildEmailHtml(matching),
-      })
-      sent++
-    }))
+      let notified = false
 
-    return res.status(200).json({
-      sent,
-      symbols:   allSymbols,
-      scannedAt: new Date().toISOString(),
-    })
+      if (user.email_alerts && user.alert_email) {
+        const ok = await sendEmail(
+          user.alert_email,
+          `OptionsEdge: ${userAlerts.length} high-conviction alert${userAlerts.length > 1 ? 's' : ''} today`,
+          buildEmailHtml(userAlerts)
+        )
+        if (ok) { notified = true; console.log(`Email → ${user.alert_email}`) }
+      }
 
-  } catch (err) {
-    console.error('[alerts/send]', err)
-    return res.status(500).json({ error: err.message })
+      if (user.sms_on && user.phone_number) {
+        const ok = await sendSms(user.phone_number, buildSmsText(userAlerts))
+        if (ok) { notified = true; console.log(`SMS → ${user.phone_number}`) }
+      }
+
+      if (notified) sent++
+    }
+
+    return res.status(200).json({ sent, symbols, scannedAt })
+  } catch (e) {
+    console.error('alerts/send fatal:', e)
+    return res.status(500).json({ error: e.message })
   }
 }
