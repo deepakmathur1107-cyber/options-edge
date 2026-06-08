@@ -673,6 +673,7 @@ export default function App(props={}) {
   const [nqBar, setNqBar] = useState(null)
   const [barLoading, setBarLoading] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState(null)
+  const [nextRefresh,   setNextRefresh]   = useState(30)
 
   // ── index alerts & conviction ──
   const [indexAlerts,        setIndexAlerts]        = useState([])
@@ -841,6 +842,7 @@ export default function App(props={}) {
         color: dir==='BULLISH'?C.green:dir==='BEARISH'?C.red:C.orange })
     }
     setLastRefreshed(Date.now())
+    setNextRefresh(30)
     setBarLoading(false)
   },[tradierToken, tradierMode, getAuthToken])
 
@@ -858,6 +860,15 @@ useEffect(() => {
     document.removeEventListener('visibilitychange', tick)
   }
 }, [fetchPriceBar])
+
+  // ── Countdown ticker (1s) ─────────────────────────────────────────────────
+  useEffect(() => {
+    const countdown = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      setNextRefresh(prev => prev <= 1 ? 30 : prev - 1)
+    }, 1_000)
+    return () => clearInterval(countdown)
+  }, [])
 
   // ─── Single ticker scan ───────────────────────────────────────────────────
   const runScan = async()=>{
@@ -1666,28 +1677,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontSize:10,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
                   <div style={{fontSize:9,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
                 </div>
-                // ── Add this state near your other price bar state ──
-                const [nextRefresh, setNextRefresh] = useState(30)
-
-              // ── Add this useEffect right after the auto-refresh useEffect ──
-                useEffect(() => {
-  const countdown = setInterval(() => {
-    if (document.visibilityState !== 'visible') return
-    setNextRefresh(prev => {
-      if (prev <= 1) return 30   // reset when it hits 0
-      return prev - 1
-    })
-  }, 1_000)
-  return () => clearInterval(countdown)
-}, [])
-
-// ── Reset countdown to 30 whenever a refresh actually fires ──
-// Add this single line inside fetchPriceBar, right next to setLastRefreshed:
-setNextRefresh(30)
-      <button className="hv" onClick={() => { fetchPriceBar(); setNextRefresh(30) }}
-  style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>
-  {barLoading ? '⏳ refreshing...' : `↺ ${nextRefresh}s`}
-</button>        
+                <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
+                  style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>
+                  {barLoading ? '⏳ refreshing...' : `↺ ${nextRefresh}s`}
+                </button>
       </div>
             )}
             {!esBar && !nqBar && barLoading && (
@@ -1700,7 +1693,10 @@ setNextRefresh(30)
             <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                 <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION</div>
-                <button className="hv" onClick={fetchPriceBar} style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 7px',borderRadius:3,cursor:'pointer'}}>{'↺'} REFRESH</button>
+                <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
+                  style={{fontSize:9,color:C.blue,background:'transparent',border:`1px solid ${C.blue}30`,padding:'2px 9px',borderRadius:3,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace"}}>
+                  {barLoading ? '···' : `↺ ${nextRefresh}s`}
+                </button>
               </div>
               {marketConviction ? (
                 <>
