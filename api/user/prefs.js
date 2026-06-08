@@ -1,115 +1,122 @@
-// api/user/prefs.js
-// GET  /api/user/prefs  — fetch alert preferences
-// POST /api/user/prefs  — save alert preferences
-// Admins bypass subscription check entirely.
+/**
+ * api/user/prefs.js — Vercel Serverless Function
+ *
+ * GET  /api/user/prefs  → fetch alert preferences
+ * POST /api/user/prefs  → upsert alert preferences
+ *
+ * Supabase table: alert_prefs
+ * Confirmed columns: id, clerk_user_id, email_alerts (boolean),
+ *   min_edge_score (integer), alert_timing (text), symbols (text),
+ *   alert_email (text), alert_types (ARRAY), tg_token, tg_chat_id,
+ *   sms_on (boolean), phone_number (text), updated_at, created_at
+ */
 
 const { createClient } = require('@supabase/supabase-js')
 
-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '')
+  .split(',').map(s => s.trim()).filter(Boolean)
 
-// ── Inline JWT decode (no SDK) ────────────────────────────────────────────────
-function b64d(str) {
-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
-  return Buffer.from(b64 + pad, 'base64')
-}
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+)
 
-async function getClerkId(authHeader) {
-  const token = (authHeader || '').replace('Bearer ', '').trim()
-  if (!token) return null
+function decodeJwt(token) {
   try {
-    const parts   = token.split('.')
+    const parts = token.split('.')
     if (parts.length !== 3) return null
-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
-    if (payload.exp && Date.now() / 1000 > payload.exp) return null
-    const clerkKey = process.env.CLERK_SECRET_KEY
-    if (!clerkKey) return null
-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
-      { headers: { Authorization: 'Bearer ' + clerkKey } })
-    if (!jwksRes.ok) return null
-    const jwks   = await jwksRes.json()
-    const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
-    if (!jwkKey) return null
-    const crypto = require('crypto')
-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
-    const valid  = crypto.verify(
-      'sha256',
-      Buffer.from(parts[0] + '.' + parts[1]),
-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
-      b64d(parts[2])
+    return JSON.parse(
+      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
     )
-    return valid ? payload.sub : null
   } catch { return null }
 }
 
-async function hasActiveSub(clerkId, supabase) {
-  if (ADMIN_IDS.includes(clerkId)) return true
-  try {
-    const { data } = await supabase
-      .from('subscriptions')
-      .select('status')
-      .eq('clerk_id', clerkId)
-      .maybeSingle()
-    const s = data?.status || 'inactive'
-    return s === 'active' || s === 'trialing'
-  } catch { return false }
+async function getUserId(req) {
+  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+  if (!token) return null
+  return decodeJwt(token)?.sub || null
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Content-Type', 'application/json')
-  res.setHeader('Access-Control-Allow-Origin',  '*')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') return res.status(200).end()
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
+  if (req.method === 'OPTIONS') return res.status(204).end()
 
-  const clerkId = await getClerkId(req.headers.authorization)
-  if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await getUserId(req)
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  )
+  const isAdmin = ADMIN_IDS.includes(userId)
 
-  // Subscription gate (admins skip)
-  if (!ADMIN_IDS.includes(clerkId)) {
-    const active = await hasActiveSub(clerkId, supabase)
-    if (!active) return res.status(402).json({ error: 'Subscription required' })
-  }
-
-  // ── GET — fetch prefs ─────────────────────────────────────────────────────
+  // ── GET ──────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('alert_prefs')
       .select('*')
-      .eq('clerk_id', clerkId)
+      .eq('clerk_user_id', userId)
       .maybeSingle()
 
-    if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json({ prefs: data || null })
+    if (error) {
+      console.error('prefs GET error:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    const row = data || {}
+
+    // symbols is stored as comma-separated text e.g. "SPY,QQQ"
+    const symbolsArr = row.symbols
+      ? row.symbols.split(',').map(s => s.trim()).filter(Boolean)
+      : ['SPY', 'QQQ']
+
+    return res.status(200).json({
+      prefs: {
+        email_alerts:   row.email_alerts   ?? false,
+        alert_email:    row.alert_email    ?? '',
+        min_edge_score: row.min_edge_score ?? 50,
+        symbols:        symbolsArr,
+        sms_alerts:     row.sms_on         ?? false,
+        phone_number:   row.phone_number   ?? '',
+      },
+    })
   }
 
-  // ── POST — save prefs ─────────────────────────────────────────────────────
+  // ── POST ─────────────────────────────────────────────────────────────────
   if (req.method === 'POST') {
-    let body = req.body
-    if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
-    body = body || {}
+    const body = req.body || {}
 
-    const row = {
-      clerk_id:        clerkId,
-      email_on:        body.email_on        !== undefined ? Boolean(body.email_on)        : true,
-      min_conviction:  body.min_conviction  !== undefined ? parseInt(body.min_conviction) : 80,
-      watchlist:       body.watchlist       || 'NVDA,AAPL,MSFT,SPY,TSLA',
-      updated_at:      new Date().toISOString(),
+    const rawSymbols = Array.isArray(body.symbols) ? body.symbols : ['SPY', 'QQQ']
+    const MAX_SYMBOLS = isAdmin ? 999 : 5
+    const symbolsText = rawSymbols
+      .slice(0, MAX_SYMBOLS)
+      .map(s => s.toUpperCase().trim())
+      .filter(Boolean)
+      .join(',')
+
+    const payload = {
+      clerk_user_id:  userId,
+      email_alerts:   body.email_alerts   ?? false,
+      alert_email:    (body.alert_email   || '').trim(),
+      min_edge_score: body.min_edge_score ?? 50,
+      symbols:        symbolsText,
+      sms_on:         body.sms_alerts     ?? false,
+      phone_number:   (body.phone_number  || '').trim(),
+      updated_at:     new Date().toISOString(),
     }
+
+    console.log('prefs upsert:', JSON.stringify(payload))
 
     const { data, error } = await supabase
       .from('alert_prefs')
-      .upsert(row, { onConflict: 'clerk_id' })
+      .upsert(payload, { onConflict: 'clerk_user_id' })
       .select()
       .single()
 
-    if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json({ prefs: data })
+    if (error) {
+      console.error('prefs POST error:', JSON.stringify(error))
+      return res.status(500).json({ error: error.message, detail: error.details || null })
+    }
+
+    return res.status(200).json({ ok: true, prefs: data })
   }
 
   return res.status(405).json({ error: 'Method not allowed' })
