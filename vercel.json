@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/brief",
-      "schedule": "0 13-21 * * 1-5"
+      "schedule": "0 13 * * 1-5"
     }
   ],
   "functions": {
