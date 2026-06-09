@@ -21,6 +21,8 @@ const fmtPct = n => n==null?'—':(parseFloat(n)*100).toFixed(1)+'%'
 const safe   = v => v==null?'—':typeof v==='object'?JSON.stringify(v):String(v)
 
 // ─── Module-level constants ───────────────────────────────────────────────────
+const PRESET_SYMS = ['SPY','QQQ','IWM','AAPL','TSLA','NVDA','AMZN','META']
+
 const TF_CONFIG = {
   'Quick (5–14 DTE)': {
     minDTE:5,   maxDTE:14,  strikePct:1.02, profitTarget:0.50, stopLoss:0.50,
@@ -696,7 +698,6 @@ export default function App(props={}) {
   const [copied, setCopied] = useState(false)
 
   // ── alert preferences (Settings tab — source of truth) ──
-  const PRESET_SYMS = ['SPY','QQQ','IWM','AAPL','TSLA','NVDA','AMZN','META']
   const [alertPrefs,       setAlertPrefs]       = useState({ email_alerts:false, alert_email:'', min_edge_score:50, symbols:['SPY','QQQ'] })
   const [alertPrefsLoaded, setAlertPrefsLoaded] = useState(false)
   const [alertPrefsSaving, setAlertPrefsSaving] = useState(false)
