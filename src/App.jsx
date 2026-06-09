@@ -817,6 +817,8 @@ export default function App(props={}) {
   const [autoOn,      setAutoOn]      = useState(false)
   const [autoLog,     setAutoLog]     = useState([])
   const [lastAlert,   setLastAlert]   = useState(null)
+  const [alertHistory, setAlertHistory] = useState([])   // last 10 full alert objects
+  const [selectedAlert, setSelectedAlert] = useState(null) // expanded detail
   const [alertCopied, setAlertCopied] = useState(false)
   const autoRef    = useRef(null)
   const scanTFRef  = useRef(scanTF)   // always holds live scanTF — avoids stale closure in interval
@@ -1456,6 +1458,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
       if (r.score>=minScore) {
         setLastAlert(r)
+        setAlertHistory(p=>[{...r, alertedAt: ts2}, ...p.slice(0,9)])
         if (tgToken&&tgChatId) {
           const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId)
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.tradeType} ${r.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
@@ -2131,62 +2134,111 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
             {/* ── Auto-scanner section ── */}
             <div style={{marginTop:18,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+
+              {/* Header row */}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                 <div>
                   <div style={{fontSize:11,fontWeight:600,color:autoOn?C.green:C.dim,letterSpacing:0.5,fontFamily:"'Inter',sans-serif",display:'flex',alignItems:'center',gap:6}}>
                     <span style={{width:6,height:6,borderRadius:'50%',background:autoOn?C.green:C.dim,display:'inline-block',boxShadow:autoOn?`0 0 8px ${C.green}`:'none'}}/>
                     AUTO-SCANNER {autoOn?'ACTIVE':'— OFF'}
                   </div>
                   <div style={{fontSize:9,color:C.subtext,marginTop:2}}>
-                    Every {scanFreq} min · {minScore}%+ conviction
+                    Every {scanFreq} min · {minScore}%+ conviction · {watchlist?watchlist.split(',').map(t=>t.trim()).filter(Boolean).join(', '):'Full S&P 500'}
                   </div>
                 </div>
                 <button className="hv" onClick={toggleAuto} style={{
-                  background: autoOn ? C.red : C.green,
-                  border: `none`,
-                  color: '#000',
-                  fontWeight: 700,
-                  padding:'8px 18px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer',
-                  fontFamily:"'Bebas Neue',sans-serif",
+                  background: autoOn ? C.red : C.green, border:'none', color:'#000',
+                  fontWeight:700, padding:'8px 18px', borderRadius:4, fontSize:12,
+                  letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
                 }}>{autoOn?'⏹ STOP':'▶ START'}</button>
               </div>
 
-              <div style={{marginBottom:9}}>
-                <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
-                <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
-                  {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
-                </select>
+              {/* Frequency + settings hint */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'end',marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
+                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
+                    {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
+                  </select>
+                </div>
+                <div style={{fontSize:9,color:C.dim,lineHeight:1.6,paddingBottom:2,textAlign:'right'}}>
+                  Watchlist &amp; min score<br/>in ⚙ Settings
+                </div>
               </div>
 
-              {lastAlert&&(
-                <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:10,padding:'14px 16px',marginTop:10,boxShadow:C.shadowMd}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                    <Lbl C={C} color={C.green}>🚀 LATEST ALERT</Lbl>
-                    <div style={{display:'flex',gap:6}}>
-                      <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(lastAlert));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'4px 10px',borderRadius:3,fontSize:9,cursor:'pointer'}}>
-                        {alertCopied?'✅ COPIED':'📋 COPY'}
-                      </button>
-                      {tgToken&&tgChatId&&(
-                        <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert(lastAlert),tgToken,tgChatId);setTgStatus('✅ Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'4px 10px',borderRadius:3,fontSize:9,cursor:'pointer'}}>📤 TG</button>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.green,letterSpacing:2}}>${lastAlert.ticker}</span>
-                    <span style={{fontSize:12,color:C.text}}>{lastAlert.tradeType} {lastAlert.strikeStr}</span>
-                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.green}}>{lastAlert.score}%</span>
-                  </div>
-                  <div style={{fontSize:10,color:C.dim,marginTop:3}}>Entry: {lastAlert.entry} · Target: {lastAlert.target} · Stop: {lastAlert.stop}</div>
-  
-                  {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:4}}>{tgStatus}</div>}
+              {/* Alert history — last 10 alerts, clickable for full details */}
+              {alertHistory.length>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:9,letterSpacing:1.5,color:C.dim,marginBottom:6,fontWeight:600}}>ALERTS THIS SESSION</div>
+                  {alertHistory.map((al,i)=>{
+                    const isSelected = selectedAlert===i
+                    const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
+                    return (
+                      <div key={i}>
+                        <div className="hv" onClick={()=>setSelectedAlert(isSelected?null:i)} style={{
+                          display:'flex',alignItems:'center',gap:8,
+                          padding:'8px 10px',borderRadius:6,marginBottom:2,cursor:'pointer',
+                          background:isSelected?`${scoreCol}12`:C.bgDeep,
+                          border:`1px solid ${isSelected?scoreCol:C.border}`,
+                          transition:'all .15s',
+                        }}>
+                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scoreCol,letterSpacing:1.5,minWidth:52}}>${al.ticker}</span>
+                          <span style={{fontSize:10,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:scoreCol,fontWeight:700}}>{al.score}%</span>
+                          <span style={{fontSize:9,color:C.dim}}>{al.alertedAt}</span>
+                          <span style={{fontSize:9,color:C.dim,marginLeft:2}}>{isSelected?'▲':'▼'}</span>
+                        </div>
+                        {isSelected&&(
+                          <div style={{background:C.bgDeep,border:`1px solid ${scoreCol}40`,borderRadius:6,padding:'12px 14px',marginBottom:6,borderTopLeftRadius:0,borderTopRightRadius:0}}>
+                            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
+                              {[
+                                {l:'ENTRY',  v:al.entry},
+                                {l:'TARGET', v:al.target},
+                                {l:'STOP',   v:al.stop},
+                                {l:'STRIKE', v:al.strikeStr},
+                                {l:'EXPIRY', v:al.expiryDisplay||al.expiry||'—'},
+                                {l:'MID',    v:al.mid||'—'},
+                              ].map(({l,v})=>(
+                                <div key={l}>
+                                  <div style={{fontSize:8,color:C.dim,letterSpacing:1,marginBottom:2}}>{l}</div>
+                                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.text,fontWeight:600}}>{v||'—'}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {al.dte&&<div style={{fontSize:9,color:C.dim,marginBottom:8}}>{al.dte} DTE · {al.tfLabel||''}</div>}
+                            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                              <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
+                                background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
+                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
+                              }}>{alertCopied?'✅ COPIED':'📋 COPY'}</button>
+                              <button className="hv" onClick={()=>pushToJournal(al)} style={{
+                                background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
+                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
+                              }}>📋 PAPER TRADE</button>
+                              <button className="hv" onClick={()=>pushToAlert(al)} style={{
+                                background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
+                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
+                              }}>→ ALERT</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 
+              {/* Scanner log */}
               {autoLog.length>0&&(
-                <div style={{background:C.bgDeep,borderRadius:8,padding:9,maxHeight:160,overflowY:'auto',marginTop:9,border:`1px solid ${C.border}`}}>
-                  <Lbl C={C}>Scanner Log</Lbl>
+                <div style={{background:C.bgDeep,borderRadius:8,padding:9,maxHeight:140,overflowY:'auto',border:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:9,letterSpacing:1.5,color:C.dim,marginBottom:5,fontWeight:600}}>SCAN LOG</div>
                   {autoLog.map((l,i)=>(
-                    <div key={i} style={{fontSize:10,color:l.includes('🚀')?C.green:l.includes('❌')?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.8}}>{l}</div>
+                    <div key={i} style={{
+                      fontSize:9,
+                      color:l.includes('🚀')?C.green:l.includes('❌')?C.red:l.includes('▶')||l.includes('◼')||l.includes('↺')?C.blue:C.subtext,
+                      fontFamily:'monospace',lineHeight:1.7,
+                      fontWeight:l.includes('🚀')?600:400,
+                    }}>{l}</div>
                   ))}
                 </div>
               )}
@@ -2194,7 +2246,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           </div>
         )}
 
-        {/* journal tab removed — see /app/trades */}
+                {/* journal tab removed — see /app/trades */}
 
       </div>
 
