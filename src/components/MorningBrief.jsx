@@ -125,7 +125,7 @@ export default function MorningBrief({ getToken }) {
         </div>
       )}
 
-      <div style={S.footer}>AI-generated · Not financial advice · Refreshes hourly</div>
+      <div style={S.footer}>Not financial advice · Refreshes hourly</div>
     </div>
   )
 }
