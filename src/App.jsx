@@ -666,6 +666,8 @@ export default function App(props={}) {
   useEffect(()=>{try{localStorage.setItem('watchlist',   watchlist)}   catch{}},[watchlist])
   useEffect(()=>{try{localStorage.setItem('minScore',    String(minScore))}catch{}},[minScore])
   useEffect(()=>{try{localStorage.setItem('scanFreq',    String(scanFreq))}catch{}},[scanFreq])
+  useEffect(()=>{try{localStorage.setItem('scanTF',      scanTF)}          catch{}},[scanTF])
+  useEffect(()=>{try{localStorage.setItem('scanType',    scanType)}         catch{}},[scanType])
 
   // ── price bar ──
   const [esBar, setEsBar] = useState(null)
@@ -692,6 +694,60 @@ export default function App(props={}) {
     target:'',stop:'',size:'1–2 contracts',thesis:'',catalyst:'',flow:'',
   })
   const [copied, setCopied] = useState(false)
+
+  // ── alert preferences (Settings tab — source of truth) ──
+  const PRESET_SYMS = ['SPY','QQQ','IWM','AAPL','TSLA','NVDA','AMZN','META']
+  const [alertPrefs,       setAlertPrefs]       = useState({ email_alerts:false, alert_email:'', min_edge_score:50, symbols:['SPY','QQQ'] })
+  const [alertPrefsLoaded, setAlertPrefsLoaded] = useState(false)
+  const [alertPrefsSaving, setAlertPrefsSaving] = useState(false)
+  const [alertPrefsSaved,  setAlertPrefsSaved]  = useState(false)
+  const [alertPrefsErr,    setAlertPrefsErr]    = useState('')
+  const [customSymInput,   setCustomSymInput]   = useState('')
+  useEffect(()=>{
+    if (alertPrefsLoaded) return
+    getAuthToken().then(token=>{
+      if (!token) { setAlertPrefsLoaded(true); return }
+      fetch('/api/user/prefs',{headers:{Authorization:`Bearer ${token}`}})
+        .then(r=>r.json())
+        .then(d=>{
+          if (d.prefs) {
+            setAlertPrefs(p=>({...p,...d.prefs}))
+            // Sync min_edge_score → auto-scanner minScore
+            if (d.prefs.min_edge_score) setMinScore(d.prefs.min_edge_score)
+          }
+          setAlertPrefsLoaded(true)
+        })
+        .catch(()=>setAlertPrefsLoaded(true))
+    }).catch(()=>setAlertPrefsLoaded(true))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
+  const saveAlertPrefs = async()=>{
+    setAlertPrefsSaving(true); setAlertPrefsErr('')
+    // Keep minScore in sync when saving
+    setMinScore(alertPrefs.min_edge_score)
+    try {
+      const token = await getAuthToken()
+      const r = await fetch('/api/user/prefs',{method:'POST',
+        headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
+        body:JSON.stringify(alertPrefs)})
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setAlertPrefsSaved(true); setTimeout(()=>setAlertPrefsSaved(false),3000)
+    } catch(e){ setAlertPrefsErr('Save failed — '+e.message) }
+    finally { setAlertPrefsSaving(false) }
+  }
+  const toggleAlertSym = sym=>{
+    setAlertPrefs(p=>{
+      const has=p.symbols.includes(sym)
+      if (!has && p.symbols.length>=10) return p
+      return {...p, symbols: has ? p.symbols.filter(s=>s!==sym) : [...p.symbols,sym]}
+    })
+  }
+  const addCustomSym = ()=>{
+    const s=customSymInput.trim().toUpperCase()
+    if (!s || alertPrefs.symbols.includes(s) || alertPrefs.symbols.length>=10) return
+    setAlertPrefs(p=>({...p,symbols:[...p.symbols,s]}))
+    setCustomSymInput('')
+  }
 
   // ── journal ──
   const [trades,          setTrades]        = useState(()=>{try{return JSON.parse(ls('trades','[]'))}catch{return[]}})
@@ -749,8 +805,8 @@ export default function App(props={}) {
 
   // ── scanner ──
   const [scanTicker, setScanTicker] = useState('')
-  const [scanType,   setScanType]   = useState('Any')
-  const [scanTF,     setScanTF]     = useState('Swing (21–45 DTE)')
+  const [scanType,   setScanType]   = useState(()=>ls('scanType','Any'))
+  const [scanTF,     setScanTF]     = useState(()=>ls('scanTF','Swing (21–45 DTE)'))
   const [scanning,   setScanning]   = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const [scanErr,    setScanErr]    = useState('')
@@ -1452,6 +1508,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
   // Auth props injected by Router.jsx in the deployed app.
   // Defaults allow the app to run standalone (artifact preview / local dev).
+  const isAdmin     = props.isAdmin     || false
   const userEmail   = props.userEmail   || ''
   const userInitial = props.userInitial || ''
   const openPortal  = props.openPortal  || (()=>{})
@@ -1611,7 +1668,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:${C.bgDeep}}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px}
       `}</style>
 
-      <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
+      <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
 
       {/* /ES /NQ price bar */}
       <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:C.bgAlt}}>
@@ -2080,7 +2137,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     AUTO-SCANNER {autoOn?'ACTIVE':'— OFF'}
                   </div>
                   <div style={{fontSize:9,color:C.subtext,marginTop:2}}>
-                    Every {scanFreq} min · {minScore}%+ conviction · {tgToken&&tgChatId?'✅ TG connected':'⚠️ No TG'}
+                    Every {scanFreq} min · {minScore}%+ conviction
                   </div>
                 </div>
                 <button className="hv" onClick={toggleAuto} style={{
@@ -2093,22 +2150,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 }}>{autoOn?'⏹ STOP':'▶ START'}</button>
               </div>
 
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:9}}>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Min Conviction</div>
-                  <select value={minScore} onChange={e=>setMinScore(Number(e.target.value))} style={iSt}>
-                    {[60,70,75,80,85,90,95].map(v=><option key={v} value={v}>{v}%+</option>)}
-                  </select>
-                </div>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
-                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
-                    {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
-                  </select>
-                </div>
+              <div style={{marginBottom:9}}>
+                <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:0.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
+                <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
+                  {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
+                </select>
               </div>
-
-              <Field label="Watchlist (blank = full S&P 500)" value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY" C={C}/>
 
               {lastAlert&&(
                 <div style={{background:C.bgDeep,border:`1px solid ${C.green}40`,borderRadius:10,padding:'14px 16px',marginTop:10,boxShadow:C.shadowMd}}>
@@ -2478,47 +2525,218 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* ── SETTINGS ── */}
               {toolsTab==='settings'&&(
                 <div className="si">
-                  {/* Tradier — Phase 2: admin key, no user token needed */}
-                  <Card style={{marginBottom:12}}>
-                    <Lbl C={C} color={C.green}>📡 MARKET DATA</Lbl>
-                    <div style={{fontSize:11,color:C.subtext,lineHeight:1.8}}>
-                      Live options data is provided automatically — no API token required.
-                    </div>
-                    <div style={{fontSize:10,color:C.dim,marginTop:8}}>
-                      Source: Tradier {tradierMode === 'sandbox' ? 'Sandbox (test data)' : 'Production (live data)'}
-                    </div>
-                    {tradierToken&&(
-                      <div style={{fontSize:9,color:C.subtext,marginTop:6}}>
-                        Legacy token detected — using your personal token as override
-                      </div>
-                    )}
-                  </Card>
 
-                  {/* Anthropic */}
+                  {/* ── Morning Readout (everyone) ── */}
                   <MorningBrief getToken={getAuthToken} />
 
-                  {/* Telegram */}
+                  {/* ═══════════════════════════════════════════════
+                      ADMIN-ONLY SECTION
+                  ═══════════════════════════════════════════════ */}
+                  {isAdmin&&(<>
+
+                    {/* System Status */}
+                    <Card style={{marginBottom:12}}>
+                      <Lbl C={C} color={C.orange}>🖥 SYSTEM STATUS</Lbl>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:6}}>
+                        <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
+                          <div style={{fontSize:9,color:C.dim,letterSpacing:1,marginBottom:4}}>DATA SOURCE</div>
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{width:7,height:7,borderRadius:'50%',background:tradierMode==='sandbox'?C.orange:C.green,flexShrink:0,boxShadow:tradierMode==='sandbox'?`0 0 6px ${C.orange}`:`0 0 6px ${C.green}`}}/>
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:tradierMode==='sandbox'?C.orange:C.green,fontWeight:600}}>
+                              {tradierMode==='sandbox'?'SANDBOX':'PRODUCTION'}
+                            </span>
+                          </div>
+                          <div style={{fontSize:9,color:C.subtext,marginTop:3}}>Tradier {tradierMode==='sandbox'?'test data':'live data'}</div>
+                        </div>
+                        <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
+                          <div style={{fontSize:9,color:C.dim,letterSpacing:1,marginBottom:4}}>AUTH</div>
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{width:7,height:7,borderRadius:'50%',background:C.green,flexShrink:0,boxShadow:`0 0 6px ${C.green}`}}/>
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.green,fontWeight:600}}>ADMIN</span>
+                          </div>
+                          <div style={{fontSize:9,color:C.subtext,marginTop:3}}>Full access · No gate</div>
+                        </div>
+                      </div>
+                    </Card>
+
+                    {/* Telegram Bot */}
+                    <Card style={{marginBottom:12}}>
+                      <Lbl C={C} color={C.blue}>📱 TELEGRAM BOT</Lbl>
+                      <div style={{display:'grid',gap:8,marginBottom:10}}>
+                        <Field C={C} label="Bot Token" value={tgToken} onChange={setTgToken} placeholder="7123456789:AAFxxx" type="password"/>
+                        <Field C={C} label="Chat ID or @ChannelName" value={tgChatId} onChange={setTgChatId} placeholder="-1001234567890"/>
+                      </div>
+                      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                        <button className="hv" onClick={async()=>{
+                          setTgStatus('sending...')
+                          const r=await sendTelegram(`🤖 *OPTIONS EDGE*\n\nAdmin connected · Alerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleString()}_`,tgToken,tgChatId)
+                          setTgStatus(r.ok?'✅ Sent!':'❌ Failed: '+(r.description||r.error||'check token'))
+                          setTimeout(()=>setTgStatus(''),5000)
+                        }} disabled={!tgToken||!tgChatId} style={{
+                          background:tgToken&&tgChatId?`${C.blue}20`:'transparent',
+                          border:`1px solid ${tgToken&&tgChatId?C.blue:C.border}`,
+                          color:tgToken&&tgChatId?C.blue:C.dim,
+                          padding:'7px 16px',borderRadius:4,fontSize:10,letterSpacing:.8,
+                          cursor:tgToken&&tgChatId?'pointer':'not-allowed'
+                        }}>📤 SEND TEST</button>
+                        {tgStatus&&<span style={{fontSize:11,color:tgStatus.startsWith('✅')?C.green:C.red}}>{tgStatus}</span>}
+                      </div>
+                    </Card>
+
+                  </>)}
+
+                  {/* ═══════════════════════════════════════════════
+                      ALL USERS
+                  ═══════════════════════════════════════════════ */}
+
+                  {/* Alert Preferences */}
                   <Card style={{marginBottom:12}}>
-                    <Lbl C={C} color={C.blue}>📱 TELEGRAM AUTO-ALERTS</Lbl>
-                    <div style={{background:C.bgDeep,border:`1px solid ${C.blue}30`,borderRadius:4,padding:10,marginBottom:10,fontSize:10,color:C.subtext,lineHeight:1.8}}>
-                      <strong style={{color:C.green}}>Setup:</strong> Telegram → @BotFather → /newbot → copy token. Add bot to channel as admin.
-                    </div>
-                    <div style={{display:'grid',gap:8,marginBottom:10}}>
-                      <Field label="Bot Token" value={tgToken} onChange={setTgToken} placeholder="7123456789:AAFxxx" type="password"/>
-                      <Field label="Chat ID or @ChannelName" value={tgChatId} onChange={setTgChatId} placeholder="-1001234567890"/>
-                    </div>
-                    <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                      <button className="hv" onClick={async()=>{
-                        setTgStatus('sending...')
-                        const r=await sendTelegram(`🤖 *OPTIONS EDGE Connected!*\n\nAlerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleString()}_`,tgToken,tgChatId)
-                        setTgStatus(r.ok?'✅ Message sent!':'❌ Failed: '+(r.description||r.error||'check token'))
-                        setTimeout(()=>setTgStatus(''),5000)
-                      }} disabled={!tgToken||!tgChatId} style={{background:tgToken&&tgChatId?`${C.blue}20`:'transparent',border:`1px solid ${tgToken&&tgChatId?C.blue:C.border}`,color:tgToken&&tgChatId?C.blue:C.dim,padding:'7px 16px',borderRadius:4,fontSize:10,letterSpacing:.8,cursor:tgToken&&tgChatId?'pointer':'not-allowed'}}>
-                        📤 SEND TEST
+                    <Lbl C={C} color={C.green}>🔔 ALERT PREFERENCES</Lbl>
+
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:alertPrefs.email_alerts?10:14}}>
+                      <span style={{fontSize:11,color:C.text,fontWeight:600}}>Email Alerts</span>
+                      <button className="hv" onClick={()=>setAlertPrefs(p=>({...p,email_alerts:!p.email_alerts}))} style={{
+                        width:38,height:20,borderRadius:10,border:'none',cursor:'pointer',
+                        background:alertPrefs.email_alerts?C.green:'#1a2e3e',
+                        position:'relative',transition:'background .2s',flexShrink:0,
+                      }}>
+                        <span style={{position:'absolute',top:2,left:alertPrefs.email_alerts?20:2,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left .2s'}}/>
                       </button>
-                      {tgStatus&&<span style={{fontSize:11,color:tgStatus.startsWith('✅')?C.green:C.red}}>{tgStatus}</span>}
+                    </div>
+                    {alertPrefs.email_alerts&&(
+                      <div style={{marginBottom:14}}>
+                        <Field C={C} label="Alert Email" value={alertPrefs.alert_email}
+                          onChange={v=>setAlertPrefs(p=>({...p,alert_email:v}))}
+                          placeholder={userEmail||'you@example.com'}/>
+                      </div>
+                    )}
+
+                    <div style={{marginBottom:14}}>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                        <span style={{fontSize:11,color:C.text,fontWeight:600}}>Min Edge Score</span>
+                        <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.green}}>{alertPrefs.min_edge_score}%</span>
+                      </div>
+                      <input type="range" min={40} max={95} step={5}
+                        value={alertPrefs.min_edge_score}
+                        onChange={e=>setAlertPrefs(p=>({...p,min_edge_score:Number(e.target.value)}))}
+                        style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
+                      />
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.dim,marginTop:2}}>
+                        <span>40% — more alerts</span><span>95% — high conviction only</span>
+                      </div>
+                    </div>
+
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontSize:11,color:C.text,fontWeight:600,marginBottom:8}}>
+                        Watch Symbols <span style={{color:C.dim,fontWeight:400}}>({alertPrefs.symbols.length}/10)</span>
+                      </div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+                        {PRESET_SYMS.map(s=>{
+                          const on=alertPrefs.symbols.includes(s)
+                          return <button key={s} className="hv" onClick={()=>toggleAlertSym(s)} style={{
+                            padding:'4px 10px',borderRadius:4,fontSize:10,cursor:'pointer',fontWeight:700,letterSpacing:.5,
+                            background:on?`${C.green}20`:'transparent',
+                            border:`1px solid ${on?C.green:C.border}`,
+                            color:on?C.green:C.dim,
+                          }}>{s}</button>
+                        })}
+                      </div>
+                      {alertPrefs.symbols.filter(s=>!PRESET_SYMS.includes(s)).map(s=>(
+                        <span key={s} style={{display:'inline-flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:4,
+                          fontSize:10,background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,marginRight:6,marginBottom:6}}>
+                          {s}
+                          <button className="hv" onClick={()=>setAlertPrefs(p=>({...p,symbols:p.symbols.filter(x=>x!==s)}))}
+                            style={{background:'transparent',border:'none',color:C.orange,cursor:'pointer',padding:0,fontSize:11,lineHeight:1}}>✕</button>
+                        </span>
+                      ))}
+                      <div style={{display:'flex',gap:6,marginTop:4}}>
+                        <input value={customSymInput} onChange={e=>setCustomSymInput(e.target.value.toUpperCase())}
+                          onKeyDown={e=>e.key==='Enter'&&addCustomSym()}
+                          placeholder="Add ticker…" maxLength={8}
+                          style={{flex:1,background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
+                            color:C.text,fontSize:10,padding:'5px 8px',fontFamily:"'IBM Plex Mono',monospace",outline:'none'}}/>
+                        <button className="hv" onClick={addCustomSym}
+                          style={{background:`${C.green}20`,border:`1px solid ${C.green}40`,color:C.green,
+                            padding:'5px 12px',borderRadius:4,fontSize:10,cursor:'pointer'}}>ADD</button>
+                      </div>
+                    </div>
+
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <button className="hv" onClick={saveAlertPrefs} disabled={alertPrefsSaving} style={{
+                        background:alertPrefsSaving?'transparent':C.green,
+                        border:`1px solid ${alertPrefsSaving?C.border:C.green}`,
+                        color:alertPrefsSaving?C.dim:'#000',fontWeight:700,
+                        padding:'7px 18px',borderRadius:4,fontSize:10,letterSpacing:.8,
+                        cursor:alertPrefsSaving?'not-allowed':'pointer',
+                      }}>{alertPrefsSaving?'SAVING…':'SAVE PREFERENCES'}</button>
+                      {alertPrefsSaved&&<span style={{fontSize:11,color:C.green}}>✓ Saved</span>}
+                      {alertPrefsErr&&<span style={{fontSize:11,color:C.red}}>{alertPrefsErr}</span>}
                     </div>
                   </Card>
+
+                  {/* Scanner Defaults */}
+                  <Card style={{marginBottom:12}}>
+                    <Lbl C={C} color={C.blue}>⌁ SCANNER DEFAULTS</Lbl>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Default Timeframe</div>
+                        <select value={scanTF} onChange={e=>setScanTF(e.target.value)} style={{
+                          width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
+                          color:C.text,fontSize:11,padding:'7px 8px',fontFamily:"'Inter',sans-serif",cursor:'pointer',outline:'none'
+                        }}>
+                          {Object.keys(TF_CONFIG).map(k=><option key={k} value={k}>{TF_CONFIG[k].label}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Default Trade Type</div>
+                        <select value={scanType} onChange={e=>setScanType(e.target.value)} style={{
+                          width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
+                          color:C.text,fontSize:11,padding:'7px 8px',fontFamily:"'Inter',sans-serif",cursor:'pointer',outline:'none'
+                        }}>
+                          {['Any','Call','Put','Call Spread','Put Spread','Iron Condor','Strangle'].map(t=><option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Auto-Scanner Watchlist</div>
+                      <Field C={C} value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY — blank = full S&P 500"/>
+                      <div style={{fontSize:9,color:C.dim,marginTop:4}}>Comma-separated tickers · Leave blank to scan all S&P 500 names</div>
+                    </div>
+                  </Card>
+
+                  {/* Display */}
+                  <Card style={{marginBottom:12}}>
+                    <Lbl C={C} color={C.dim}>🎨 DISPLAY</Lbl>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                      <div>
+                        <div style={{fontSize:11,color:C.text,fontWeight:600}}>Theme</div>
+                        <div style={{fontSize:10,color:C.dim,marginTop:2}}>{isDark?'Dark mode active':'Light mode active'}</div>
+                      </div>
+                      <button className="hv" onClick={()=>setIsDark(p=>!p)} style={{
+                        width:38,height:20,borderRadius:10,border:'none',cursor:'pointer',
+                        background:isDark?C.green:'#1a2e3e',position:'relative',transition:'background .2s',flexShrink:0,
+                      }}>
+                        <span style={{position:'absolute',top:2,left:isDark?20:2,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left .2s'}}/>
+                      </button>
+                    </div>
+                  </Card>
+
+                  {/* Account */}
+                  <Card style={{marginBottom:12}}>
+                    <Lbl C={C} color={C.dim}>👤 ACCOUNT</Lbl>
+                    {userEmail&&<div style={{fontSize:11,color:C.subtext,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{userEmail}</div>}
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <button className="hv" onClick={openPortal} style={{
+                        background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
+                        padding:'7px 14px',borderRadius:4,fontSize:10,fontWeight:700,letterSpacing:.8,cursor:'pointer'
+                      }}>MANAGE BILLING</button>
+                      <button className="hv" onClick={onSignOut} style={{
+                        background:'transparent',border:`1px solid ${C.border}`,color:C.dim,
+                        padding:'7px 14px',borderRadius:4,fontSize:10,letterSpacing:.8,cursor:'pointer'
+                      }}>SIGN OUT</button>
+                    </div>
+                  </Card>
+
                 </div>
               )}
 
@@ -2795,4 +3013,3 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     </div>
   )
 }
-
