@@ -4,9 +4,8 @@ import {
   SignIn, SignUp, useClerk,
 } from '@clerk/clerk-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import App           from './App'
-import AlertSettings from './pages/AlertSettings'
-import TradeLog      from './pages/TradeLog'
+import App      from './App'
+import TradeLog from './pages/TradeLog'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
@@ -129,7 +128,7 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
               'Live options scanner — real Tradier data',
               'SPX / NDX index setups across all timeframes',
               'GEX + conviction scoring engine',
-              'Morning AI readout (Claude)',
+              'Morning readout — daily market brief',
               'Email alerts on high-conviction setups',
               'Trade journal & strategy backtest',
             ].map((feat, i) => (
@@ -300,6 +299,8 @@ function AuthShell() {
     getToken:    stableGetToken,
     isLoaded,
     isSignedIn,
+    isAdmin:     subStatus?.isAdmin === true,
+    subStatus,
     userEmail:   user?.primaryEmailAddress?.emailAddress ?? '',
     userInitial: user?.firstName?.[0]
                  ?? user?.primaryEmailAddress?.emailAddress?.[0]
@@ -353,9 +354,7 @@ function AuthShell() {
 
   return (
     <Routes>
-      <Route path="/app/settings/alerts" element={
-        <SubscriptionGate {...gateProps}><AlertSettings {...authProps} /></SubscriptionGate>
-      } />
+      <Route path="/app/settings/alerts" element={<Navigate to="/app" replace />} />
       <Route path="/app/trades" element={
         <SubscriptionGate {...gateProps}><TradeLog {...authProps} /></SubscriptionGate>
       } />
