@@ -659,7 +659,6 @@ export default function App(props={}) {
   const [scanFreq,     setScanFreq]     = useState(()=>Number(ls('scanFreq','5')))
   const [tgStatus,     setTgStatus]     = useState('')
 
-  useEffect(()=>{try{localStorage.setItem('anthropicKey', anthropicKey)}catch{}},[anthropicKey])
   useEffect(()=>{try{localStorage.setItem('tradierToken',tradierToken)}catch{}},[tradierToken])
   useEffect(()=>{try{localStorage.setItem('tradierMode', tradierMode)} catch{}},[tradierMode])
   useEffect(()=>{try{localStorage.setItem('tgToken',     tgToken)}     catch{}},[tgToken])
@@ -1578,7 +1577,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           spxChange: esBar?.chgPct?.toFixed(2),
           ndxPrice: nqBar?.price?.toFixed(2),
           ndxChange: nqBar?.chgPct?.toFixed(2),
-          apiKey: anthropicKey,
         })
       })
       // Read as text first — Vercel can return HTML error pages on server crashes
@@ -2521,7 +2519,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
 
                   {/* Anthropic */}
-                  <MorningBrief getToken={getToken} />
+                  <MorningBrief getToken={getAuthToken} />
 
                   {/* Telegram */}
                   <Card style={{marginBottom:12}}>
