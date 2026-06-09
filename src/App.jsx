@@ -1775,31 +1775,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
 
             {/* ── Morning Readout ── */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
-                <div>
-                  <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MORNING READOUT</div>
-                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>Claude AI brief {'·'} premarket news {'·'} key levels</div>
-                </div>
-                <button className="hv" onClick={fetchMorningBrief} disabled={briefLoading} style={{
-                  background: briefLoading ? C.cardAlt : C.orange,
-                  border: `1px solid ${briefLoading ? C.border : C.orange}`,
-                  color: briefLoading ? C.dim : '#000',
-                  fontWeight: 700,
-                  padding:'8px 18px',borderRadius:4,fontSize:12,letterSpacing:.8,
-                  cursor:briefLoading?'default':'pointer',fontFamily:"'Bebas Neue',sans-serif",
-                }}>
-                  {briefLoading?<span className="pulse">GENERATING</span>:'GENERATE'}
-                </button>
-              </div>
-              {morningBrief ? (
-                <pre style={{fontSize:10,lineHeight:1.85,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word',borderTop:`1px solid ${C.border}`,paddingTop:9,fontFamily:"'IBM Plex Mono',monospace"}}>{morningBrief}</pre>
-              ) : (
-                <div style={{fontSize:10,color:C.subtext,textAlign:'center',padding:'8px 0'}}>
-                  Set ANTHROPIC_API_KEY in Vercel env vars to enable
-                </div>
-              )}
-            </div>
+            <MorningBrief getToken={getAuthToken} />
 
             {/* ── Checklist ── */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
