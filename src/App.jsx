@@ -668,8 +668,6 @@ export default function App(props={}) {
   useEffect(()=>{try{localStorage.setItem('watchlist',   watchlist)}   catch{}},[watchlist])
   useEffect(()=>{try{localStorage.setItem('minScore',    String(minScore))}catch{}},[minScore])
   useEffect(()=>{try{localStorage.setItem('scanFreq',    String(scanFreq))}catch{}},[scanFreq])
-  useEffect(()=>{try{localStorage.setItem('scanTF',      scanTF)}          catch{}},[scanTF])
-  useEffect(()=>{try{localStorage.setItem('scanType',    scanType)}         catch{}},[scanType])
 
   // ── price bar ──
   const [esBar, setEsBar] = useState(null)
@@ -808,6 +806,8 @@ export default function App(props={}) {
   const [scanTicker, setScanTicker] = useState('')
   const [scanType,   setScanType]   = useState(()=>ls('scanType','Any'))
   const [scanTF,     setScanTF]     = useState(()=>ls('scanTF','Swing (21–45 DTE)'))
+  useEffect(()=>{try{localStorage.setItem('scanTF',   scanTF)}   catch{}},[scanTF])
+  useEffect(()=>{try{localStorage.setItem('scanType', scanType)} catch{}},[scanType])
   const [scanning,   setScanning]   = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const [scanErr,    setScanErr]    = useState('')
