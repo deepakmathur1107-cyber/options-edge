@@ -19,14 +19,13 @@ export default function AppNav({
   tab, setTab,
   isDark, C, setIsDark,
   userInitial, openPortal, onSignOut,
-  tradierMode, autoOn,
+  isAdmin, tradierMode, autoOn,
   showTools, setShowTools,
 }) {
   const location    = useLocation()
   const isTradesPage = location.pathname === '/app/trades'
-  const isAlertsPage = location.pathname === '/app/settings/alerts'
-  const isMainApp    = !isTradesPage && !isAlertsPage
-  const subLabel     = isTradesPage ? 'TRADES' : 'ALERT SETTINGS'
+  const isMainApp    = !isTradesPage
+  const subLabel     = 'TRADES'
 
   // ── Shared base ───────────────────────────────────────────────────────────
   const base = {
@@ -179,8 +178,8 @@ export default function AppNav({
               </span>
             )}
 
-            {/* Tradier mode badge */}
-            {tradierMode && (
+            {/* Tradier mode badge — admin only */}
+            {isAdmin && tradierMode && (
               <span style={{
                 fontSize: 8, fontWeight: 700, letterSpacing: 1,
                 padding: '5px 10px', borderRadius: 5,
@@ -201,13 +200,6 @@ export default function AppNav({
               style={iconPill('#f59e0b28', '#f59e0b70', '#f59e0b')}>
               {isDark ? '☀' : '🌙'}
             </button>
-
-            {/* Alerts bell — blue */}
-            <Link to="/app/settings/alerts" className="oe-navbtn"
-              title="Alert settings"
-              style={iconPill(`${C.blue}25`, `${C.blue}70`, C.blue)}>
-              🔔
-            </Link>
 
             {/* User avatar + badges */}
             {userInitial && (
