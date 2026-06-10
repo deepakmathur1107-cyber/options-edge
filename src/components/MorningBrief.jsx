@@ -62,8 +62,8 @@ export default function MorningBrief({ getToken }) {
       <div style={S.header}><span style={S.headerLabel}>📊 MORNING READOUT</span></div>
       <div style={{ padding: '24px 16px', textAlign: 'center' }}>
         <div style={{ fontSize: 28, marginBottom: 8 }}>🕐</div>
-        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Brief generates at market open (9 AM ET)</div>
-        <div style={{ fontSize: 10, color: '#4a7a8a', fontFamily: 'IBM Plex Mono, monospace', marginTop: 4 }}>Refreshes every hour on trading days</div>
+        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Available during market hours (9 AM – 5 PM ET)</div>
+        <div style={{ fontSize: 10, color: '#4a7a8a', fontFamily: 'IBM Plex Mono, monospace', marginTop: 4 }}>Check back when markets open</div>
       </div>
     </div>
   )
