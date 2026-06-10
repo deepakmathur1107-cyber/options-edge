@@ -2153,18 +2153,22 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 }}>{autoOn?'⏹ STOP':'▶ START'}</button>
               </div>
 
-              {/* Frequency + settings hint */}
-              <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'end',marginBottom:10}}>
+              {/* Watchlist + Frequency */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 140px',gap:8,alignItems:'end',marginBottom:4}}>
+                <div>
+                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Watchlist <span style={{fontWeight:400,color:C.subtext}}>(blank = S&P 500)</span></div>
+                  <input value={watchlist} onChange={e=>setWatchlist(e.target.value.toUpperCase())}
+                    placeholder="NVDA,AAPL,MSFT,SPY…"
+                    style={{...iSt,width:'100%',boxSizing:'border-box'}}/>
+                </div>
                 <div>
                   <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
                   <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
-                <div style={{fontSize:9,color:C.dim,lineHeight:1.6,paddingBottom:2,textAlign:'right'}}>
-                  Watchlist &amp; min score<br/>in ⚙ Settings
-                </div>
               </div>
+              <div style={{fontSize:9,color:C.dim,marginBottom:10,textAlign:'right'}}>Min score in ⚙ Settings</div>
 
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
@@ -2750,11 +2754,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         </select>
                       </div>
                     </div>
-                    <div>
-                      <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Auto-Scanner Watchlist</div>
-                      <Field C={C} value={watchlist} onChange={setWatchlist} placeholder="NVDA,AAPL,MSFT,SPY — blank = full S&P 500"/>
-                      <div style={{fontSize:9,color:C.dim,marginTop:4}}>Comma-separated tickers · Leave blank to scan all S&P 500 names</div>
-                    </div>
+
                   </Card>
 
                   {/* Display */}
