@@ -1,8 +1,14 @@
 // api/user/trades.js
 // GET    /api/user/trades        — fetch user's trades
 // POST   /api/user/trades        — save a new trade
-// PUT    /api/user/trades?id=X   — update (close) a trade
+// PUT    /api/user/trades?id=X   — close/update a trade
 // DELETE /api/user/trades?id=X   — delete a trade
+//
+// Supabase table: trades
+// Key columns: clerk_user_id, ticker, type, option_type, action,
+//   entry, entry_price, close_price, exit_price, strike, expiration,
+//   contracts, status, pnl, conviction, grade, notes, created_at,
+//   close_date, closed_at, updated_at
 
 const { createClient } = require('@supabase/supabase-js')
 
@@ -62,6 +68,9 @@ function parseBody(req) {
   return body || {}
 }
 
+function num(v)  { const n = parseFloat(v);  return isNaN(n) ? null : n }
+function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
+
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin',  '*')
@@ -82,17 +91,17 @@ module.exports = async function handler(req, res) {
     if (!active) return res.status(402).json({ error: 'Subscription required' })
   }
 
-  // ── GET — fetch trades ─────────────────────────────────────────────────────
+  // ── GET ────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('trades')
       .select('*')
-      .eq('clerk_id', clerkId)
-      .order('logged_at', { ascending: false })
+      .eq('clerk_user_id', clerkId)
+      .order('created_at', { ascending: false })
       .limit(200)
 
     if (error) {
-      console.error('trades GET error:', error)
+      console.error('trades GET:', error.message)
       return res.status(500).json({ error: error.message })
     }
     return res.status(200).json({ trades: data || [] })
@@ -100,31 +109,41 @@ module.exports = async function handler(req, res) {
 
   // ── POST — insert new trade ────────────────────────────────────────────────
   if (req.method === 'POST') {
-    const body = parseBody(req)
+    const b = parseBody(req)
 
-    // Support both TradeLog field names (symbol, entry_price, option_type, expiration)
-    // and legacy App.jsx push-to-journal names (ticker, entry, type, expiry)
+    // Accept both TradeLog field names and scanner push-to-journal names
+    const ticker = (b.ticker || b.symbol || '').toUpperCase().trim()
+    if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+
     const row = {
-      clerk_id:    clerkId,
-      symbol:      (body.symbol      || body.ticker || '').toUpperCase().trim(),
-      option_type: (body.option_type || body.type   || 'call').toLowerCase(),
-      action:      body.action       || 'buy',
-      strike:      body.strike       != null ? parseFloat(body.strike)      || null : null,
-      expiration:  body.expiration   || body.expiry || null,
-      contracts:   body.contracts    != null ? parseInt(body.contracts)     || 1   : 1,
-      entry_price: body.entry_price  != null ? parseFloat(body.entry_price) || null
-                 : body.entry        != null ? parseFloat(body.entry)       || null : null,
-      exit_price:  body.exit_price   != null ? parseFloat(body.exit_price)  || null
-                 : body.exitPrice    != null ? parseFloat(body.exitPrice)   || null : null,
-      status:      body.status       || 'open',
-      notes:       body.notes        || null,
-      // Optional scoring fields from scanner push-to-journal
-      conviction:  body.conviction   != null ? parseFloat(body.conviction)  || null : null,
-      grade:       body.grade        || null,
-      logged_at:   new Date().toISOString(),
+      clerk_user_id:    clerkId,
+      ticker,
+      // TradeLog sends option_type ('call'/'put'); scanner sends type ('Call'/'Put')
+      option_type:      (b.option_type || b.type  || 'call').toLowerCase(),
+      type:             (b.type        || b.option_type || 'call'),
+      action:           b.action       || 'buy',
+      strike:           b.strike       != null ? String(b.strike) : null,
+      expiration:       b.expiration   || b.expiry || null,
+      contracts:        b.contracts    != null ? String(b.contracts) : '1',
+      // entry — stored as text (legacy) and numeric (new)
+      entry:            b.entry        != null ? String(b.entry)
+                      : b.entry_price  != null ? String(b.entry_price) : null,
+      entry_price:      b.entry_price  != null ? num(b.entry_price)
+                      : b.entry        != null ? num(b.entry) : null,
+      status:           b.status       || 'Open',
+      notes:            b.notes        || null,
+      // Optional scoring fields from scanner
+      conviction:       num(b.conviction),
+      iv_at_entry:      num(b.iv || b.iv_at_entry),
+      chg_pct_at_entry: num(b.chgPctAtEntry || b.chg_pct_at_entry),
+      be_req_pct:       num(b.breakevenReqPct || b.be_req_pct),
+      hard_block_count: int_(b.hardBlockCount || b.hard_block_count) || 0,
+      grade:            b.grade || null,
+      premium:          num(b.premium || b.entry_price || b.entry),
+      strategy:         b.strategy || null,
+      created_at:       new Date().toISOString(),
+      updated_at:       new Date().toISOString(),
     }
-
-    if (!row.symbol) return res.status(400).json({ error: 'Symbol is required' })
 
     const { data, error } = await supabase
       .from('trades')
@@ -133,41 +152,43 @@ module.exports = async function handler(req, res) {
       .single()
 
     if (error) {
-      console.error('trades POST error:', error)
+      console.error('trades POST:', error.message, JSON.stringify(row))
       return res.status(500).json({ error: error.message })
     }
     return res.status(200).json({ trade: data })
   }
 
-  // ── PUT — update trade (close out) ────────────────────────────────────────
+  // ── PUT — update/close trade ───────────────────────────────────────────────
   if (req.method === 'PUT') {
-    const id   = req.query.id
+    const id = req.query.id
     if (!id) return res.status(400).json({ error: 'Missing ?id=' })
-    const body = parseBody(req)
+    const b = parseBody(req)
 
-    const updates = {}
-    if (body.exit_price  != null) updates.exit_price  = parseFloat(body.exit_price)  || null
-    if (body.status      != null) updates.status      = body.status
-    if (body.closed_at   != null) updates.closed_at   = body.closed_at
-    if (body.notes       != null) updates.notes       = body.notes
-    if (body.pnl         != null) updates.pnl         = parseFloat(body.pnl) || null
+    const updates = { updated_at: new Date().toISOString() }
+    if (b.exit_price  != null) { updates.exit_price  = num(b.exit_price);  updates.close_price = String(b.exit_price) }
+    if (b.close_price != null) { updates.close_price = String(b.close_price); updates.exit_price = num(b.close_price) }
+    if (b.status      != null)   updates.status      = b.status
+    if (b.closed_at   != null)   updates.closed_at   = b.closed_at
+    if (b.close_date  != null)   updates.close_date  = b.close_date
+    if (b.pnl         != null)   updates.pnl         = num(b.pnl)
+    if (b.notes       != null)   updates.notes       = b.notes
 
     const { data, error } = await supabase
       .from('trades')
       .update(updates)
       .eq('id', id)
-      .eq('clerk_id', clerkId)   // user can only update their own trades
+      .eq('clerk_user_id', clerkId)
       .select()
       .single()
 
     if (error) {
-      console.error('trades PUT error:', error)
+      console.error('trades PUT:', error.message)
       return res.status(500).json({ error: error.message })
     }
     return res.status(200).json({ trade: data })
   }
 
-  // ── DELETE — remove trade ─────────────────────────────────────────────────
+  // ── DELETE ─────────────────────────────────────────────────────────────────
   if (req.method === 'DELETE') {
     const id = req.query.id
     if (!id) return res.status(400).json({ error: 'Missing ?id=' })
@@ -176,10 +197,10 @@ module.exports = async function handler(req, res) {
       .from('trades')
       .delete()
       .eq('id', id)
-      .eq('clerk_id', clerkId)   // user can only delete their own trades
+      .eq('clerk_user_id', clerkId)
 
     if (error) {
-      console.error('trades DELETE error:', error)
+      console.error('trades DELETE:', error.message)
       return res.status(500).json({ error: error.message })
     }
     return res.status(200).json({ ok: true })
