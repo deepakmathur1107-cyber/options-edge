@@ -190,7 +190,8 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'GET or POST only' })
   }
 
-  const secret = req.headers['x-cron-secret'] ||
+  const secret = req.query?.secret ||
+    req.headers['x-cron-secret'] ||
     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
   if (secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' })
