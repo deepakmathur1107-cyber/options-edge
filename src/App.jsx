@@ -821,6 +821,7 @@ export default function App(props={}) {
   const [selectedAlert, setSelectedAlert] = useState(null) // expanded detail
   const [alertCopied, setAlertCopied] = useState(false)
   const autoRef    = useRef(null)
+  const stopRef    = useRef(false)     // set true → running scan loop exits immediately
   const scanTFRef  = useRef(scanTF)   // always holds live scanTF — avoids stale closure in interval
   useEffect(()=>{ scanTFRef.current = scanTF },[scanTF])
 
@@ -859,7 +860,12 @@ export default function App(props={}) {
         const data = await res.json()
         const q = data?.quotes?.quote
         if (!q) { console.warn(`Quote ${sym}: no quote in response`, data); return null }
-        const p = parseFloat(q.last || q.prevclose || 0)
+        const last  = parseFloat(q.last      || 0)
+        const close = parseFloat(q.close     || 0)
+        const prev  = parseFloat(q.prevclose || 0)
+        // Prefer last if it differs from prevclose (i.e. not stale pre-market)
+        // Fall back to close, then prevclose
+        const p = (last > 0 && last !== prev) ? last : (close > 0 ? close : prev)
         if (p <= 0) { console.warn(`Quote ${sym}: price is 0`, q); return null }
         return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym, q }
       } catch(e) {
@@ -1441,10 +1447,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   },[tradierToken,tradierMode])
 
   const runAutoScan = useCallback(async()=>{
-    // Admin key always available — no token check needed
-    // No morning gate — strong setups are valid at open.
-    // The scoring engine already adds a warning for volatile open conditions.
-    const activeTF = scanTFRef.current  // read live value — not stale closure
+    stopRef.current = false   // reset at start of each scan run
+    const activeTF = scanTFRef.current
     const tfCfgNow = TF_CONFIG[activeTF]||TF_CONFIG['Swing (21–45 DTE)']
     const list=watchlist.split(',').map(t=>t.trim().toUpperCase()).filter(Boolean)
     const shuffle=arr=>[...arr].sort(()=>Math.random()-.5)
@@ -1452,7 +1456,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     const ts=new Date().toLocaleTimeString()
     setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
     for (const ticker of tickers) {
+      if (stopRef.current) break   // ← exit immediately when STOP pressed
       const r=await scanOneTicker(ticker, activeTF)
+      if (stopRef.current) break   // ← also check after the async fetch returns
       const ts2=new Date().toLocaleTimeString()
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
@@ -1472,6 +1478,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   const toggleAuto=()=>{
     if (autoOn) {
+      stopRef.current = true   // signals the running loop to break immediately
       clearInterval(autoRef.current)
       setAutoOn(false)
       const tfNow = scanTFRef.current
@@ -2168,7 +2175,24 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </select>
                 </div>
               </div>
-              <div style={{fontSize:9,color:C.dim,marginBottom:10,textAlign:'right'}}>Min score in ⚙ Settings</div>
+              {/* Min Edge Score — inline in scanner */}
+              <div style={{marginBottom:10}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,fontFamily:"'Inter',sans-serif"}}>Min Edge Score</div>
+                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.green,fontWeight:700}}>{minScore}%+</span>
+                </div>
+                <input type="range" min={40} max={95} step={5} value={minScore}
+                  onChange={e=>{
+                    const v=Number(e.target.value)
+                    setMinScore(v)
+                    setAlertPrefs(p=>({...p,min_edge_score:v}))
+                  }}
+                  style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
+                />
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.dim,marginTop:2}}>
+                  <span>40% — more alerts</span><span>95% — high conviction only</span>
+                </div>
+              </div>
 
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
@@ -2731,33 +2755,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </Card>
 
-                  {/* Scanner Defaults */}
-                  <Card style={{marginBottom:12}}>
-                    <Lbl C={C} color={C.blue}>⌁ SCANNER DEFAULTS</Lbl>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-                      <div>
-                        <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Default Timeframe</div>
-                        <select value={scanTF} onChange={e=>setScanTF(e.target.value)} style={{
-                          width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
-                          color:C.text,fontSize:11,padding:'7px 8px',fontFamily:"'Inter',sans-serif",cursor:'pointer',outline:'none'
-                        }}>
-                          {Object.keys(TF_CONFIG).map(k=><option key={k} value={k}>{TF_CONFIG[k].label}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <div style={{fontSize:11,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:5,fontFamily:"'Inter',sans-serif"}}>Default Trade Type</div>
-                        <select value={scanType} onChange={e=>setScanType(e.target.value)} style={{
-                          width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
-                          color:C.text,fontSize:11,padding:'7px 8px',fontFamily:"'Inter',sans-serif",cursor:'pointer',outline:'none'
-                        }}>
-                          {['Any','Call','Put','Call Spread','Put Spread','Iron Condor','Strangle'].map(t=><option key={t} value={t}>{t}</option>)}
-                        </select>
-                      </div>
-                    </div>
-
-                  </Card>
-
-                  {/* Display */}
+                                    {/* Display */}
                   <Card style={{marginBottom:12}}>
                     <Lbl C={C} color={C.dim}>🎨 DISPLAY</Lbl>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
