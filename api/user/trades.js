@@ -1,13 +1,13 @@
 // api/user/trades.js
-// GET  /api/user/trades       — fetch user's trades
-// POST /api/user/trades       — save a new trade
-// Admins bypass subscription check entirely.
+// GET    /api/user/trades        — fetch user's trades
+// POST   /api/user/trades        — save a new trade
+// PUT    /api/user/trades?id=X   — update (close) a trade
+// DELETE /api/user/trades?id=X   — delete a trade
 
 const { createClient } = require('@supabase/supabase-js')
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 
-// ── Inline JWT decode (no SDK) ────────────────────────────────────────────────
 function b64d(str) {
   const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
   const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
@@ -44,7 +44,6 @@ async function getClerkId(authHeader) {
 }
 
 async function hasActiveSub(clerkId, supabase) {
-  // Admin always active
   if (ADMIN_IDS.includes(clerkId)) return true
   try {
     const { data } = await supabase
@@ -57,9 +56,16 @@ async function hasActiveSub(clerkId, supabase) {
   } catch { return false }
 }
 
+function parseBody(req) {
+  let body = req.body
+  if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+  return body || {}
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin',  '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
   if (req.method === 'OPTIONS') return res.status(200).end()
 
@@ -71,13 +77,12 @@ module.exports = async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 
-  // Subscription gate (admins skip)
   if (!ADMIN_IDS.includes(clerkId)) {
     const active = await hasActiveSub(clerkId, supabase)
     if (!active) return res.status(402).json({ error: 'Subscription required' })
   }
 
-  // ── GET — fetch trades ────────────────────────────────────────────────────
+  // ── GET — fetch trades ─────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('trades')
@@ -86,37 +91,40 @@ module.exports = async function handler(req, res) {
       .order('logged_at', { ascending: false })
       .limit(200)
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) {
+      console.error('trades GET error:', error)
+      return res.status(500).json({ error: error.message })
+    }
     return res.status(200).json({ trades: data || [] })
   }
 
-  // ── POST — save trade ─────────────────────────────────────────────────────
+  // ── POST — insert new trade ────────────────────────────────────────────────
   if (req.method === 'POST') {
-    let body = req.body
-    if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
-    body = body || {}
+    const body = parseBody(req)
 
-    // Map frontend field names → exact Supabase schema columns
+    // Support both TradeLog field names (symbol, entry_price, option_type, expiration)
+    // and legacy App.jsx push-to-journal names (ticker, entry, type, expiry)
     const row = {
-      clerk_id:         clerkId,
-      ticker:           body.ticker    || body.sym    || '',
-      type:             body.type      || 'Call',
-      status:           body.status    || 'Open',
-      entry:            body.entry     !== undefined ? String(body.entry)     : null,
-      exit_price:       body.exitPrice !== undefined ? String(body.exitPrice) : null,
-      pnl:              body.pnl       !== undefined ? parseFloat(body.pnl) || 0 : 0,
-      contracts:        body.contracts !== undefined ? parseInt(body.contracts) || 1 : 1,
-      strike:           body.strike    || null,
-      expiry:           body.expiry    || null,
-      notes:            body.notes     || null,
-      conviction:       body.conviction !== undefined ? parseFloat(body.conviction) || null : null,
-      iv_at_entry:      body.iv        !== undefined ? parseFloat(body.iv) || null : null,
-      chg_pct_at_entry: body.chgPctAtEntry !== undefined ? parseFloat(body.chgPctAtEntry) || null : null,
-      be_req_pct:       body.breakevenReqPct !== undefined ? parseFloat(body.breakevenReqPct) || null : null,
-      hard_block_count: body.hardBlockCount !== undefined ? parseInt(body.hardBlockCount) || 0 : 0,
-      grade:            body.grade     || null,
-      logged_at:        new Date().toISOString(),
+      clerk_id:    clerkId,
+      symbol:      (body.symbol      || body.ticker || '').toUpperCase().trim(),
+      option_type: (body.option_type || body.type   || 'call').toLowerCase(),
+      action:      body.action       || 'buy',
+      strike:      body.strike       != null ? parseFloat(body.strike)      || null : null,
+      expiration:  body.expiration   || body.expiry || null,
+      contracts:   body.contracts    != null ? parseInt(body.contracts)     || 1   : 1,
+      entry_price: body.entry_price  != null ? parseFloat(body.entry_price) || null
+                 : body.entry        != null ? parseFloat(body.entry)       || null : null,
+      exit_price:  body.exit_price   != null ? parseFloat(body.exit_price)  || null
+                 : body.exitPrice    != null ? parseFloat(body.exitPrice)   || null : null,
+      status:      body.status       || 'open',
+      notes:       body.notes        || null,
+      // Optional scoring fields from scanner push-to-journal
+      conviction:  body.conviction   != null ? parseFloat(body.conviction)  || null : null,
+      grade:       body.grade        || null,
+      logged_at:   new Date().toISOString(),
     }
+
+    if (!row.symbol) return res.status(400).json({ error: 'Symbol is required' })
 
     const { data, error } = await supabase
       .from('trades')
@@ -124,8 +132,57 @@ module.exports = async function handler(req, res) {
       .select()
       .single()
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) {
+      console.error('trades POST error:', error)
+      return res.status(500).json({ error: error.message })
+    }
     return res.status(200).json({ trade: data })
+  }
+
+  // ── PUT — update trade (close out) ────────────────────────────────────────
+  if (req.method === 'PUT') {
+    const id   = req.query.id
+    if (!id) return res.status(400).json({ error: 'Missing ?id=' })
+    const body = parseBody(req)
+
+    const updates = {}
+    if (body.exit_price  != null) updates.exit_price  = parseFloat(body.exit_price)  || null
+    if (body.status      != null) updates.status      = body.status
+    if (body.closed_at   != null) updates.closed_at   = body.closed_at
+    if (body.notes       != null) updates.notes       = body.notes
+    if (body.pnl         != null) updates.pnl         = parseFloat(body.pnl) || null
+
+    const { data, error } = await supabase
+      .from('trades')
+      .update(updates)
+      .eq('id', id)
+      .eq('clerk_id', clerkId)   // user can only update their own trades
+      .select()
+      .single()
+
+    if (error) {
+      console.error('trades PUT error:', error)
+      return res.status(500).json({ error: error.message })
+    }
+    return res.status(200).json({ trade: data })
+  }
+
+  // ── DELETE — remove trade ─────────────────────────────────────────────────
+  if (req.method === 'DELETE') {
+    const id = req.query.id
+    if (!id) return res.status(400).json({ error: 'Missing ?id=' })
+
+    const { error } = await supabase
+      .from('trades')
+      .delete()
+      .eq('id', id)
+      .eq('clerk_id', clerkId)   // user can only delete their own trades
+
+    if (error) {
+      console.error('trades DELETE error:', error)
+      return res.status(500).json({ error: error.message })
+    }
+    return res.status(200).json({ ok: true })
   }
 
   return res.status(405).json({ error: 'Method not allowed' })
