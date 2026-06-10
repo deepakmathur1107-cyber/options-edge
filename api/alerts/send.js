@@ -21,6 +21,22 @@ const supabase = createClient(
 
 const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'AAPL']
 
+// ── Symbol parsing — handles CSV text or JSON array string ───────────────
+function parseSymbols(raw) {
+  if (!raw) return []
+  const s = typeof raw === 'string' ? raw.trim() : String(raw)
+  // Detect JSON array: starts with [ 
+  if (s.startsWith('[')) {
+    try {
+      const arr = JSON.parse(s)
+      return Array.isArray(arr) ? arr.map(x => String(x).replace(/['"]/g, '').trim().toUpperCase()).filter(Boolean) : []
+    } catch { /* fall through to CSV */ }
+  }
+  // CSV
+  return s.split(',').map(x => x.replace(/['"\[\]]/g, '').trim().toUpperCase()).filter(Boolean)
+}
+
+
 // ── Twilio SMS ────────────────────────────────────────────────────────────
 async function sendSms(to, body) {
   const sid   = process.env.TWILIO_ACCOUNT_SID
@@ -124,7 +140,7 @@ function buildEmailHtml(alerts) {
       </table>
       <p style="color:#4a7a8a;font-size:11px;font-family:monospace;margin-top:24px">
         Not financial advice.<br>
-        <a href="https://optionsedgeflow.com/app/settings/alerts" style="color:#00c8ff">Manage alert preferences</a>
+        <a href="https://optionsedgeflow.com/app" style="color:#00c8ff">Manage alert preferences</a>
       </p>
     </div>`
 }
@@ -164,7 +180,7 @@ module.exports = async function handler(req, res) {
     // 2. Collect all unique symbols
     const allSymbols = new Set(DEFAULT_SYMBOLS)
     for (const u of users) {
-      if (u.symbols) u.symbols.split(',').map(s => s.trim()).filter(Boolean).forEach(s => allSymbols.add(s))
+      parseSymbols(u.symbols).forEach(s => allSymbols.add(s))
     }
     const symbols = [...allSymbols]
     console.log('Scanning:', symbols)
@@ -196,7 +212,7 @@ module.exports = async function handler(req, res) {
     let sent = 0
     for (const user of users) {
       const watchlist = user.symbols
-        ? user.symbols.split(',').map(s => s.trim()).filter(Boolean)
+        ? parseSymbols(user.symbols)
         : DEFAULT_SYMBOLS
       const minScore = user.min_edge_score ?? 50
 
