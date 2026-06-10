@@ -162,7 +162,7 @@ module.exports = async function handler(req, res) {
   const url   = `${TRADIER_BASE}${tradierPath}${qsStr ? '?' + qsStr : ''}`
 
   // ── Cache check (skip for admin — always fresh) ─────────────────────────────
-  const cKey = ('tr:'+tradierPath+(qsStr?'?'+qsStr:''))
+  const cKey = ('tr:'+TRADIER_MODE+':'+tradierPath+(qsStr?'?'+qsStr:''))
     .replace(/[^\w:._%-]/g,'_').slice(0,200)
 
   if (!isAdmin) {
