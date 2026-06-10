@@ -116,7 +116,25 @@ async function fetchChain(symbol) {
 }
 
 // ── Edge scoring ──────────────────────────────────────────────────────────────
-function computeEdgeScore(c) {
+// Fetch stock quote for direction context
+async function fetchQuote(symbol) {
+  try {
+    const r = await fetch(
+      `${TRADIER_BASE}/markets/quotes?symbols=${symbol}&greeks=false`,
+      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
+    )
+    if (!r.ok) return null
+    const d = await r.json()
+    const q = d?.quotes?.quote
+    if (!q) return null
+    return {
+      price:  parseFloat(q.last || q.prevclose || 0),
+      chgPct: parseFloat(q.change_percentage || 0),
+    }
+  } catch { return null }
+}
+
+function computeEdgeScore(c, stockChgPct = 0) {
   const delta  = Math.abs(c?.greeks?.delta  ?? 0)
   const iv     = c?.greeks?.smv_vol          ?? 0
   const oi     = c?.open_interest            ?? 0
@@ -124,21 +142,39 @@ function computeEdgeScore(c) {
   const bid    = c?.bid                      ?? 0
   const ask    = c?.ask                      ?? 0
   const mid    = (bid + ask) / 2
+  const isPut  = c?.option_type === 'put'
+  const isCall = c?.option_type === 'call'
 
-  // Hard disqualifiers — skip worthless/untradeable contracts
-  if (mid < 0.10)                   return 0   // sub-10c premium — not worth trading
-  if (delta < 0.10 || delta > 0.90) return 0   // too far OTM or too deep ITM
+  // Hard disqualifiers
+  if (mid < 0.15)                   return 0   // sub-15c — not worth trading
+  if (delta < 0.15 || delta > 0.85) return 0   // too far OTM or too deep ITM
   if (ask <= 0 || bid <= 0)         return 0   // no market
-  if ((ask - bid) > mid * 0.5)      return 0   // spread > 50% of mid — illiquid
+  if ((ask - bid) > mid * 0.40)     return 0   // spread > 40% of mid — illiquid
 
-  // Score components
-  const deltaScore  = delta >= 0.30 && delta <= 0.70 ? 35 : 15  // ATM sweet spot
-  const ivScore     = iv >= 0.20 && iv <= 0.60 ? 25 : (iv > 0 ? 10 : 0)
-  const liqScore    = Math.min(25, Math.round(Math.log1p(oi + volume) * 3))
-  const spreadScore = (ask - bid) / mid < 0.10 ? 15              // tight spread bonus
-                    : (ask - bid) / mid < 0.25 ? 8 : 0
+  // Direction alignment — penalise counter-trend trades heavily
+  // Put alerts on up days, call alerts on down days = low conviction
+  const strongUp   =  stockChgPct >  1.0
+  const mildUp     =  stockChgPct >  0.2
+  const mildDown   =  stockChgPct < -0.2
+  const strongDown =  stockChgPct < -1.0
 
-  return Math.min(99, deltaScore + ivScore + liqScore + spreadScore)
+  let directionBonus = 0
+  if (isPut  && strongDown) directionBonus =  20  // puts on down day = aligned
+  if (isPut  && mildDown)   directionBonus =  10
+  if (isCall && strongUp)   directionBonus =  20  // calls on up day = aligned
+  if (isCall && mildUp)     directionBonus =  10
+  if (isPut  && strongUp)   directionBonus = -25  // puts on strong up day = wrong way
+  if (isCall && strongDown) directionBonus = -25  // calls on strong down day = wrong way
+
+  // Core score components
+  const deltaScore  = delta >= 0.30 && delta <= 0.60 ? 30 : 15
+  const ivScore     = iv >= 0.15 && iv <= 0.55 ? 20 : (iv > 0 ? 8 : 0)
+  const liqScore    = Math.min(20, Math.round(Math.log1p(oi + volume) * 2.5))
+  const spreadScore = (ask - bid) / mid < 0.10 ? 10
+                    : (ask - bid) / mid < 0.20 ? 5 : 0
+
+  const raw = deltaScore + ivScore + liqScore + spreadScore + directionBonus
+  return Math.min(95, Math.max(0, raw))
 }
 
 // ── Email HTML ────────────────────────────────────────────────────────────────
@@ -226,20 +262,22 @@ module.exports = async function handler(req, res) {
     // Fetch chains and score each symbol
     const alertsBySymbol = {}
     for (const sym of symbols) {
-      const chain = await fetchChain(sym)
+      const [chain, quote] = await Promise.all([fetchChain(sym), fetchQuote(sym)])
+      const chgPct = quote?.chgPct ?? 0
+      console.log(`${sym}: chg ${chgPct.toFixed(2)}%`)
       const scored = chain
         .map(c => ({
           symbol: sym,
           type:   c.option_type === 'call' ? 'CALL' : 'PUT',
           strike: c.strike,
           expiry: c.expiration_date,
-          score:  computeEdgeScore(c),
+          score:  computeEdgeScore(c, chgPct),
           mid:    ((c.bid ?? 0) + (c.ask ?? 0)) / 2,
         }))
-        .filter(c => c.score >= 40)
-        .filter(c => c.mid >= 0.10)           // min $0.10 premium
+        .filter(c => c.score >= 45)
+        .filter(c => c.mid >= 0.15)
         .sort((a, b) => b.score - a.score)
-        .slice(0, 3)
+        .slice(0, 2)                           // max 2 per symbol to avoid spam
       if (scored.length) alertsBySymbol[sym] = scored
     }
 
