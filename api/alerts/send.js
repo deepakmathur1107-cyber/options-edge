@@ -1,12 +1,8 @@
 /**
- * api/alerts/send.js — Vercel Serverless Function (Cron)
+ * api/alerts/send.js — Vercel Serverless Function (Cron + Manual)
  *
- * Cron: "0 14 * * 1-5"  (9 AM ET weekdays)
- * Manual: POST /api/alerts/send  with header  x-cron-secret: <CRON_SECRET>
- *
- * Supabase table: alert_prefs
- * Columns used: clerk_user_id, email_alerts, alert_email, min_edge_score,
- *               symbols (comma-separated text), sms_on, phone_number
+ * Cron: "0 14 * * 1-5"  (10 AM ET weekdays — Vercel fires as GET)
+ * Manual trigger: GET or POST /api/alerts/send with x-cron-secret header
  */
 
 const { createClient } = require('@supabase/supabase-js')
@@ -21,47 +17,40 @@ const supabase = createClient(
 
 const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'AAPL']
 
-// ── Symbol parsing — handles CSV text or JSON array string ───────────────
+// ── Symbol parsing — handles CSV text or JSON array string ───────────────────
 function parseSymbols(raw) {
   if (!raw) return []
   const s = typeof raw === 'string' ? raw.trim() : String(raw)
-  // Detect JSON array: starts with [ 
   if (s.startsWith('[')) {
     try {
       const arr = JSON.parse(s)
-      return Array.isArray(arr) ? arr.map(x => String(x).replace(/['"]/g, '').trim().toUpperCase()).filter(Boolean) : []
-    } catch { /* fall through to CSV */ }
+      return Array.isArray(arr)
+        ? arr.map(x => String(x).replace(/['"]/g, '').trim().toUpperCase()).filter(Boolean)
+        : []
+    } catch { /* fall through */ }
   }
-  // CSV
   return s.split(',').map(x => x.replace(/['"\[\]]/g, '').trim().toUpperCase()).filter(Boolean)
 }
 
-
-// ── Twilio SMS ────────────────────────────────────────────────────────────
+// ── Twilio SMS ────────────────────────────────────────────────────────────────
 async function sendSms(to, body) {
   const sid   = process.env.TWILIO_ACCOUNT_SID
   const token = process.env.TWILIO_AUTH_TOKEN
   const from  = process.env.TWILIO_FROM_NUMBER
-  if (!sid || !token || !from) {
-    console.warn('SMS skipped: Twilio env vars not set')
-    return false
-  }
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
-      },
-      body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
-    }
-  )
+  if (!sid || !token || !from) { console.warn('SMS skipped: Twilio env vars not set'); return false }
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
+    },
+    body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
+  })
   if (!res.ok) { console.error('Twilio error:', await res.json().catch(() => ({}))); return false }
   return true
 }
 
-// ── Resend email ──────────────────────────────────────────────────────────
+// ── Resend email ──────────────────────────────────────────────────────────────
 async function sendEmail(to, subject, html) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -74,30 +63,40 @@ async function sendEmail(to, subject, html) {
       to, subject, html,
     }),
   })
-  return res.ok
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    console.error('Resend error:', JSON.stringify(err))
+    return false
+  }
+  return true
 }
 
-// ── Tradier options chain ─────────────────────────────────────────────────
+// ── Tradier options chain ─────────────────────────────────────────────────────
 async function fetchChain(symbol) {
-  const expRes = await fetch(
-    `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=true`,
-    { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
-  )
-  if (!expRes.ok) return []
-  const expData = await expRes.json()
-  const expirations = expData?.expirations?.date
-  if (!expirations?.length) return []
-  const expiry = Array.isArray(expirations) ? expirations[0] : expirations
+  try {
+    const expRes = await fetch(
+      `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=true`,
+      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
+    )
+    if (!expRes.ok) return []
+    const expData = await expRes.json()
+    const expirations = expData?.expirations?.date
+    if (!expirations?.length) return []
+    const expiry = Array.isArray(expirations) ? expirations[0] : expirations
 
-  const chainRes = await fetch(
-    `${TRADIER_BASE}/markets/options/chains?symbol=${symbol}&expiration=${expiry}&greeks=true`,
-    { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
-  )
-  if (!chainRes.ok) return []
-  return (await chainRes.json())?.options?.option || []
+    const chainRes = await fetch(
+      `${TRADIER_BASE}/markets/options/chains?symbol=${symbol}&expiration=${expiry}&greeks=true`,
+      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
+    )
+    if (!chainRes.ok) return []
+    return (await chainRes.json())?.options?.option || []
+  } catch (e) {
+    console.error(`fetchChain ${symbol}:`, e.message)
+    return []
+  }
 }
 
-// ── Edge scoring ──────────────────────────────────────────────────────────
+// ── Edge scoring ──────────────────────────────────────────────────────────────
 function computeEdgeScore(c) {
   const delta  = Math.abs(c?.greeks?.delta  ?? 0)
   const iv     = c?.greeks?.smv_vol          ?? 0
@@ -105,7 +104,6 @@ function computeEdgeScore(c) {
   const volume = c?.volume                   ?? 0
   const bid    = c?.bid                      ?? 0
   const ask    = c?.ask                      ?? 0
-
   if (delta === 0 || iv === 0) {
     return Math.min(100, Math.round((Math.log1p(oi) * 5) + (Math.log1p(volume) * 10)))
   }
@@ -116,7 +114,7 @@ function computeEdgeScore(c) {
   return Math.min(100, deltaScore + ivScore + liqScore + spreadScore)
 }
 
-// ── Email HTML ────────────────────────────────────────────────────────────
+// ── Email HTML ────────────────────────────────────────────────────────────────
 function buildEmailHtml(alerts) {
   const rows = alerts.map(a => `
     <tr>
@@ -140,12 +138,12 @@ function buildEmailHtml(alerts) {
       </table>
       <p style="color:#4a7a8a;font-size:11px;font-family:monospace;margin-top:24px">
         Not financial advice.<br>
-        <a href="https://optionsedgeflow.com/app" style="color:#00c8ff">Manage alert preferences</a>
+        <a href="https://optionsedgeflow.com/app" style="color:#00c8ff">Manage preferences at OptionsEdgeFlow</a>
       </p>
     </div>`
 }
 
-// ── SMS text ──────────────────────────────────────────────────────────────
+// ── SMS text ──────────────────────────────────────────────────────────────────
 function buildSmsText(alerts) {
   const lines = alerts.slice(0, 3).map(a =>
     `${a.symbol} ${a.type} ${a.strike} ${a.expiry} — ${a.score}% edge @ $${a.mid?.toFixed(2) ?? '?'}`
@@ -153,15 +151,27 @@ function buildSmsText(alerts) {
   return `OptionsEdge (${new Date().toLocaleDateString('en-US',{timeZone:'America/New_York'})}):\n${lines.join('\n')}\noptionsedgeflow.com/app`
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────
+// ── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  const secret = req.headers['x-cron-secret'] || (req.headers['authorization'] || '').replace('Bearer ', '')
-  if (secret !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Unauthorized' })
+  res.setHeader('Access-Control-Allow-Origin',  '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-cron-secret')
+  if (req.method === 'OPTIONS') return res.status(204).end()
+
+  // Accept GET (Vercel cron fires as GET) or POST (manual trigger)
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'GET or POST only' })
+  }
+
+  const secret = req.headers['x-cron-secret'] ||
+    (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+  if (secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
 
   const scannedAt = new Date().toISOString()
 
   try {
-    // 1. Fetch users with email or SMS alerts on
     const { data: users, error: usersErr } = await supabase
       .from('alert_prefs')
       .select('*')
@@ -177,44 +187,38 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
     }
 
-    // 2. Collect all unique symbols
+    // Collect all unique symbols across all users
     const allSymbols = new Set(DEFAULT_SYMBOLS)
     for (const u of users) {
       parseSymbols(u.symbols).forEach(s => allSymbols.add(s))
     }
     const symbols = [...allSymbols]
-    console.log('Scanning:', symbols)
+    console.log('Scanning symbols:', symbols)
 
-    // 3. Fetch chains and score
+    // Fetch chains and score each symbol
     const alertsBySymbol = {}
     for (const sym of symbols) {
-      try {
-        const chain = await fetchChain(sym)
-        const scored = chain
-          .map(c => ({
-            symbol: sym,
-            type:   c.option_type === 'call' ? 'CALL' : 'PUT',
-            strike: c.strike,
-            expiry: c.expiration_date,
-            score:  computeEdgeScore(c),
-            mid:    ((c.bid ?? 0) + (c.ask ?? 0)) / 2,
-          }))
-          .filter(c => c.score >= 40)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 3)
-        if (scored.length) alertsBySymbol[sym] = scored
-      } catch (e) {
-        console.error(`Chain failed for ${sym}:`, e.message)
-      }
+      const chain = await fetchChain(sym)
+      const scored = chain
+        .map(c => ({
+          symbol: sym,
+          type:   c.option_type === 'call' ? 'CALL' : 'PUT',
+          strike: c.strike,
+          expiry: c.expiration_date,
+          score:  computeEdgeScore(c),
+          mid:    ((c.bid ?? 0) + (c.ask ?? 0)) / 2,
+        }))
+        .filter(c => c.score >= 40)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+      if (scored.length) alertsBySymbol[sym] = scored
     }
 
-    // 4. Notify each user
+    // Notify each user
     let sent = 0
     for (const user of users) {
-      const watchlist = user.symbols
-        ? parseSymbols(user.symbols)
-        : DEFAULT_SYMBOLS
-      const minScore = user.min_edge_score ?? 50
+      const watchlist = user.symbols ? parseSymbols(user.symbols) : DEFAULT_SYMBOLS
+      const minScore  = user.min_edge_score ?? 50
 
       const userAlerts = watchlist
         .flatMap(sym => alertsBySymbol[sym] || [])
@@ -222,7 +226,7 @@ module.exports = async function handler(req, res) {
         .sort((a, b) => b.score - a.score)
         .slice(0, 10)
 
-      if (!userAlerts.length) { console.log(`No alerts for ${user.clerk_user_id}`); continue }
+      if (!userAlerts.length) { console.log(`No alerts above threshold for ${user.clerk_user_id}`); continue }
 
       let notified = false
 
@@ -232,18 +236,20 @@ module.exports = async function handler(req, res) {
           `OptionsEdge: ${userAlerts.length} high-conviction alert${userAlerts.length > 1 ? 's' : ''} today`,
           buildEmailHtml(userAlerts)
         )
-        if (ok) { notified = true; console.log(`Email → ${user.alert_email}`) }
+        if (ok) { notified = true; console.log(`Email sent → ${user.alert_email}`) }
+        else    { console.error(`Email FAILED → ${user.alert_email}`) }
       }
 
       if (user.sms_on && user.phone_number) {
         const ok = await sendSms(user.phone_number, buildSmsText(userAlerts))
-        if (ok) { notified = true; console.log(`SMS → ${user.phone_number}`) }
+        if (ok) { notified = true; console.log(`SMS sent → ${user.phone_number}`) }
       }
 
       if (notified) sent++
     }
 
     return res.status(200).json({ sent, symbols, scannedAt })
+
   } catch (e) {
     console.error('alerts/send fatal:', e)
     return res.status(500).json({ error: e.message })
