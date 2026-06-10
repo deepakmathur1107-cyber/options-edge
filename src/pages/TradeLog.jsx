@@ -140,7 +140,7 @@ export default function TradeLog(props) {
         method:'POST',
         headers:{ 'Content-Type':'application/json', ...h },
         body: JSON.stringify({
-          symbol:      form.symbol.toUpperCase().trim(),
+          ticker:      form.symbol.toUpperCase().trim(),
           option_type: form.option_type,
           action:      form.action,
           strike:      parseFloat(form.strike),
@@ -588,14 +588,14 @@ export default function TradeLog(props) {
                         <span style={{
                           color:C.blue, fontWeight:700, fontSize:14,
                           fontFamily:"'IBM Plex Mono', monospace",
-                        }}>{trade.symbol??trade.ticker}</span>
+                        }}>{trade.ticker}</span>
 
                         <span style={{
                           fontSize:11, fontWeight:600, textTransform:'uppercase',
-                          color:(trade.option_type??trade.type??'').toLowerCase()==='call' ? C.green : C.orange,
+                          color:(trade.option_type??trade.type??"").toLowerCase()==='call' ? C.green : C.orange,
                           fontFamily:"'Inter', sans-serif",
                         }}>
-                          {(trade.option_type??trade.type??'').slice(0,4)}
+                          {(trade.option_type??trade.type??"").slice(0,4)}
                         </span>
 
                         <span style={{
