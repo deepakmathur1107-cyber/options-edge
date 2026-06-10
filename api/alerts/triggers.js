@@ -1,16 +1,22 @@
 /**
  * api/alerts/trigger.js
- * Manual trigger endpoint — not a cron, accepts POST
- * POST /api/alerts/trigger  with x-cron-secret header
- * Calls the same logic as send.js
+ * Manual trigger — GET only (Vercel blocks POST via rewrites catch-all)
+ * GET /api/alerts/trigger?secret=CRON_SECRET
  */
 const sendHandler = require('./send')
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-cron-secret')
+  res.setHeader('Access-Control-Allow-Origin', '*')
   if (req.method === 'OPTIONS') return res.status(204).end()
-  // Delegate entirely to send handler
+
+  // Accept secret from query param OR header
+  const secret = req.query.secret ||
+    req.headers['x-cron-secret'] ||
+    (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+
+  if (secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
+
   return sendHandler(req, res)
 }
