@@ -72,17 +72,36 @@ async function sendEmail(to, subject, html) {
 }
 
 // ── Tradier options chain ─────────────────────────────────────────────────────
+// Pick best expiry: 7–45 DTE (swing trade window)
+function pickExpiry(dates) {
+  const today = new Date()
+  const arr = Array.isArray(dates) ? dates : [dates]
+  const withDTE = arr.map(d => {
+    const dte = Math.round((new Date(d + 'T12:00:00') - today) / 86400000)
+    return { d, dte }
+  })
+  // Prefer 14-45 DTE, fall back to 7-45, then just pick the first >= 7
+  const ideal = withDTE.filter(x => x.dte >= 14 && x.dte <= 45)
+  if (ideal.length) return ideal[0].d
+  const ok = withDTE.filter(x => x.dte >= 7 && x.dte <= 60)
+  if (ok.length) return ok[0].d
+  const future = withDTE.filter(x => x.dte >= 3)
+  if (future.length) return future[0].d
+  return arr[0]
+}
+
 async function fetchChain(symbol) {
   try {
     const expRes = await fetch(
-      `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=true`,
+      `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=false`,
       { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
     )
     if (!expRes.ok) return []
     const expData = await expRes.json()
     const expirations = expData?.expirations?.date
     if (!expirations?.length) return []
-    const expiry = Array.isArray(expirations) ? expirations[0] : expirations
+    const expiry = pickExpiry(expirations)
+    if (!expiry) return []
 
     const chainRes = await fetch(
       `${TRADIER_BASE}/markets/options/chains?symbol=${symbol}&expiration=${expiry}&greeks=true`,
@@ -104,14 +123,22 @@ function computeEdgeScore(c) {
   const volume = c?.volume                   ?? 0
   const bid    = c?.bid                      ?? 0
   const ask    = c?.ask                      ?? 0
-  if (delta === 0 || iv === 0) {
-    return Math.min(100, Math.round((Math.log1p(oi) * 5) + (Math.log1p(volume) * 10)))
-  }
-  const deltaScore  = delta >= 0.3 && delta <= 0.7 ? 30 : 10
-  const ivScore     = iv >= 0.2 && iv <= 0.6 ? 25 : 10
+  const mid    = (bid + ask) / 2
+
+  // Hard disqualifiers — skip worthless/untradeable contracts
+  if (mid < 0.10)                   return 0   // sub-10c premium — not worth trading
+  if (delta < 0.10 || delta > 0.90) return 0   // too far OTM or too deep ITM
+  if (ask <= 0 || bid <= 0)         return 0   // no market
+  if ((ask - bid) > mid * 0.5)      return 0   // spread > 50% of mid — illiquid
+
+  // Score components
+  const deltaScore  = delta >= 0.30 && delta <= 0.70 ? 35 : 15  // ATM sweet spot
+  const ivScore     = iv >= 0.20 && iv <= 0.60 ? 25 : (iv > 0 ? 10 : 0)
   const liqScore    = Math.min(25, Math.round(Math.log1p(oi + volume) * 3))
-  const spreadScore = (ask - bid) < 0.10 ? 20 : (ask - bid) < 0.25 ? 10 : 0
-  return Math.min(100, deltaScore + ivScore + liqScore + spreadScore)
+  const spreadScore = (ask - bid) / mid < 0.10 ? 15              // tight spread bonus
+                    : (ask - bid) / mid < 0.25 ? 8 : 0
+
+  return Math.min(99, deltaScore + ivScore + liqScore + spreadScore)
 }
 
 // ── Email HTML ────────────────────────────────────────────────────────────────
@@ -209,6 +236,7 @@ module.exports = async function handler(req, res) {
           mid:    ((c.bid ?? 0) + (c.ask ?? 0)) / 2,
         }))
         .filter(c => c.score >= 40)
+        .filter(c => c.mid >= 0.10)           // min $0.10 premium
         .sort((a, b) => b.score - a.score)
         .slice(0, 3)
       if (scored.length) alertsBySymbol[sym] = scored
