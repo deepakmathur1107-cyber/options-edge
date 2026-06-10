@@ -1,8 +1,8 @@
 /**
  * api/brief.js
- * GET  /api/brief  — serve cached brief to users (Clerk JWT required)
- * POST /api/brief  — generate fresh brief (cron secret required)
- * Cron: "0 13-21 * * 1-5"
+ * GET  /api/brief  — serve cached brief; generates on-demand if none exists and market is open
+ * POST /api/brief  — generate fresh brief (cron or admin trigger)
+ * Cron: "0 13 * * 1-5"  (9 AM ET once daily — Vercel Hobby limit)
  */
 const { createClient } = require('@supabase/supabase-js')
 
@@ -19,6 +19,27 @@ function decodeJwt(token) {
       Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
     )
   } catch { return null }
+}
+
+// Is it currently a US trading day between 9 AM – 5 PM ET?
+function isMarketHours(now) {
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  const day = et.getDay()          // 0=Sun, 6=Sat
+  const hour = et.getHours()
+  const min  = et.getMinutes()
+  if (day === 0 || day === 6) return false
+  const mins = hour * 60 + min
+  return mins >= 9 * 60 && mins < 17 * 60
+}
+
+// End-of-trading-day ET (5 PM today)
+function endOfTradingDay(now) {
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  et.setHours(17, 0, 0, 0)
+  // Convert back: difference between now and ET-5pm, then apply to UTC now
+  const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  const diffMs = et.getTime() - etNow.getTime()
+  return new Date(now.getTime() + diffMs)
 }
 
 async function fetchMarketSnapshot() {
@@ -67,7 +88,9 @@ Return ONLY valid JSON with no markdown, no backticks:
 }`
 }
 
-async function generateBrief(snap, now) {
+async function generateAndStore(now) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
+  const snap  = await fetchMarketSnapshot()
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -87,7 +110,29 @@ async function generateBrief(snap, now) {
   }
   const data = await res.json()
   const text = (data.content?.[0]?.text || '').replace(/```json|```/g, '').trim()
-  return JSON.parse(text)
+  const brief = JSON.parse(text)
+
+  for (const f of ['tone', 'why', 'events', 'levels', 'bias', 'risk_trigger']) {
+    if (!brief[f]) throw new Error(`Missing field: ${f}`)
+  }
+
+  // Expires at end of trading day so it never goes STALE mid-session
+  const expiresAt = endOfTradingDay(now)
+
+  await supabase.from('morning_brief').delete().neq('id', 0)
+  const { error } = await supabase.from('morning_brief').insert({
+    generated_at: now.toISOString(),
+    expires_at:   expiresAt.toISOString(),
+    tone:         brief.tone,
+    why:          brief.why,
+    events:       brief.events,
+    levels:       brief.levels,
+    bias:         brief.bias,
+    risk_trigger: brief.risk_trigger,
+    raw_json:     brief,
+  })
+  if (error) throw new Error(`Supabase: ${error.message}`)
+  return { brief, generatedAt: now.toISOString(), expiresAt: expiresAt.toISOString() }
 }
 
 module.exports = async function handler(req, res) {
@@ -96,45 +141,22 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
 
-  // POST — cron generates brief
+  // POST — cron or manual trigger
   if (req.method === 'POST') {
     const secret = req.headers['x-cron-secret'] ||
       (req.headers['authorization'] || '').replace('Bearer ', '')
     if (secret !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Unauthorized' })
-    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
 
-    const now = new Date()
     try {
-      const snap  = await fetchMarketSnapshot()
-      const brief = await generateBrief(snap, now)
-
-      for (const f of ['tone', 'why', 'events', 'levels', 'bias', 'risk_trigger']) {
-        if (!brief[f]) throw new Error(`Missing field: ${f}`)
-      }
-
-      await supabase.from('morning_brief').delete().neq('id', 0)
-
-      const { error } = await supabase.from('morning_brief').insert({
-        generated_at: now.toISOString(),
-        expires_at:   new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
-        tone:         brief.tone,
-        why:          brief.why,
-        events:       brief.events,
-        levels:       brief.levels,
-        bias:         brief.bias,
-        risk_trigger: brief.risk_trigger,
-        raw_json:     brief,
-      })
-      if (error) throw new Error(`Supabase: ${error.message}`)
-
-      return res.status(200).json({ ok: true, generatedAt: now.toISOString(), brief })
+      const result = await generateAndStore(new Date())
+      return res.status(200).json({ ok: true, ...result })
     } catch (e) {
       console.error('brief POST error:', e)
       return res.status(500).json({ error: e.message })
     }
   }
 
-  // GET — serve cached brief to users
+  // GET — serve cached brief; generate on-demand if none exists during market hours
   if (req.method === 'GET') {
     const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
     if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
@@ -147,7 +169,29 @@ module.exports = async function handler(req, res) {
       .maybeSingle()
 
     if (error) return res.status(500).json({ error: error.message })
-    if (!data)  return res.status(404).json({ error: 'No brief available yet', notGenerated: true })
+
+    const now = new Date()
+
+    // No brief yet — generate on-demand if market is open
+    if (!data) {
+      if (!isMarketHours(now)) {
+        // Outside market hours — tell user when it will be ready
+        return res.status(404).json({ error: 'No brief available yet', notGenerated: true })
+      }
+      try {
+        console.log('No brief found during market hours — generating on-demand')
+        const result = await generateAndStore(now)
+        return res.status(200).json({
+          brief:       result.brief,
+          generatedAt: result.generatedAt,
+          expiresAt:   result.expiresAt,
+          isStale:     false,
+        })
+      } catch (e) {
+        console.error('On-demand generation failed:', e.message)
+        return res.status(500).json({ error: 'Brief generation failed: ' + e.message })
+      }
+    }
 
     return res.status(200).json({
       brief: {
@@ -160,7 +204,7 @@ module.exports = async function handler(req, res) {
       },
       generatedAt: data.generated_at,
       expiresAt:   data.expires_at,
-      isStale:     new Date(data.expires_at) < new Date(),
+      isStale:     new Date(data.expires_at) < now,
     })
   }
 
