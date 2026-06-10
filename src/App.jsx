@@ -2692,6 +2692,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       </div>
                     )}
 
+                    {/* Schedule info */}
+                    <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',marginBottom:14,display:'flex',gap:10,alignItems:'flex-start'}}>
+                      <span style={{fontSize:14,flexShrink:0,marginTop:1}}>📬</span>
+                      <div>
+                        <div style={{fontSize:10,color:C.text,fontWeight:600,marginBottom:3}}>Sent once daily at 10 AM ET, Mon–Fri</div>
+                        <div style={{fontSize:10,color:C.dim,lineHeight:1.6}}>You'll only receive an email when high-conviction setups exist. No email means no strong setups today — that's normal.</div>
+                      </div>
+                    </div>
+
                     <div style={{marginBottom:14}}>
                       <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
                         <span style={{fontSize:11,color:C.text,fontWeight:600}}>Min Edge Score</span>
