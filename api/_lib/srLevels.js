@@ -1,6 +1,8 @@
+Replace the entire contents of api/_lib/srLevels.js with this:
+
 // api/_lib/srLevels.js
-// Computes Support & Resistance levels from Tradier historical OHLC data.
-// Lives in _lib so Vercel does NOT count it as a serverless function.
+// S/R using Fibonacci retracement + swing highs/lows + MAs.
+// S1/R1 from 20-day swings + Fib confluence. S2/R2 from 60-day window.
 // CommonJS only.
 
 const TRADIER_BASE  = process.env.TRADIER_MODE === 'sandbox'
@@ -8,9 +10,11 @@ const TRADIER_BASE  = process.env.TRADIER_MODE === 'sandbox'
   : 'https://api.tradier.com/v1'
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN || ''
 
+const FIB_RATIOS = [0.236, 0.382, 0.500, 0.618, 0.786]
+
 async function fetchHistory(ticker) {
   const end   = new Date()
-  const start = new Date(); start.setDate(start.getDate() - 90)
+  const start = new Date(); start.setDate(start.getDate() - 120)
   const fmt   = d => d.toISOString().split('T')[0]
   const url   = `${TRADIER_BASE}/markets/history?symbol=${encodeURIComponent(ticker)}&interval=daily&start=${fmt(start)}&end=${fmt(end)}`
   const res   = await fetch(url, {
@@ -29,15 +33,29 @@ async function fetchHistory(ticker) {
   }))
 }
 
-// Tighter window (3 bars) catches recent nearby levels
-function findSwings(days, win = 3) {
+// Fibonacci retracement levels from dominant swing in last N days
+function fibLevels(days, lookback = 60) {
+  const slice = days.slice(-lookback)
+  const hi    = Math.max(...slice.map(d => d.high))
+  const lo    = Math.min(...slice.map(d => d.low))
+  const range = hi - lo
+  if (range < 0.01) return []
+  // Retracement from high down: 0% = hi, 100% = lo
+  return FIB_RATIOS.map(r => ({
+    price: +(hi - range * r).toFixed(2),
+    ratio: r,
+    label: `Fib ${(r * 100).toFixed(1)}%`,
+  }))
+}
+
+function findSwings(days, win = 2) {
   const highs = [], lows = []
   for (let i = win; i < days.length - win; i++) {
     const sl   = days.slice(i - win, i + win + 1)
     const maxH = Math.max(...sl.map(d => d.high))
     const minL = Math.min(...sl.map(d => d.low))
-    if (days[i].high === maxH) highs.push({ price: days[i].high, date: days[i].date, idx: i })
-    if (days[i].low  === minL) lows.push({  price: days[i].low,  date: days[i].date, idx: i })
+    if (days[i].high >= maxH) highs.push({ price: days[i].high, idx: i })
+    if (days[i].low  <= minL) lows.push({  price: days[i].low,  idx: i })
   }
   return { highs, lows }
 }
@@ -49,13 +67,53 @@ function clusterLevels(levels, pct = 0.005) {
     if (ex) {
       ex.price   = (ex.price * ex.touches + lvl.price) / (ex.touches + 1)
       ex.touches += 1
-      ex.lastIdx = Math.max(ex.lastIdx, lvl.idx || 0)
+      ex.lastIdx  = Math.max(ex.lastIdx || 0, lvl.idx || 0)
     } else {
       clusters.push({ price: lvl.price, touches: 1, lastIdx: lvl.idx || 0 })
     }
   }
-  // Score = touches * recency (more recent = higher lastIdx = better)
-  return clusters.sort((a, b) => (b.touches * (b.lastIdx + 1)) - (a.touches * (a.lastIdx + 1)))
+  return clusters
+}
+
+// Merge swing clusters + fib levels, boost weight when both coincide within 0.5%
+function mergeLevels(swingClusters, fibs, price, direction) {
+  const candidates = []
+
+  for (const s of swingClusters) {
+    if (direction === 'above' ? s.price <= price : s.price >= price) continue
+    const nearFib = fibs.find(f => Math.abs(f.price - s.price) / s.price < 0.005)
+    candidates.push({
+      price:      s.price,
+      weight:     nearFib ? 5 : 2,  // confluence = strongest level
+      source:     nearFib ? `swing+${nearFib.label}` : 'swing',
+      touches:    s.touches,
+    })
+  }
+
+  for (const f of fibs) {
+    if (direction === 'above' ? f.price <= price : f.price >= price) continue
+    const alreadyMerged = candidates.find(c => Math.abs(c.price - f.price) / f.price < 0.005)
+    if (!alreadyMerged) {
+      candidates.push({
+        price:   f.price,
+        weight:  (f.ratio === 0.500 || f.ratio === 0.618) ? 3 : 1,
+        source:  f.label,
+        touches: 1,
+      })
+    }
+  }
+
+  // Sort by proximity to price (nearest first)
+  return candidates.sort((a, b) =>
+    direction === 'above'
+      ? a.price - b.price
+      : b.price - a.price
+  )
+}
+
+function sma(days, n) {
+  const slice = days.slice(-n).map(d => d.close)
+  return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null
 }
 
 function pivotPoints(day) {
@@ -64,52 +122,52 @@ function pivotPoints(day) {
   return { pp: PP, r1: 2*PP - L, r2: PP + (H - L), s1: 2*PP - H, s2: PP - (H - L) }
 }
 
-function sma(days, n) {
-  const slice = days.slice(-n).map(d => d.close)
-  return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null
-}
-
-// Pick the best level within maxPct of price, fallback to closest if none found
-function bestLevel(clusters, price, direction, maxPct = 0.06) {
-  const filtered = clusters.filter(c =>
-    direction === 'above'
-      ? c.price > price && (c.price - price) / price <= maxPct
-      : c.price < price && (price - c.price) / price <= maxPct
-  )
-  if (filtered.length) return filtered[0].price
-  // Fallback: closest regardless of distance
-  const fallback = clusters.filter(c =>
-    direction === 'above' ? c.price > price : c.price < price
-  )
-  return fallback[0]?.price || null
-}
-
 async function getSRLevels(ticker) {
-  const days = await fetchHistory(ticker)
-  if (days.length < 10) throw new Error(`Insufficient history for ${ticker}`)
+  const allDays = await fetchHistory(ticker)
+  if (allDays.length < 10) throw new Error(`Insufficient history for ${ticker}`)
 
-  const last   = days[days.length - 1]
-  const price  = last.close
+  const price  = allDays[allDays.length - 1].close
+  const last   = allDays[allDays.length - 1]
   const pivots = pivotPoints(last)
-  const ma200  = sma(days, 200)
-  const ma50   = sma(days, 50)
+  const ma200  = sma(allDays, 200)
+  const ma50   = sma(allDays, 50)
 
-  const { highs, lows } = findSwings(days, 3)
-  const swingResists  = clusterLevels(highs).filter(c => c.price > price)
-  const swingSupports = clusterLevels(lows) .filter(c => c.price < price)
+  // Fib levels from 60-day dominant swing
+  const fibs60 = fibLevels(allDays, 60)
 
-  // Prefer levels within 6% — fall back to pivots if nothing close
-  const r1 = bestLevel(swingResists,  price, 'above', 0.06) || pivots.r1
-  const r2 = bestLevel(swingResists,  price, 'above', 0.12) || pivots.r2
-  const s1 = bestLevel(swingSupports, price, 'below', 0.06) || pivots.s1
-  const s2 = bestLevel(swingSupports, price, 'below', 0.12) || pivots.s2
+  // S1/R1 — swing from last 20 days merged with Fib
+  const recent = allDays.slice(-20)
+  const { highs: rH, lows: rL } = findSwings(recent, 2)
+  const recentResists  = clusterLevels(rH.filter(h => h.price > price))
+  const recentSupports = clusterLevels(rL.filter(l => l.price < price))
 
-  // Make sure r2 > r1 and s2 < s1
-  const finalR2 = r2 > r1 ? r2 : r1 * 1.03
-  const finalS2 = s2 < s1 ? s2 : s1 * 0.97
+  const supportCands = mergeLevels(recentSupports, fibs60, price, 'below')
+  const resistCands  = mergeLevels(recentResists,  fibs60, price, 'above')
 
-  const week52High = Math.max(...days.map(d => d.high))
-  const week52Low  = Math.min(...days.map(d => d.low))
+  let s1 = supportCands[0]?.price || null
+  let r1 = resistCands[0]?.price  || null
+
+  // MA fallback only if no swing/fib found nearby
+  if (!s1) s1 = [ma50, ma200].filter(m => m && m < price).sort((a, b) => b - a)[0] || null
+  if (!r1) r1 = [ma50, ma200].filter(m => m && m > price).sort((a, b) => a - b)[0] || null
+
+  s1 = s1 || pivots.s1
+  r1 = r1 || pivots.r1
+
+  // S2/R2 — 60-day swing merged with Fib, must be further than S1/R1
+  const medium = allDays.slice(-60)
+  const { highs: mH, lows: mL } = findSwings(medium, 3)
+  const medResists  = clusterLevels(mH.filter(h => h.price > price))
+  const medSupports = clusterLevels(mL.filter(l => l.price < price))
+
+  const s2Cands = mergeLevels(medSupports, fibs60, price, 'below').filter(c => c.price < s1)
+  const r2Cands = mergeLevels(medResists,  fibs60, price, 'above').filter(c => c.price > r1)
+
+  let s2 = s2Cands[0]?.price || Math.min(pivots.s2, s1 * 0.97)
+  let r2 = r2Cands[0]?.price || Math.max(pivots.r2, r1 * 1.03)
+
+  const week52High = Math.max(...allDays.map(d => d.high))
+  const week52Low  = Math.min(...allDays.map(d => d.low))
 
   const distToR1 = (r1 - price) / price
   const distToS1 = (price - s1) / price
@@ -128,15 +186,14 @@ async function getSRLevels(ticker) {
 
   return {
     s1:    +s1.toFixed(2),
-    s2:    +finalS2.toFixed(2),
+    s2:    +s2.toFixed(2),
     r1:    +r1.toFixed(2),
-    r2:    +finalR2.toFixed(2),
+    r2:    +r2.toFixed(2),
     pivot: +pivots.pp.toFixed(2),
     ma200: ma200 ? +ma200.toFixed(2) : null,
     ma50:  ma50  ? +ma50.toFixed(2)  : null,
     position, contextLine,
-    swingSupports: swingSupports.slice(0,3).map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
-    swingResists:  swingResists.slice(0,3).map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
+    fibs:  fibs60.map(f => ({ price: f.price, label: f.label })),
     week52High: +week52High.toFixed(2),
     week52Low:  +week52Low.toFixed(2),
   }
