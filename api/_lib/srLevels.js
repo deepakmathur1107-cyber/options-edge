@@ -181,19 +181,21 @@ async function getSRLevels(ticker) {
   )
   const s1Fib = s1FibCands.sort((a, b) => b.price - a.price)[0]  // nearest below
 
-  // Pick S1: prefer actual swing lows, then MA, then Fib
   let s1, s1source
-  if (s1Recent) {
-    s1 = s1Recent.price; s1source = 'recent swing'
-  } else if (s1Swing) {
-    s1 = s1Swing.price; s1source = 'swing'
-  } else if (maBelow[0]) {
-    s1 = maBelow[0]; s1source = 'MA'
-  } else if (s1Fib) {
-    s1 = s1Fib.price; s1source = s1Fib.label
-  } else {
-    s1 = +pivots.s1.toFixed(2); s1source = 'pivot'
+
+  // When price is in a downtrend (no swing lows below), MAs are the real support
+  // Only use swing lows if they are within 10% of current price
+  const s1RecentClose = s1Recent && (price - s1Recent.price)/price < 0.10 ? s1Recent : null
+  const s1SwingClose  = s1Swing  && (price - s1Swing.price)/price  < 0.10 ? s1Swing  : null
+
+  if (s1RecentClose) { s1=s1RecentClose.price; s1source='recent swing' }
+  else if (maBelow[0] && (!s1SwingClose || Math.abs(maBelow[0]-price) < Math.abs(s1SwingClose.price-price))) {
+    s1=maBelow[0]; s1source='MA'
   }
+  else if (s1SwingClose) { s1=s1SwingClose.price; s1source='swing' }
+  else if (maBelow[0]) { s1=maBelow[0]; s1source='MA' }
+  else if (s1Fib) { s1=s1Fib.price; s1source=s1Fib.label }
+  else { s1=+pivots.s1.toFixed(2); s1source='pivot' }
   s1 = +s1.toFixed(2)
 
   // ── R2: next resistance above R1 ────────────────────────────────────────
@@ -238,7 +240,7 @@ async function getSRLevels(ticker) {
 
   return {
     s1, s2, r1, r2,
-    _version: 'v4-swing-fib-ma',
+    _version: 'v5-ma-priority',
     pivot: +pivots.pp.toFixed(2),
     ma200: ma200 ? +ma200.toFixed(2) : null,
     ma50:  ma50  ? +ma50.toFixed(2)  : null,
