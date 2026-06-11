@@ -204,6 +204,7 @@ async function getSRLevels(ticker) {
 
   return {
     s1, s2, r1, r2,
+    _version: 'v3-fib-swing-45d',
     pivot: +pivots.pp.toFixed(2),
     ma200: ma200 ? +ma200.toFixed(2) : null,
     ma50:  ma50  ? +ma50.toFixed(2)  : null,
