@@ -185,11 +185,16 @@ const findGEXWall = (side, price, direction) => {
 const buildNakedResult = (chain, price, step, optType, tfCfg) => {
   const suf  = optType==='call' ? 'C' : 'P'
   const pct  = optType==='call' ? tfCfg.strikePct : (2-tfCfg.strikePct)
-  const tgt  = Math.round(price*pct/step)*step
+  let tgt = Math.round(price*pct/step)*step
+  if (optType === 'put'  && tgt >= price) tgt = Math.round((price - step) / step) * step
+  if (optType === 'call' && tgt <= price) tgt = Math.round((price + step) / step) * step
   const side = chain.filter(o=>o.option_type===optType)
 
   // Use GEX+OI+Volume scoring to find the best strike
-  const best = findBestStrike(side, tgt, price)
+  const otmSide = optType === 'put'
+    ? side.filter(o => o.strike < price)
+    : side.filter(o => o.strike > price)
+  const best = findBestStrike(otmSide.length ? otmSide : side, tgt, price)
   if (!best) return null
   const b=parseFloat(best.bid||0), a=parseFloat(best.ask||0), m=(b+a)/2
   if (m===0) return null
