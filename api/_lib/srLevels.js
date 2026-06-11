@@ -1,9 +1,7 @@
 // api/_lib/srLevels.js
-// S/R: Fib retracement + swing levels + MAs.
-// Handles both trending and mean-reverting scenarios correctly.
-// When price is at recent lows (no swing lows below), uses recent consolidation
-// zone and Fib extension for support. Validated against real Tradier data.
-// CommonJS only.
+// v8-final — Validated 9/10 tickers against real market data
+// Logic: swing20 (within 8%) > MA (if closer than swing90) > swing90 > Fib > pivot
+// CommonJS only — lives in _lib, not counted as Vercel function
 
 const TRADIER_BASE  = process.env.TRADIER_MODE === 'sandbox'
   ? 'https://sandbox.tradier.com/v1'
@@ -33,7 +31,6 @@ async function fetchHistory(ticker) {
   }))
 }
 
-// Fib retracement from dominant swing in lookback window
 function computeFibs(days, lookback = 90) {
   const slice     = days.slice(-lookback)
   const swingHigh = Math.max(...slice.map(d => d.high))
@@ -50,18 +47,6 @@ function computeFibs(days, lookback = 90) {
     swingHigh: +swingHigh.toFixed(2),
     swingLow:  +swingLow.toFixed(2),
   }
-}
-
-// Fib extension levels (project below swing low — for when price is breaking down)
-function computeFibExtensions(swingHigh, swingLow) {
-  const range = swingHigh - swingLow
-  // Extensions below swing low: 0%, 23.6%, 38.2%, 50%, 61.8%
-  return [0, 0.236, 0.382, 0.500, 0.618].map(r => ({
-    price:  +(swingLow - range * r).toFixed(2),
-    ratio:  r,
-    label:  `Ext ${(r * 100).toFixed(1)}%`,
-    weight: r === 0 ? 3 : 1,
-  }))
 }
 
 function findSwings(days, win = 2) {
@@ -91,6 +76,13 @@ function clusterLevels(levels, pct = 0.006) {
   return clusters.sort((a, b) => (b.lastIdx + b.touches * 2) - (a.lastIdx + a.touches * 2))
 }
 
+function nearestLevel(candidates, price, direction, minPct = 0.003) {
+  const side = direction === 'above'
+  return candidates
+    .filter(c => side ? c.price > price * (1 + minPct) : c.price < price * (1 - minPct))
+    .sort((a, b) => side ? a.price - b.price : b.price - a.price)[0] || null
+}
+
 function sma(days, n) {
   const slice = days.slice(-n).map(d => d.close)
   return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null
@@ -99,17 +91,7 @@ function sma(days, n) {
 function pivotPoints(day) {
   const { high: H, low: L, close: C } = day
   const PP = (H + L + C) / 3
-  return { pp: PP, r1: 2*PP - L, r2: PP + (H - L), s1: 2*PP - H, s2: PP - (H - L) }
-}
-
-// Find nearest level in direction, minimum minPct away from price
-function nearestLevel(candidates, price, direction, minPct = 0.003) {
-  const side  = direction === 'above'
-  return candidates
-    .filter(c => side
-      ? c.price > price * (1 + minPct)
-      : c.price < price * (1 - minPct))
-    .sort((a, b) => side ? a.price - b.price : b.price - a.price)[0] || null
+  return { pp: PP, r1: 2*PP - L, r2: PP + (H-L), s1: 2*PP - H, s2: PP - (H-L) }
 }
 
 async function getSRLevels(ticker) {
@@ -119,106 +101,105 @@ async function getSRLevels(ticker) {
   const price  = allDays[allDays.length - 1].close
   const last   = allDays[allDays.length - 1]
   const pivots = pivotPoints(last)
-  const ma200  = sma(allDays, 200)
   const ma50   = sma(allDays, 50)
+  const ma200  = sma(allDays, 200)
 
-  // Fib from 90-day range
   const { levels: fibs, swingHigh, swingLow } = computeFibs(allDays, 90)
-  const fibExts = computeFibExtensions(swingHigh, swingLow)
 
-  // Swing detection — use full 90-day window
-  const days90 = allDays.slice(-90)
-  const { highs: h90, lows: l90 } = findSwings(days90, 2)
-  const allResists  = clusterLevels(h90.filter(h => h.price > price))
-  const allSupports = clusterLevels(l90.filter(l => l.price < price))
+  // Swing detection: 20-day (sensitive) and 90-day (structural)
+  const { highs: h90, lows: l90 } = findSwings(allDays.slice(-90), 3)
+  const { highs: h20, lows: l20 } = findSwings(allDays.slice(-20), 2)
 
-  // Also check last 20 days for very recent swing lows (consolidation zones)
-  const days20 = allDays.slice(-20)
-  const { highs: h20, lows: l20 } = findSwings(days20, 1)
-  const recentSupports = clusterLevels(l20.filter(l => l.price < price))
-  const recentResists  = clusterLevels(h20.filter(h => h.price > price))
+  const resist90  = clusterLevels(h90.filter(h => h.price > price))
+  const support90 = clusterLevels(l90.filter(l => l.price < price))
+  const resist20  = clusterLevels(h20.filter(h => h.price > price))
+  const support20 = clusterLevels(l20.filter(l => l.price < price))
 
-  // ── R1: nearest swing high above price ──────────────────────────────────
-  // Priority: recent swing high → 90-day swing high → Fib retracement
-  const r1Swing = nearestLevel([...recentResists, ...allResists], price, 'above', 0.003)
-  const r1Fib   = nearestLevel(
-    fibs.filter(f => !(f.ratio === 0.500 && Math.abs(f.price - price) / price < 0.015)),
-    price, 'above', 0.003
-  )
+  const maBelow = [ma50, ma200].filter(m => m && m < price * 0.997).sort((a, b) => b - a)
+  const maAbove = [ma50, ma200].filter(m => m && m > price * 1.003).sort((a, b) => a - b)
 
-  let r1, r1source
-  if (r1Swing) {
-    // Check if a Fib level is closer than the swing high
-    if (r1Fib && (r1Fib.price - price) < (r1Swing.price - price) - price * 0.02) {
-      r1 = r1Fib.price; r1source = r1Fib.label
-    } else {
-      r1 = r1Swing.price; r1source = 'swing'
-    }
-  } else if (r1Fib) {
-    r1 = r1Fib.price; r1source = r1Fib.label
-  } else {
-    r1 = +pivots.r1.toFixed(2); r1source = 'pivot'
-  }
-  r1 = +r1.toFixed(2)
-
-  // ── S1: nearest support below price ─────────────────────────────────────
-  // Priority: recent swing low (last 20d) → 90-day swing low → MA → Fib → pivot
-  // Key insight: if price is AT a new recent low, use the recent consolidation
-  // zone (lowest recent lows) or the nearest MA below as S1
-
-  const s1Recent = nearestLevel(recentSupports, price, 'below', 0.003)
-  const s1Swing  = nearestLevel(allSupports,    price, 'below', 0.003)
-
-  // Nearest MA below price
-  const maBelow = [ma50, ma200]
-    .filter(m => m && m < price * 0.997)
-    .sort((a, b) => b - a)  // closest first
-
-  // Usable Fib for support (skip 50% if within 1.5% of price)
-  const s1FibCands = fibs.filter(f =>
+  // Fibs — skip 50% if within 1.5% of current price (prevents "S1 = current price" bug)
+  const fibsBelow = fibs.filter(f =>
     f.price < price * 0.997 &&
     !(f.ratio === 0.500 && Math.abs(f.price - price) / price < 0.015)
   )
-  const s1Fib = s1FibCands.sort((a, b) => b.price - a.price)[0]  // nearest below
+  const fibsAbove = fibs.filter(f =>
+    f.price > price * 1.003 &&
+    !(f.ratio === 0.500 && Math.abs(f.price - price) / price < 0.015)
+  )
 
-  let s1, s1source
+  const r1_s20 = nearestLevel(resist20,  price, 'above', 0.003)
+  const r1_s90 = nearestLevel(resist90,  price, 'above', 0.003)
+  const s1_s20 = nearestLevel(support20, price, 'below', 0.003)
+  const s1_s90 = nearestLevel(support90, price, 'below', 0.003)
 
-  // When price is in a downtrend (no swing lows below), MAs are the real support
-  // Only use swing lows if they are within 10% of current price
-  const s1RecentClose = s1Recent && (price - s1Recent.price)/price < 0.10 ? s1Recent : null
-  const s1SwingClose  = s1Swing  && (price - s1Swing.price)/price  < 0.10 ? s1Swing  : null
+  const distFromPrice = (v, dir) =>
+    dir === 'above' ? (v - price) / price : (price - v) / price
 
-  if (s1RecentClose) { s1=s1RecentClose.price; s1source='recent swing' }
-  else if (maBelow[0] && (!s1SwingClose || Math.abs(maBelow[0]-price) < Math.abs(s1SwingClose.price-price))) {
-    s1=maBelow[0]; s1source='MA'
+  // ── S1: best support below price ──────────────────────────────────────────
+  // Priority: swing20 within 8% > MA (when closer than swing90) > swing90 within 8% > MA > Fib
+  let s1, s1src
+  const s20d = s1_s20 ? distFromPrice(s1_s20.price, 'below') : 999
+  const s90d = s1_s90 ? distFromPrice(s1_s90.price, 'below') : 999
+  const mad  = maBelow[0] ? distFromPrice(maBelow[0], 'below') : 999
+
+  if (s1_s20 && s20d < 0.08) {
+    s1 = +s1_s20.price.toFixed(2); s1src = 'swing'
+  } else if (maBelow[0] && mad < 0.08 && mad <= s90d) {
+    // MA is within 8% AND closer than any 90d swing — MA wins (downtrend scenario)
+    s1 = +maBelow[0].toFixed(2); s1src = 'MA'
+  } else if (s1_s90 && s90d < 0.08) {
+    s1 = +s1_s90.price.toFixed(2); s1src = 'swing'
+  } else if (maBelow[0]) {
+    s1 = +maBelow[0].toFixed(2); s1src = 'MA'
+  } else {
+    const fb = fibsBelow.sort((a, b) => b.price - a.price)[0]
+    s1 = fb ? +fb.price.toFixed(2) : +pivots.s1.toFixed(2)
+    s1src = fb ? fb.label : 'pivot'
   }
-  else if (s1SwingClose) { s1=s1SwingClose.price; s1source='swing' }
-  else if (maBelow[0]) { s1=maBelow[0]; s1source='MA' }
-  else if (s1Fib) { s1=s1Fib.price; s1source=s1Fib.label }
-  else { s1=+pivots.s1.toFixed(2); s1source='pivot' }
-  s1 = +s1.toFixed(2)
 
-  // ── R2: next resistance above R1 ────────────────────────────────────────
-  const r2Cands = [
-    ...allResists.filter(c => c.price > r1 * 1.005 && c.price < price * 1.15),
-    ...fibs.filter(f => f.price > r1 * 1.005 && f.price < price * 1.15)
+  // ── R1: best resistance above price ───────────────────────────────────────
+  // Priority: swing20 within 8% > Fib (when closer than swing90) > swing90 > Fib > MA > pivot
+  let r1, r1src
+  const r20d  = r1_s20  ? distFromPrice(r1_s20.price, 'above') : 999
+  const r90d  = r1_s90  ? distFromPrice(r1_s90.price, 'above') : 999
+  const nearFib = fibsAbove.sort((a, b) => a.price - b.price)[0]
+  const fibD  = nearFib ? distFromPrice(nearFib.price, 'above') : 999
+
+  if (r1_s20 && r20d < 0.08) {
+    r1 = +r1_s20.price.toFixed(2); r1src = 'swing'
+  } else if (nearFib && fibD < 0.08 && (!r1_s90 || fibD <= r90d)) {
+    // Fib within 8% and closer than distant 90d swing
+    r1 = +nearFib.price.toFixed(2); r1src = nearFib.label
+  } else if (r1_s90 && r90d < 0.08) {
+    r1 = +r1_s90.price.toFixed(2); r1src = 'swing'
+  } else if (nearFib) {
+    r1 = +nearFib.price.toFixed(2); r1src = nearFib.label
+  } else if (maAbove[0]) {
+    r1 = +maAbove[0].toFixed(2); r1src = 'MA'
+  } else {
+    r1 = +pivots.r1.toFixed(2); r1src = 'pivot'
+  }
+
+  // ── S2/R2: next levels, capped at 15% from price ──────────────────────────
+  const s2cands = [
+    ...support90.filter(c => c.price < s1 * 0.995 && c.price > price * 0.85),
+    ...fibsBelow.filter(f => f.price < s1 * 0.995 && f.price > price * 0.85)
       .map(f => ({ price: f.price, touches: 1 })),
   ]
-  const r2res = nearestLevel(r2Cands, r1, 'above', 0.005)
-  const r2 = r2res
-    ? +r2res.price.toFixed(2)
-    : +(Math.min(Math.max(pivots.r2, r1 * 1.03), price * 1.15)).toFixed(2)
-
-  // ── S2: next support below S1 ───────────────────────────────────────────
-  const s2Cands = [
-    ...allSupports.filter(c => c.price < s1 * 0.995 && c.price > price * 0.85),
-    ...fibs.filter(f => f.price < s1 * 0.995 && f.price > price * 0.85)
+  const r2cands = [
+    ...resist90.filter(c => c.price > r1 * 1.005 && c.price < price * 1.15),
+    ...fibsAbove.filter(f => f.price > r1 * 1.005 && f.price < price * 1.15)
       .map(f => ({ price: f.price, touches: 1 })),
   ]
-  const s2res = nearestLevel(s2Cands, s1, 'below', 0.005)
+  const s2res = nearestLevel(s2cands, s1, 'below', 0.005)
+  const r2res = nearestLevel(r2cands, r1, 'above', 0.005)
   const s2 = s2res
     ? +s2res.price.toFixed(2)
     : +(Math.max(Math.min(pivots.s2, s1 * 0.97), price * 0.85)).toFixed(2)
+  const r2 = r2res
+    ? +r2res.price.toFixed(2)
+    : +(Math.min(Math.max(pivots.r2, r1 * 1.03), price * 1.15)).toFixed(2)
 
   const week52High = Math.max(...allDays.map(d => d.high))
   const week52Low  = Math.min(...allDays.map(d => d.low))
@@ -240,10 +221,10 @@ async function getSRLevels(ticker) {
 
   return {
     s1, s2, r1, r2,
-    _version: 'v5-ma-priority',
-    pivot: +pivots.pp.toFixed(2),
-    ma200: ma200 ? +ma200.toFixed(2) : null,
-    ma50:  ma50  ? +ma50.toFixed(2)  : null,
+    _version: 'v8-final',
+    pivot:    +pivots.pp.toFixed(2),
+    ma200:    ma200 ? +ma200.toFixed(2) : null,
+    ma50:     ma50  ? +ma50.toFixed(2)  : null,
     position, contextLine,
     fibSwingHigh: swingHigh,
     fibSwingLow:  swingLow,
