@@ -1,6 +1,6 @@
 // api/_lib/srLevels.js
-// S/R using Fibonacci retracement + swing levels + MAs.
-// Fib computed from 90-day range. S1/R1 must be meaningfully away from price.
+// S/R: Fib retracement (90-day) + swing highs/lows (45-day) + MAs.
+// S2/R2 capped at 15% from price. Validated against AMZN/TSLA/NVDA/AAPL/SPY/META.
 // CommonJS only.
 
 const TRADIER_BASE  = process.env.TRADIER_MODE === 'sandbox'
@@ -31,25 +31,25 @@ async function fetchHistory(ticker) {
   }))
 }
 
-// Fib retracement levels from the dominant swing (highest high to lowest low)
-// Returns levels as price points between the swing high and low
 function computeFibs(days, lookback = 90) {
   const slice     = days.slice(-lookback)
   const swingHigh = Math.max(...slice.map(d => d.high))
   const swingLow  = Math.min(...slice.map(d => d.low))
   const range     = swingHigh - swingLow
   if (range < 1) return { levels: [], swingHigh, swingLow }
-  const levels = FIB_RATIOS.map(r => ({
-    price: +(swingHigh - range * r).toFixed(2),
-    ratio: r,
-    label: `Fib ${(r * 100).toFixed(1)}%`,
-    // Key levels get higher weight
-    weight: (r === 0.500 || r === 0.618) ? 3 : (r === 0.382 ? 2 : 1),
-  }))
-  return { levels, swingHigh: +swingHigh.toFixed(2), swingLow: +swingLow.toFixed(2) }
+  return {
+    levels: FIB_RATIOS.map(r => ({
+      price:  +(swingHigh - range * r).toFixed(2),
+      ratio:  r,
+      label:  `Fib ${(r * 100).toFixed(1)}%`,
+      weight: (r === 0.500 || r === 0.618) ? 3 : (r === 0.382 ? 2 : 1),
+    })),
+    swingHigh: +swingHigh.toFixed(2),
+    swingLow:  +swingLow.toFixed(2),
+  }
 }
 
-function findSwings(days, win = 3) {
+function findSwings(days, win = 2) {
   const highs = [], lows = []
   for (let i = win; i < days.length - win; i++) {
     const sl   = days.slice(i - win, i + win + 1)
@@ -68,11 +68,12 @@ function clusterLevels(levels, pct = 0.006) {
     if (ex) {
       ex.price   = (ex.price * ex.touches + lvl.price) / (ex.touches + 1)
       ex.touches += 1
+      ex.lastIdx  = Math.max(ex.lastIdx || 0, lvl.idx || 0)
     } else {
-      clusters.push({ price: lvl.price, touches: 1 })
+      clusters.push({ price: lvl.price, touches: 1, lastIdx: lvl.idx || 0 })
     }
   }
-  return clusters
+  return clusters.sort((a, b) => (b.lastIdx + b.touches * 2) - (a.lastIdx + a.touches * 2))
 }
 
 function sma(days, n) {
@@ -86,43 +87,49 @@ function pivotPoints(day) {
   return { pp: PP, r1: 2*PP - L, r2: PP + (H - L), s1: 2*PP - H, s2: PP - (H - L) }
 }
 
-// Build a ranked list of candidate S/R levels from both swing clusters and Fib
-// Confluence (swing + fib nearby) gets highest score
-// Sorted nearest-first in given direction
-function buildCandidates(swingClusters, fibLevels, price, direction, minDist = 0.005) {
-  const merged = []
+function pickBest(swingClusters, fibLevels, maLevels, price, direction, minPct = 0.003) {
+  const side  = direction === 'above'
+  const inDir = v => side
+    ? v > price * (1 + minPct)
+    : v < price * (1 - minPct)
 
-  // Add swing levels
-  for (const s of swingClusters) {
-    const d = direction === 'above' ? s.price - price : price - s.price
-    if (d <= price * minDist) continue  // too close to current price
-    const nearFib = fibLevels.find(f =>
-      Math.abs(f.price - s.price) / s.price < 0.008 &&
-      (direction === 'above' ? f.price > price : f.price < price)
-    )
-    merged.push({
-      price:   +s.price.toFixed(2),
-      weight:  nearFib ? (s.touches + nearFib.weight + 2) : s.touches,
-      source:  nearFib ? `swing + ${nearFib.label}` : 'swing',
+  const swings = swingClusters
+    .filter(s => inDir(s.price))
+    .map(s => {
+      const nearFib = fibLevels.find(f =>
+        inDir(f.price) && Math.abs(f.price - s.price) / s.price < 0.01
+      )
+      return {
+        price:  s.price,
+        score:  (nearFib ? 10 + nearFib.weight : 0) + s.touches * 2 + (s.lastIdx || 0) * 0.1,
+        source: nearFib ? `swing + ${nearFib.label}` : 'swing',
+      }
     })
-  }
+    .sort((a, b) => {
+      const da = Math.abs(a.price - price)
+      const db = Math.abs(b.price - price)
+      if (Math.abs(da - db) / price > 0.02) return da - db
+      return b.score - a.score
+    })
 
-  // Add standalone Fib levels not already covered by swing
-  for (const f of fibLevels) {
-    const d = direction === 'above' ? f.price - price : price - f.price
-    if (d <= price * minDist) continue  // too close
-    const alreadyCovered = merged.find(c => Math.abs(c.price - f.price) / f.price < 0.008)
-    if (!alreadyCovered) {
-      merged.push({ price: f.price, weight: f.weight, source: f.label })
-    }
-  }
+  if (swings.length) return { price: swings[0].price, source: swings[0].source }
 
-  // Sort nearest first
-  merged.sort((a, b) =>
-    direction === 'above' ? a.price - b.price : b.price - a.price
+  // No swing — use Fib, but skip 50% if within 1.5% of price (prevents "S1 = current price" bug)
+  const usableFibs = fibLevels.filter(f =>
+    inDir(f.price) &&
+    !(f.ratio === 0.500 && Math.abs(f.price - price) / price < 0.015)
   )
 
-  return merged
+  const keyFibs = usableFibs
+    .filter(f => f.ratio === 0.382 || f.ratio === 0.618 || f.ratio === 0.236)
+    .sort((a, b) => side ? a.price - b.price : b.price - a.price)
+  if (keyFibs.length) return { price: keyFibs[0].price, source: keyFibs[0].label }
+
+  const anyFib = usableFibs.sort((a, b) => side ? a.price - b.price : b.price - a.price)
+  if (anyFib.length) return { price: anyFib[0].price, source: anyFib[0].label }
+
+  const ma = maLevels.filter(m => m && inDir(m)).sort((a, b) => side ? a - b : b - a)
+  return ma[0] ? { price: ma[0], source: 'MA' } : null
 }
 
 async function getSRLevels(ticker) {
@@ -135,48 +142,47 @@ async function getSRLevels(ticker) {
   const ma200  = sma(allDays, 200)
   const ma50   = sma(allDays, 50)
 
-  // Fib from 90-day range
   const { levels: fibs, swingHigh, swingLow } = computeFibs(allDays, 90)
 
-  // Swings from last 30 days for S1/R1
-  const recent = allDays.slice(-30)
+  // S1/R1 — 45-day window catches recent swings
+  const recent = allDays.slice(-45)
   const { highs: rH, lows: rL } = findSwings(recent, 2)
   const recentResists  = clusterLevels(rH.filter(h => h.price > price))
   const recentSupports = clusterLevels(rL.filter(l => l.price < price))
 
-  // S1/R1 — nearest meaningful level (swing or Fib), must be >0.5% from price
-  const supportCands = buildCandidates(recentSupports, fibs.filter(f => f.price < price), price, 'below', 0.005)
-  const resistCands  = buildCandidates(recentResists,  fibs.filter(f => f.price > price), price, 'above', 0.005)
+  const s1res = pickBest(recentSupports, fibs, [ma50, ma200], price, 'below', 0.003)
+  const r1res = pickBest(recentResists,  fibs, [ma50, ma200], price, 'above', 0.003)
 
-  let s1 = supportCands[0]?.price || null
-  let r1 = resistCands[0]?.price  || null
+  const s1 = s1res ? +s1res.price.toFixed(2) : +pivots.s1.toFixed(2)
+  const r1 = r1res ? +r1res.price.toFixed(2) : +pivots.r1.toFixed(2)
 
-  // MA as S1/R1 only if closer than current best AND more than 0.5% away
-  const maBelow = [ma50, ma200].filter(m => m && m < price && (price - m) / price > 0.005)
-    .sort((a, b) => b - a)
-  const maAbove = [ma50, ma200].filter(m => m && m > price && (m - price) / price > 0.005)
-    .sort((a, b) => a - b)
-
-  if (!s1 && maBelow[0]) s1 = maBelow[0]
-  if (!r1 && maAbove[0]) r1 = maAbove[0]
-
-  // Final fallback to classic pivot
-  s1 = s1 ? +s1.toFixed(2) : +pivots.s1.toFixed(2)
-  r1 = r1 ? +r1.toFixed(2) : +pivots.r1.toFixed(2)
-
-  // S2/R2 — next level beyond S1/R1 from 60-day swings + Fib
+  // S2/R2 — 60-day, capped at 15% from price (no extreme crash lows)
   const medium = allDays.slice(-60)
   const { highs: mH, lows: mL } = findSwings(medium, 3)
-  const medResists  = clusterLevels(mH.filter(h => h.price > price))
-  const medSupports = clusterLevels(mL.filter(l => l.price < price))
+  const medResists  = clusterLevels(
+    mH.filter(h => h.price > r1 * 1.005 && h.price < price * 1.15)
+  )
+  const medSupports = clusterLevels(
+    mL.filter(l => l.price < s1 * 0.995 && l.price > price * 0.85)
+  )
 
-  const s2Cands = buildCandidates(medSupports, fibs.filter(f => f.price < s1), price, 'below', 0.005)
-    .filter(c => c.price < s1 - price * 0.01)
-  const r2Cands = buildCandidates(medResists, fibs.filter(f => f.price > r1), price, 'above', 0.005)
-    .filter(c => c.price > r1 + price * 0.01)
+  const s2res = pickBest(
+    medSupports,
+    fibs.filter(f => f.price < s1 * 0.995 && f.price > price * 0.85),
+    [], price, 'below', 0.003
+  )
+  const r2res = pickBest(
+    medResists,
+    fibs.filter(f => f.price > r1 * 1.005 && f.price < price * 1.15),
+    [], price, 'above', 0.003
+  )
 
-  const s2 = s2Cands[0]?.price ? +s2Cands[0].price.toFixed(2) : +(Math.min(pivots.s2, s1 * 0.97)).toFixed(2)
-  const r2 = r2Cands[0]?.price ? +r2Cands[0].price.toFixed(2) : +(Math.max(pivots.r2, r1 * 1.03)).toFixed(2)
+  const s2 = s2res
+    ? +s2res.price.toFixed(2)
+    : +(Math.max(Math.min(pivots.s2, s1 * 0.97), price * 0.85)).toFixed(2)
+  const r2 = r2res
+    ? +r2res.price.toFixed(2)
+    : +(Math.min(Math.max(pivots.r2, r1 * 1.03), price * 1.15)).toFixed(2)
 
   const week52High = Math.max(...allDays.map(d => d.high))
   const week52Low  = Math.min(...allDays.map(d => d.low))
