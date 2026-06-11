@@ -811,6 +811,9 @@ export default function App(props={}) {
   const [scanning,   setScanning]   = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const [scanErr,    setScanErr]    = useState('')
+  const [srData,      setSrData]      = useState(null)
+  const [tickerBrief, setTickerBrief] = useState(null)
+  const [srLoading,   setSrLoading]   = useState(false)
   const [debugLog,   setDebugLog]   = useState([])
 
   // ── auto-scanner ──
@@ -1135,7 +1138,30 @@ useEffect(() => {
       if(hardBlocks.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
-      dbg(`✅ All data from Tradier ${tradierMode}`)
+      dbg(`✅ Scan complete`)
+
+      // Fetch S/R levels + AI brief in background (non-blocking)
+      setSrData(null); setTickerBrief(null); setSrLoading(true)
+      getAuthToken().then(authTok => {
+        const headers = authTok ? { Authorization: `Bearer ${authTok}` } : {}
+        const qp = new URLSearchParams({
+          ticker,
+          price:     price.toFixed(2),
+          chgPct:    chgPct.toFixed(2),
+          iv:        String(iv),
+          dte:       String(dte),
+          score:     String(score),
+          tradeType: tradeData.structureType || 'Call',
+        })
+        fetch(`/api/brief?${qp}`, { headers })
+          .then(r => r.json())
+          .then(d => {
+            if (d.sr)    setSrData(d.sr)
+            if (d.brief) setTickerBrief(d.brief)
+          })
+          .catch(e => console.warn('[SR/Brief]', e.message))
+          .finally(() => setSrLoading(false))
+      }).catch(() => setSrLoading(false))
 
       dbg(`   ✓ Structure: ${tradeData.structureType}`)
       dbg(`   ✓ Strike: ${tradeData.strikeStr} | Entry: ${tradeData.entry}`)
@@ -1170,7 +1196,7 @@ useEffect(() => {
         breakeven:(parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid).toFixed(2),
         breakevenPct:(((parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid)/price-1)*100).toFixed(1),
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
-        source:`Tradier ${tradierMode}`,
+        source:'',
       })
     } catch(e) {
       if (e.message.startsWith('USAGE_LIMIT:')) {
@@ -2105,7 +2131,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                 {/* ── Chain stats grid ── */}
                 <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:6,padding:11,marginBottom:11}}>
-                  <Lbl C={C} color={C.blue}>📡 Live Chain — Tradier {tradierMode} · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
+                  <Lbl C={C} color={C.blue}>📡 Live Chain · Stock ${scanResult.price} ({scanResult.chgPct})</Lbl>
                   <div className="scanrow">
                     {[
                       {l:'IV',     v:scanResult.iv,     c:C.orange},
@@ -2129,6 +2155,74 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <Lbl C={C} color={C.green}>✅ SIGNALS</Lbl>
                     {scanResult.reasons.map((r,i)=><div key={i} style={{fontSize:11,color:C.subtext,lineHeight:1.7}}>✓ {r}</div>)}
                   </Card>
+                )}
+                {/* ── S/R Levels + Ticker Brief ── */}
+                {(srLoading || srData || tickerBrief) && (
+                  <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:10,padding:'14px 16px',marginBottom:11}}>
+                    <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:10}}>📊 SUPPORT & RESISTANCE — {scanResult.ticker}</div>
+                    {srLoading && !srData && (
+                      <div style={{fontSize:11,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}><span className="pulse">Computing S/R levels + AI brief...</span></div>
+                    )}
+                    {srData && (()=>{
+                      const price_  = parseFloat(scanResult.price.replace('$',''))
+                      const range   = (srData.r2 - srData.s2) || 1
+                      const pricePct= Math.max(4, Math.min(94, ((price_ - srData.s2) / range) * 88 + 4))
+                      const s1Pct   = Math.max(4, Math.min(94, ((srData.s1 - srData.s2) / range) * 88 + 4))
+                      const r1Pct   = Math.max(4, Math.min(94, ((srData.r1 - srData.s2) / range) * 88 + 4))
+                      return (
+                        <>
+                          <div style={{position:'relative',height:52,background:C.card,borderRadius:8,marginBottom:10,overflow:'hidden'}}>
+                            <div style={{position:'absolute',left:0,top:0,bottom:0,width:s1Pct+'%',background:'rgba(74,222,128,0.08)',borderRight:'1px dashed rgba(74,222,128,0.4)'}}/>
+                            <div style={{position:'absolute',right:0,top:0,bottom:0,width:(100-r1Pct)+'%',background:'rgba(248,113,113,0.08)',borderLeft:'1px dashed rgba(248,113,113,0.4)'}}/>
+                            <div style={{position:'absolute',top:0,bottom:0,left:pricePct+'%',width:2,background:C.text,borderRadius:1}}/>
+                            <div style={{position:'absolute',left:'6px',top:'50%',transform:'translateY(-50%)',fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.green}}>S1 ${srData.s1}</div>
+                            <div style={{position:'absolute',left:pricePct+'%',top:'18%',marginLeft:5,fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.text,fontWeight:600,whiteSpace:'nowrap'}}>{scanResult.price}</div>
+                            <div style={{position:'absolute',right:'6px',top:'50%',transform:'translateY(-50%)',fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.red}}>R1 ${srData.r1}</div>
+                          </div>
+                          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'5px 20px',marginBottom:10}}>
+                            {[
+                              {l:'R2',      v:srData.r2,       c:C.red},
+                              {l:'S2',      v:srData.s2,       c:C.green},
+                              {l:'R1',      v:srData.r1,       c:C.red},
+                              {l:'S1',      v:srData.s1,       c:C.green},
+                              {l:'200d MA', v:srData.ma200,    c:C.text},
+                              {l:'50d MA',  v:srData.ma50,     c:C.text},
+                              {l:'52w High',v:srData.week52High,c:C.red},
+                              {l:'52w Low', v:srData.week52Low, c:C.green},
+                            ].filter(x=>x.v).map(({l,v,c})=>(
+                              <div key={l} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                                <span style={{fontSize:11,color:C.dim}}>{l}</span>
+                                <span style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:500,fontSize:12,color:c}}>${v}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{fontSize:11,color:C.subtext,lineHeight:1.6,padding:'7px 10px',background:C.card,borderRadius:6,borderLeft:`3px solid ${srData.position==='at_resistance'?C.red:srData.position==='at_support'?C.green:C.blue}`}}>
+                            {srData.contextLine}
+                          </div>
+                        </>
+                      )
+                    })()}
+                    {tickerBrief && (
+                      <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+                        <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:8}}>
+                          🤖 AI BRIEF
+                          {tickerBrief.bias && (
+                            <span style={{
+                              marginLeft:8,padding:'1px 7px',borderRadius:3,fontSize:8,
+                              background:tickerBrief.tone==='bullish'?`${C.green}20`:tickerBrief.tone==='bearish'?`${C.red}20`:`${C.orange}20`,
+                              color:tickerBrief.tone==='bullish'?C.green:tickerBrief.tone==='bearish'?C.red:C.orange,
+                              border:`1px solid ${tickerBrief.tone==='bullish'?C.green:tickerBrief.tone==='bearish'?C.red:C.orange}40`,
+                            }}>{tickerBrief.bias.toUpperCase()}</span>
+                          )}
+                        </div>
+                        <div style={{fontSize:12,color:C.subtext,lineHeight:1.7,marginBottom:8}}>{tickerBrief.summary}</div>
+                        <div style={{display:'flex',gap:6,alignItems:'flex-start'}}>
+                          <span style={{fontSize:9,color:C.orange,letterSpacing:1,flexShrink:0,marginTop:1}}>CATALYST</span>
+                          <span style={{fontSize:11,color:C.text,lineHeight:1.6}}>{tickerBrief.catalyst}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
                 {scanResult.warnings?.length>0&&(
                   <Card C={C} color={`${C.orange}40`} style={{marginBottom:7,borderRadius:10,padding:'16px 18px',boxShadow:C.shadow}}>
@@ -2614,31 +2708,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       ADMIN-ONLY SECTION
                   ═══════════════════════════════════════════════ */}
                   {isAdmin&&(<>
-
-                    {/* System Status */}
-                    <Card style={{marginBottom:12}}>
-                      <Lbl C={C} color={C.orange}>🖥 SYSTEM STATUS</Lbl>
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:6}}>
-                        <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
-                          <div style={{fontSize:9,color:C.dim,letterSpacing:1,marginBottom:4}}>DATA SOURCE</div>
-                          <div style={{display:'flex',alignItems:'center',gap:6}}>
-                            <span style={{width:7,height:7,borderRadius:'50%',background:tradierMode==='sandbox'?C.orange:C.green,flexShrink:0,boxShadow:tradierMode==='sandbox'?`0 0 6px ${C.orange}`:`0 0 6px ${C.green}`}}/>
-                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:tradierMode==='sandbox'?C.orange:C.green,fontWeight:600}}>
-                              {tradierMode==='sandbox'?'SANDBOX':'PRODUCTION'}
-                            </span>
-                          </div>
-                          <div style={{fontSize:9,color:C.subtext,marginTop:3}}>Tradier {tradierMode==='sandbox'?'test data':'live data'}</div>
-                        </div>
-                        <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px'}}>
-                          <div style={{fontSize:9,color:C.dim,letterSpacing:1,marginBottom:4}}>AUTH</div>
-                          <div style={{display:'flex',alignItems:'center',gap:6}}>
-                            <span style={{width:7,height:7,borderRadius:'50%',background:C.green,flexShrink:0,boxShadow:`0 0 6px ${C.green}`}}/>
-                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.green,fontWeight:600}}>ADMIN</span>
-                          </div>
-                          <div style={{fontSize:9,color:C.subtext,marginTop:3}}>Full access · No gate</div>
-                        </div>
-                      </div>
-                    </Card>
 
                     {/* Telegram Bot */}
                     <Card style={{marginBottom:12}}>

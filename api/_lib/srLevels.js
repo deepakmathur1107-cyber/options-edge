@@ -29,30 +29,33 @@ async function fetchHistory(ticker) {
   }))
 }
 
-function findSwings(days, win = 5) {
+// Tighter window (3 bars) catches recent nearby levels
+function findSwings(days, win = 3) {
   const highs = [], lows = []
   for (let i = win; i < days.length - win; i++) {
     const sl   = days.slice(i - win, i + win + 1)
     const maxH = Math.max(...sl.map(d => d.high))
     const minL = Math.min(...sl.map(d => d.low))
-    if (days[i].high === maxH) highs.push({ price: days[i].high, date: days[i].date })
-    if (days[i].low  === minL) lows.push({  price: days[i].low,  date: days[i].date })
+    if (days[i].high === maxH) highs.push({ price: days[i].high, date: days[i].date, idx: i })
+    if (days[i].low  === minL) lows.push({  price: days[i].low,  date: days[i].date, idx: i })
   }
   return { highs, lows }
 }
 
-function clusterLevels(levels, pct = 0.008) {
+function clusterLevels(levels, pct = 0.005) {
   const clusters = []
   for (const lvl of levels) {
     const ex = clusters.find(c => Math.abs(c.price - lvl.price) / c.price < pct)
     if (ex) {
       ex.price   = (ex.price * ex.touches + lvl.price) / (ex.touches + 1)
       ex.touches += 1
+      ex.lastIdx = Math.max(ex.lastIdx, lvl.idx || 0)
     } else {
-      clusters.push({ price: lvl.price, touches: 1 })
+      clusters.push({ price: lvl.price, touches: 1, lastIdx: lvl.idx || 0 })
     }
   }
-  return clusters.sort((a, b) => b.touches - a.touches)
+  // Score = touches * recency (more recent = higher lastIdx = better)
+  return clusters.sort((a, b) => (b.touches * (b.lastIdx + 1)) - (a.touches * (a.lastIdx + 1)))
 }
 
 function pivotPoints(day) {
@@ -66,6 +69,21 @@ function sma(days, n) {
   return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null
 }
 
+// Pick the best level within maxPct of price, fallback to closest if none found
+function bestLevel(clusters, price, direction, maxPct = 0.06) {
+  const filtered = clusters.filter(c =>
+    direction === 'above'
+      ? c.price > price && (c.price - price) / price <= maxPct
+      : c.price < price && (price - c.price) / price <= maxPct
+  )
+  if (filtered.length) return filtered[0].price
+  // Fallback: closest regardless of distance
+  const fallback = clusters.filter(c =>
+    direction === 'above' ? c.price > price : c.price < price
+  )
+  return fallback[0]?.price || null
+}
+
 async function getSRLevels(ticker) {
   const days = await fetchHistory(ticker)
   if (days.length < 10) throw new Error(`Insufficient history for ${ticker}`)
@@ -76,14 +94,19 @@ async function getSRLevels(ticker) {
   const ma200  = sma(days, 200)
   const ma50   = sma(days, 50)
 
-  const { highs, lows } = findSwings(days, 5)
-  const swingResists  = clusterLevels(highs).filter(c => c.price > price).slice(0, 3)
-  const swingSupports = clusterLevels(lows) .filter(c => c.price < price).slice(0, 3)
+  const { highs, lows } = findSwings(days, 3)
+  const swingResists  = clusterLevels(highs).filter(c => c.price > price)
+  const swingSupports = clusterLevels(lows) .filter(c => c.price < price)
 
-  const r1 = swingResists[0]?.price  || pivots.r1
-  const r2 = swingResists[1]?.price  || pivots.r2
-  const s1 = swingSupports[0]?.price || pivots.s1
-  const s2 = swingSupports[1]?.price || pivots.s2
+  // Prefer levels within 6% — fall back to pivots if nothing close
+  const r1 = bestLevel(swingResists,  price, 'above', 0.06) || pivots.r1
+  const r2 = bestLevel(swingResists,  price, 'above', 0.12) || pivots.r2
+  const s1 = bestLevel(swingSupports, price, 'below', 0.06) || pivots.s1
+  const s2 = bestLevel(swingSupports, price, 'below', 0.12) || pivots.s2
+
+  // Make sure r2 > r1 and s2 < s1
+  const finalR2 = r2 > r1 ? r2 : r1 * 1.03
+  const finalS2 = s2 < s1 ? s2 : s1 * 0.97
 
   const week52High = Math.max(...days.map(d => d.high))
   const week52Low  = Math.min(...days.map(d => d.low))
@@ -105,15 +128,15 @@ async function getSRLevels(ticker) {
 
   return {
     s1:    +s1.toFixed(2),
-    s2:    +s2.toFixed(2),
+    s2:    +finalS2.toFixed(2),
     r1:    +r1.toFixed(2),
-    r2:    +r2.toFixed(2),
+    r2:    +finalR2.toFixed(2),
     pivot: +pivots.pp.toFixed(2),
     ma200: ma200 ? +ma200.toFixed(2) : null,
     ma50:  ma50  ? +ma50.toFixed(2)  : null,
     position, contextLine,
-    swingSupports: swingSupports.map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
-    swingResists:  swingResists.map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
+    swingSupports: swingSupports.slice(0,3).map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
+    swingResists:  swingResists.slice(0,3).map(c => ({ price: +c.price.toFixed(2), touches: c.touches })),
     week52High: +week52High.toFixed(2),
     week52Low:  +week52Low.toFixed(2),
   }

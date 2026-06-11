@@ -174,7 +174,7 @@ module.exports = async function handler(req, res) {
   }
 
   // ── Call Tradier ────────────────────────────────────────────────────────────
-  console.log(`[tradier] ${isAdmin?'ADMIN':clerkId?'user':'server'} ${TRADIER_MODE} -> ${tradierPath}`)
+  console.log(`[tradier] ${tradierPath}`)
 
   try {
     const upstream = await fetch(url, {

@@ -5,6 +5,8 @@
  * Cron: "0 13 * * 1-5"  (9 AM ET once daily — Vercel Hobby limit)
  */
 const { createClient } = require('@supabase/supabase-js')
+const { getSRLevels }    = require('./_lib/srLevels')
+const { getTickerBrief } = require('./_lib/tickerBrief')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -140,6 +142,31 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
+
+  // ── TICKER ANALYSIS MODE — GET /api/brief?ticker=AMZN&... ────────────────
+  if (req.method === 'GET' && req.query.ticker) {
+    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
+    const ticker    = (req.query.ticker || '').toUpperCase().trim()
+    const price     = parseFloat(req.query.price    || 0)
+    const chgPct    = parseFloat(req.query.chgPct   || 0)
+    const iv        = req.query.iv        || '0'
+    const dte       = req.query.dte       || '30'
+    const score     = req.query.score     || '50'
+    const tradeType = req.query.tradeType || 'Call'
+    if (!ticker) return res.status(400).json({ error: 'Missing ticker' })
+    try {
+      const sr    = await getSRLevels(ticker)
+      const brief = await getTickerBrief({
+        ticker, price, chgPct, iv, dte, score, tradeType,
+        s1: sr.s1, r1: sr.r1, ma200: sr.ma200, ma50: sr.ma50, position: sr.position,
+      })
+      return res.status(200).json({ sr, brief })
+    } catch (e) {
+      console.error('[brief] ticker analysis error:', e.message)
+      return res.status(500).json({ error: e.message })
+    }
+  }
 
   // POST — cron or manual trigger
   if (req.method === 'POST') {
