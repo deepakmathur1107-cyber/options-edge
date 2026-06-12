@@ -671,6 +671,8 @@ export default function App(props={}) {
   const [tradierMode,  setTradierMode]  = useState(()=>ls('tradierMode','production'))
   const [tgToken,      setTgToken]      = useState(()=>ls('tgToken'))
   const [tgChatId,     setTgChatId]     = useState(()=>ls('tgChatId'))
+  const [tgSaving,     setTgSaving]     = useState(false)
+  const [tgSaveStatus, setTgSaveStatus] = useState('')
   const [watchlist,    setWatchlist]    = useState(()=>ls('watchlist','NVDA,AAPL,MSFT,SPY,TSLA'))
   const [minScore,     setMinScore]     = useState(()=>Number(ls('minScore','80')))
   const [scanFreq,     setScanFreq]     = useState(()=>Number(ls('scanFreq','5')))
@@ -761,6 +763,20 @@ export default function App(props={}) {
       setAdminFeedback(d.feedback||[])
     } catch(e){ setAdminFbErr(e.message); console.error('Admin feedback load:',e.message) }
     finally { setAdminFbLoading(false) }
+  }
+
+  const saveTgPrefs = async()=>{
+    if (!isAdmin) return
+    setTgSaving(true); setTgSaveStatus('')
+    try {
+      const token = await getAuthToken()
+      const r = await fetch('/api/user/prefs',{method:'POST',
+        headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
+        body:JSON.stringify({...alertPrefs, tg_token:tgToken, tg_chat_id:tgChatId})})
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setTgSaveStatus('saved'); setTimeout(()=>setTgSaveStatus(''),3000)
+    } catch(e){ setTgSaveStatus('error:'+e.message) }
+    finally { setTgSaving(false) }
   }
 
   const saveAlertPrefs = async()=>{
