@@ -168,15 +168,16 @@ module.exports = async function handler(req, res) {
 
     if (error) return res.status(500).json({ error: error.message })
 
-    const now = new Date()
+    const now          = new Date()
+    const wantsRefresh = req.query.refresh === '1'
 
-    // Calendar date in CT (e.g. "06/13/2026") for same-day comparison
-    function dateCT(d) {
-      return new Date(d).toLocaleDateString('en-US', {
+    // Helper: same calendar day in CT?
+    function sameDay(a, b) {
+      const fmt = d => new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit'
-      })
+      }).format(new Date(d))
+      return fmt(a) === fmt(b)
     }
-    const todayCT = dateCT(now)
 
     // No brief at all — generate on-demand if market is open, else 404
     if (!data) {
@@ -186,33 +187,40 @@ module.exports = async function handler(req, res) {
       try {
         console.log('No brief found during market hours — generating on-demand')
         const result = await generateAndStore(now)
-        return res.status(200).json({
-          brief:       result.brief,
-          generatedAt: result.generatedAt,
-          isOldBrief:  false,
-        })
+        return res.status(200).json({ brief: result.brief, generatedAt: result.generatedAt, isOldBrief: false, justRefreshed: true })
       } catch (e) {
         console.error('On-demand generation failed:', e.message)
         return res.status(500).json({ error: 'Brief generation failed: ' + e.message })
       }
     }
 
-    const briefDay   = dateCT(data.generated_at)
-    const isOldBrief = briefDay !== todayCT  // brief is from a previous calendar day
+    const isOldBrief = !sameDay(data.generated_at, now)
 
-    // Brief is from a previous day and market is open — regenerate on-demand
+    // Brief is from a previous day and market is open — regenerate
     if (isOldBrief && isMarketHours(now)) {
       try {
-        console.log(`Brief is from ${briefDay}, today is ${todayCT} — regenerating`)
+        console.log('Brief is from previous day — regenerating')
         const result = await generateAndStore(now)
-        return res.status(200).json({
-          brief:       result.brief,
-          generatedAt: result.generatedAt,
-          isOldBrief:  false,
-        })
+        return res.status(200).json({ brief: result.brief, generatedAt: result.generatedAt, isOldBrief: false, justRefreshed: true })
       } catch (e) {
         console.error('Regen failed, serving previous day brief:', e.message)
-        // Fall through — serve what we have rather than error
+        // Fall through — serve stale rather than error
+      }
+    }
+
+    // Intraday refresh: ?refresh=1, market open, brief older than 2 hours
+    if (wantsRefresh && isMarketHours(now)) {
+      const ageMs    = now.getTime() - new Date(data.generated_at).getTime()
+      const twoHours = 2 * 60 * 60 * 1000
+      if (ageMs >= twoHours) {
+        try {
+          console.log(`Brief is ${Math.round(ageMs / 60000)}min old — intraday refresh`)
+          const result = await generateAndStore(now)
+          return res.status(200).json({ brief: result.brief, generatedAt: result.generatedAt, isOldBrief: false, justRefreshed: true })
+        } catch (e) {
+          console.error('Intraday refresh failed, serving cached:', e.message)
+          // Fall through — serve cached
+        }
       }
     }
 
@@ -225,8 +233,9 @@ module.exports = async function handler(req, res) {
         bias:         data.bias,
         risk_trigger: data.risk_trigger,
       },
-      generatedAt: data.generated_at,
+      generatedAt:  data.generated_at,
       isOldBrief,
+      justRefreshed: false,
     })
   }
 

@@ -1874,7 +1874,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
 
             {/* ── Morning Readout ── */}
-            <MorningBrief getToken={getAuthToken} />
+            <MorningBrief getToken={getAuthToken} theme={C} />
 
             {/* ── Checklist ── */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
@@ -2732,7 +2732,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 <div className="si">
 
                   {/* ── Morning Readout (everyone) ── */}
-                  <MorningBrief getToken={getAuthToken} />
+                  <MorningBrief getToken={getAuthToken} theme={C} />
 
                   {/* ═══════════════════════════════════════════════
                       ADMIN-ONLY SECTION
