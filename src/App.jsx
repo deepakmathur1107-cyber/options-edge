@@ -2835,6 +2835,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         <Field C={C} label="Chat ID or @ChannelName" value={tgChatId} onChange={setTgChatId} placeholder="-1001234567890"/>
                       </div>
                       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                        <button className="hv" onClick={saveTgPrefs} disabled={tgSaving||!tgToken||!tgChatId} style={{
+                          background:tgToken&&tgChatId?C.green:'transparent',
+                          border:`1px solid ${tgToken&&tgChatId?C.green:C.border}`,
+                          color:tgToken&&tgChatId?'#000':C.dim,
+                          padding:'7px 16px',borderRadius:4,fontSize:12,fontWeight:700,letterSpacing:.8,
+                          cursor:tgToken&&tgChatId?'pointer':'not-allowed'
+                        }}>{tgSaving?'SAVING...':'SAVE'}</button>
                         <button className="hv" onClick={async()=>{
                           setTgStatus('sending...')
                           const authTok=await getAuthToken().catch(()=>null)
@@ -2847,7 +2854,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           color:tgToken&&tgChatId?C.blue:C.dim,
                           padding:'7px 16px',borderRadius:4,fontSize:12,letterSpacing:.8,
                           cursor:tgToken&&tgChatId?'pointer':'not-allowed'
-                        }}>📤 SEND TEST</button>
+                        }}>TEST</button>
+                        {tgSaveStatus==='saved'&&<span style={{fontSize:11,color:C.green}}>Saved</span>}
+                        {tgSaveStatus.startsWith('error')&&<span style={{fontSize:11,color:C.red}}>{tgSaveStatus.slice(6)}</span>}
                         {tgStatus&&<span style={{fontSize:11,color:tgStatus.startsWith('✅')?C.green:C.red}}>{tgStatus}</span>}
                       </div>
                     </Card>

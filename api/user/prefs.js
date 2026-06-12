@@ -83,6 +83,8 @@ module.exports = async function handler(req, res) {
         symbols:        symbolsArr,
         sms_alerts:     row.sms_on         ?? false,
         phone_number:   row.phone_number   ?? '',
+        tg_token:       row.tg_token       ?? null,
+        tg_chat_id:     row.tg_chat_id     ?? null,
       },
     })
   }
@@ -123,6 +125,11 @@ module.exports = async function handler(req, res) {
       sms_on:         body.sms_alerts     ?? false,
       phone_number:   (body.phone_number  || '').trim(),
       updated_at:     new Date().toISOString(),
+    }
+    // Admin-only: save Telegram credentials
+    if (ADMIN_IDS.includes(clerkId)) {
+      if (body.tg_token   !== undefined) payload.tg_token   = (body.tg_token   || '').trim() || null
+      if (body.tg_chat_id !== undefined) payload.tg_chat_id = (body.tg_chat_id || '').trim() || null
     }
 
     console.log('prefs upsert for', clerkId)
