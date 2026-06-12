@@ -79,6 +79,18 @@ module.exports = async function handler(req, res) {
     const ticker = (b.ticker || b.symbol || '').toUpperCase().trim()
     if (!ticker) return res.status(400).json({ error: 'ticker is required' })
 
+    // Enforce per-user row limit (500 trades max, admins unlimited)
+    const MAX_TRADES = ADMIN_IDS.includes(clerkId) ? Infinity : 500
+    if (MAX_TRADES !== Infinity) {
+      const { count } = await supabase
+        .from('trades')
+        .select('id', { count: 'exact', head: true })
+        .eq('clerk_user_id', clerkId)
+      if ((count || 0) >= MAX_TRADES) {
+        return res.status(429).json({ error: `Trade log limit reached (${MAX_TRADES} max). Archive or delete old trades to add new ones.` })
+      }
+    }
+
     const row = {
       clerk_user_id:    clerkId,
       ticker,

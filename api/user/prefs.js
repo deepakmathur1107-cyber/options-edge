@@ -68,6 +68,21 @@ module.exports = async function handler(req, res) {
   if (req.method === 'POST') {
     const body = req.body || {}
 
+    // Only active subscribers (or admins) can enable alert delivery
+    if (!isAdmin && (body.email_alerts || body.sms_alerts)) {
+      const { createClient } = require('@supabase/supabase-js')
+      const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+      const { data: sub } = await sb
+        .from('subscriptions')
+        .select('status')
+        .eq('clerk_id', clerkId)
+        .maybeSingle()
+      const s = sub?.status || 'inactive'
+      if (s !== 'active' && s !== 'trialing') {
+        return res.status(402).json({ error: 'Active subscription required to enable alerts' })
+      }
+    }
+
     const rawSymbols = Array.isArray(body.symbols) ? body.symbols : ['SPY', 'QQQ']
     const MAX_SYMBOLS = isAdmin ? 999 : 5
     const symbolsText = rawSymbols

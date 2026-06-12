@@ -55,7 +55,7 @@ function tzParts(date, tz) {
 }
 
 function isTradingDay(date) {
-  const p = tzParts(date, 'America/Chicago')
+  const p = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
   const key = `${p.year}-${p.month}-${p.day}`
   return !getHolidays(parseInt(p.year, 10)).has(key)

@@ -351,11 +351,13 @@ module.exports = async function handler(req, res) {
   const scannedAt = new Date().toISOString()
 
   try {
-    // 1. Fetch users with alerts enabled
+    // 1. Fetch users with alerts enabled AND active subscription
+    // Join with subscriptions so free/inactive users never receive alerts
     const { data: users, error: usersErr } = await supabase
       .from('alert_prefs')
-      .select('*')
+      .select('*, subscriptions!inner(status)')
       .or('email_alerts.eq.true,sms_on.eq.true')
+      .in('subscriptions.status', ['active', 'trialing'])
 
     if (usersErr) return res.status(500).json({ error: usersErr.message })
     if (!users?.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })

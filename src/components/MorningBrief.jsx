@@ -3,7 +3,7 @@
  * Displays cached morning brief from /api/brief
  * Conclusion-first layout: Bias → Risk Trigger → expandable details
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 const BIAS_COLOR = { Bullish: '#00ff88', Neutral: '#ff9500', Bearish: '#ff4466' }
 const BIAS_BG    = { Bullish: '#00ff8815', Neutral: '#ff950015', Bearish: '#ff446615' }
@@ -62,7 +62,7 @@ function tzParts(date, tz) {
 }
 
 function isTradingDay(date) {
-  const p    = tzParts(date, 'America/Chicago')
+  const p    = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
   const key  = `${p.year}-${p.month}-${p.day}`
   const year = parseInt(p.year, 10)
@@ -96,12 +96,13 @@ function getMarketStatus(now = new Date()) {
   return { open: true, reason: 'Market open', nextLabel: null }
 }
 
-// Is it a trading day and before 7:30 AM CT? (waiting for cron)
+// Is it a trading day and before 9:30 AM CT? (cron fires at 8 AM CT = 9 AM ET)
+// Poll window covers the time before + shortly after cron fires
 function isPreCronWindow(now = new Date()) {
   if (!isTradingDay(now)) return false
   const p    = tzParts(now, 'America/Chicago')
   const mins = parseInt(p.hour, 10) * 60 + parseInt(p.minute, 10)
-  return mins < 7 * 60 + 30
+  return mins < 9 * 60 + 30
 }
 
 // Calendar date key in CT: "YYYY-MM-DD"
@@ -141,7 +142,7 @@ export default function MorningBrief({ getToken }) {
     return () => clearInterval(t)
   }, [])
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const token = await getToken()
       const res = await fetch('/api/brief', {
@@ -152,20 +153,20 @@ export default function MorningBrief({ getToken }) {
       const data = await res.json()
       setBrief(data.brief)
       setGeneratedAt(data.generatedAt)
-      const old = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
-      setIsOldBrief(old)
+      const isOld = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
+      setIsOldBrief(isOld)
       setError(null)
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }
+  }, [getToken])
 
   // Initial load
-  useEffect(() => { load() }, [getToken])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [load])
 
-  // If brief is from yesterday and we're pre-7:30am CT, poll every 5 min for cron
+  // If brief is from yesterday and we're pre-9:30am CT, poll every 5 min for cron
   useEffect(() => {
     if (!isOldBrief || !isPreCronWindow()) return
     pollRef.current = setInterval(() => {
@@ -173,7 +174,7 @@ export default function MorningBrief({ getToken }) {
       load()
     }, 5 * 60 * 1000)
     return () => clearInterval(pollRef.current)
-  }, [isOldBrief])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOldBrief, load])
 
   const biasColor = brief ? (BIAS_COLOR[brief.bias] || '#c8d8e8') : '#c8d8e8'
   const biasBg    = brief ? (BIAS_BG[brief.bias]    || '#c8d8e820') : '#c8d8e820'
@@ -217,7 +218,7 @@ export default function MorningBrief({ getToken }) {
       </div>
       <div style={{ padding: '24px 16px', textAlign: 'center' }}>
         <div style={{ fontSize: 28, marginBottom: 8 }}>🕐</div>
-        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 7 AM CT</div>
+        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 8 AM CT</div>
         <div style={{ fontSize: 10, color: '#4a7a8a', fontFamily: 'IBM Plex Mono, monospace', marginTop: 4 }}>Use GENERATE to create one now</div>
       </div>
     </div>

@@ -223,23 +223,16 @@ function AuthShell() {
     catch { return null }
   }, [getToken])
 
-  // Check subscription once on sign-in
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) {
-      setSubStatus(null)
-      return
-    }
+  // Fetch subscription status — called on mount and on tab focus
+  const fetchSubStatus = useCallback(() => {
+    if (!isLoaded || !isSignedIn) { setSubStatus(null); return }
     // Admin client-side bypass
     if (userId && ADMIN_IDS.includes(userId)) {
       setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
       return
     }
     stableGetToken().then(token => {
-      if (!token) {
-        // No token — default to active so we don't block
-        setSubStatus({ status: 'active', plan: 'pro' })
-        return
-      }
+      if (!token) { setSubStatus({ status: 'active', plan: 'pro' }); return }
       fetch('/api/user/subscription', {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -247,7 +240,17 @@ function AuthShell() {
         .then(d => setSubStatus(d))
         .catch(() => setSubStatus({ status: 'active', plan: 'pro' }))
     })
-  }, [isLoaded, isSignedIn, userId]) // stableGetToken intentionally omitted — stable ref
+  }, [isLoaded, isSignedIn, userId, stableGetToken])
+
+  // Check subscription on sign-in
+  useEffect(() => { fetchSubStatus() }, [fetchSubStatus])
+
+  // Re-check when user returns to the tab (catches mid-session expiry)
+  useEffect(() => {
+    const onFocus = () => { if (isSignedIn) fetchSubStatus() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [isSignedIn, fetchSubStatus])
 
   const openPortal = async () => {
     try {
