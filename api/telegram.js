@@ -1,6 +1,8 @@
-// api/telegram.js — Vercel serverless proxy for Telegram API
-// Admin-only: requires valid CRON_SECRET header.
-// Runs server-side so no CORS issues and bot token stays server-side only.
+// api/telegram.js — Vercel serverless proxy for Telegram Bot API
+// Auth: Clerk JWT (admin only) OR CRON_SECRET (for alert sends from cron)
+// Bot token accepted from request body (admin's own bot) or TELEGRAM_BOT_TOKEN env var
+
+const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
@@ -9,39 +11,32 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') { res.status(200).end(); return }
   if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return }
 
-  // ── Auth: require CRON_SECRET (admin-only endpoint) ───────────────────────
-  const secret = req.headers['x-cron-secret'] ||
-    (req.headers['authorization'] || '').replace('Bearer ', '').trim()
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    res.status(401).json({ error: 'Unauthorized' })
-    return
+  // ── Auth: accept CRON_SECRET (cron jobs) OR Clerk JWT (admin UI) ──────────
+  const cronSecret = req.headers['x-cron-secret'] || ''
+  const isCron = process.env.CRON_SECRET && cronSecret === process.env.CRON_SECRET
+
+  if (!isCron) {
+    // Fall back to Clerk JWT admin check
+    const { clerkId } = await getAuth(req)
+    if (!clerkId || !ADMIN_IDS.includes(clerkId)) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
   }
 
-  // Parse body
+  // ── Parse body ─────────────────────────────────────────────────────────────
   let body = req.body
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body) } catch { body = {} }
-  }
+  if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
   if (!body) body = {}
 
-  const { message, chat_id } = body
+  const { message, token, chat_id } = body
 
-  // Bot token and chat ID must come from server env vars — never from request body
-  const botToken = process.env.TELEGRAM_BOT_TOKEN
-  const chatId   = process.env.TELEGRAM_CHAT_ID || chat_id
+  // Bot token: use body token (from admin UI) or fall back to env var
+  const botToken = (token || '').trim() || process.env.TELEGRAM_BOT_TOKEN
+  const chatId   = (chat_id || '').trim() || process.env.TELEGRAM_CHAT_ID
 
-  if (!botToken) {
-    res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not configured in Vercel env vars' })
-    return
-  }
-  if (!chatId) {
-    res.status(400).json({ error: 'Missing chat_id (or set TELEGRAM_CHAT_ID in env vars)' })
-    return
-  }
-  if (!message) {
-    res.status(400).json({ error: 'Missing message in request body' })
-    return
-  }
+  if (!botToken) return res.status(400).json({ error: 'Bot token required — enter it in Settings or set TELEGRAM_BOT_TOKEN env var' })
+  if (!chatId)   return res.status(400).json({ error: 'Chat ID required' })
+  if (!message)  return res.status(400).json({ error: 'Missing message' })
 
   try {
     const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -54,7 +49,6 @@ module.exports = async function handler(req, res) {
         disable_web_page_preview: true,
       }),
     })
-
     const data = await r.json()
     res.status(r.ok ? 200 : 502).json(data)
   } catch (err) {

@@ -600,10 +600,12 @@ async function tradierGet(path, token, mode, authToken) {
   return res.json()
 }
 
-async function sendTelegram(message, token, chatId) {
+async function sendTelegram(message, token, chatId, authToken) {
+  const headers = {'Content-Type':'application/json'}
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`
   const res = await fetch('/api/telegram', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers,
     body:JSON.stringify({message,token,chat_id:chatId}),
   })
   return res.json()
@@ -2835,7 +2837,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                         <button className="hv" onClick={async()=>{
                           setTgStatus('sending...')
-                          const r=await sendTelegram(`🤖 *OPTIONS EDGE*\n\nAdmin connected · Alerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleString()}_`,tgToken,tgChatId)
+                          const authTok=await getAuthToken().catch(()=>null)
+                          const r=await sendTelegram(`🤖 *OPTIONS EDGE*\n\nAdmin connected · Alerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleString()}_`,tgToken,tgChatId,authTok)
                           setTgStatus(r.ok?'✅ Sent!':'❌ Failed: '+(r.description||r.error||'check token'))
                           setTimeout(()=>setTgStatus(''),5000)
                         }} disabled={!tgToken||!tgChatId} style={{
