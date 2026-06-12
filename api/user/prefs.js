@@ -27,6 +27,34 @@ module.exports = async function handler(req, res) {
   const { clerkId, isAdmin, error: authErr } = await getAuth(req)
   if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
 
+  // ── FEEDBACK — POST submit, GET fetch (admin) ──────────────────────────────
+  if (req.query.action === 'feedback') {
+
+    if (req.method === 'POST') {
+      let body = req.body
+      if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+      body = body || {}
+      const message = (body.message || '').trim()
+      const type    = ['suggestion','bug','praise','other'].includes(body.type) ? body.type : 'other'
+      const email   = (body.email   || '').trim() || null
+      if (!message || message.length < 5)    return res.status(400).json({ error: 'Message too short' })
+      if (message.length > 2000)             return res.status(400).json({ error: 'Message too long' })
+      const { error } = await supabase.from('feedback').insert({ clerk_user_id: clerkId, email, type, message })
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ ok: true })
+    }
+
+    if (req.method === 'GET') {
+      if (!ADMIN_IDS.includes(clerkId)) return res.status(403).json({ error: 'Admin only' })
+      const { data, error } = await supabase
+        .from('feedback').select('*').order('created_at', { ascending: false }).limit(200)
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ feedback: data || [] })
+    }
+  }
+
+
+
   // ── GET ──────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
@@ -111,32 +139,6 @@ module.exports = async function handler(req, res) {
     }
 
     return res.status(200).json({ ok: true, prefs: data })
-  }
-
-  // ── FEEDBACK — POST submit, GET fetch (admin) ──────────────────────────────
-  if (req.query.action === 'feedback') {
-
-    if (req.method === 'POST') {
-      let body = req.body
-      if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
-      body = body || {}
-      const message = (body.message || '').trim()
-      const type    = ['suggestion','bug','praise','other'].includes(body.type) ? body.type : 'other'
-      const email   = (body.email   || '').trim() || null
-      if (!message || message.length < 5)    return res.status(400).json({ error: 'Message too short' })
-      if (message.length > 2000)             return res.status(400).json({ error: 'Message too long' })
-      const { error } = await supabase.from('feedback').insert({ clerk_user_id: clerkId, email, type, message })
-      if (error) return res.status(500).json({ error: error.message })
-      return res.status(200).json({ ok: true })
-    }
-
-    if (req.method === 'GET') {
-      if (!ADMIN_IDS.includes(clerkId)) return res.status(403).json({ error: 'Admin only' })
-      const { data, error } = await supabase
-        .from('feedback').select('*').order('created_at', { ascending: false }).limit(200)
-      if (error) return res.status(500).json({ error: error.message })
-      return res.status(200).json({ feedback: data || [] })
-    }
   }
 
   return res.status(405).json({ error: 'Method not allowed' })
