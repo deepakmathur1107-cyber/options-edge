@@ -58,7 +58,7 @@ STEP 1 — Search the web for today's market news before writing anything:
 - Search: "economic calendar events ${dayStr}"
 Use what you find to write accurate, current analysis. Do NOT invent events.
 
-STEP 2 — Return ONLY valid JSON (no markdown, no backticks):
+After searching, output ONLY a raw JSON object — no prose, no explanation, no markdown, no backticks. Start your response with { and end with }:
 {
   "tone": "2-3 descriptors e.g. Risk-off / Geopolitical tension / Defensive",
   "why": "One sentence max 20 words on the biggest market driver right now",
@@ -106,33 +106,52 @@ async function generateAndStore(now) {
     messages.push({ role: 'assistant', content: data.content })
 
     if (data.stop_reason === 'end_turn') {
-      // Final response — extract last text block
       const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-      finalText = (textBlock?.text || '').replace(/```json|```/g, '').trim()
+      finalText = (textBlock?.text || '').replace(/```json[\s\S]*?```|```/g, '').trim()
       break
     }
 
     if (data.stop_reason === 'tool_use') {
-      // Claude wants to search — collect all tool_use blocks and return results
+      // Claude used web_search — the API handles search execution internally.
+      // We just need to continue the loop; search results come back in next turn.
       const toolUseBlocks = (data.content || []).filter(b => b.type === 'tool_use')
       const toolResults = toolUseBlocks.map(block => ({
         type: 'tool_result',
         tool_use_id: block.id,
-        // Web search results are embedded in the block itself by Anthropic's API
-        content: block.input?.query ? `Searching for: ${block.input.query}` : 'Search executed',
+        content: 'Search completed.',
       }))
-      messages.push({ role: 'user', content: toolResults })
+      // After last tool result, remind Claude to output ONLY JSON
+      messages.push({ role: 'user', content: [
+        ...toolResults,
+      ]})
+      // On next turn, if this was the last search, Claude should write JSON
+      // Add a nudge if we are about to finish
+      if (turn >= 3) {
+        messages.push({ role: 'user', content: 'Now output ONLY the JSON object as instructed. No prose, no explanation.' })
+      }
       continue
     }
 
-    // Unexpected stop reason — extract any text and break
+    // Unexpected — grab any text
     const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-    if (textBlock?.text) { finalText = textBlock.text.replace(/```json|```/g, '').trim(); break }
+    if (textBlock?.text) { finalText = textBlock.text.replace(/```json[\s\S]*?```|```/g, '').trim(); break }
   }
 
   if (!finalText) throw new Error('No text response from Claude after tool loop')
 
-  const brief = JSON.parse(finalText)
+  // Extract JSON — handle case where Claude wraps it in prose
+  let jsonText = finalText
+  const jsonMatch = finalText.match(/\{[\s\S]*\}/)
+  if (jsonMatch) jsonText = jsonMatch[0]
+
+  console.log('[brief] final text preview:', jsonText.slice(0, 200))
+
+  let brief
+  try {
+    brief = JSON.parse(jsonText)
+  } catch (e) {
+    throw new Error(`JSON parse failed. Claude returned: ${finalText.slice(0, 300)}`)
+  }
 
   for (const f of ['tone', 'why', 'events', 'levels', 'bias', 'risk_trigger']) {
     if (!brief[f]) throw new Error(`Missing field: ${f}`)
