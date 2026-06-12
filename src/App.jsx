@@ -567,7 +567,7 @@ function PnLChart({ trades, C: lC }) {
         <polyline points={pts} fill="none" stroke={lineColor} strokeWidth={1.8}/>
         <circle cx={(cumPnL.length-1)/(cumPnL.length-1)*W} cy={toY(lastY)} r={3} fill={lineColor}/>
       </svg>
-      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:themeC.dim,marginTop:3,letterSpacing:.5}}>
+      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:themeC.dim,marginTop:3,letterSpacing:.5}}>
         <span>{closed[0]?.date||closed[0]?.ticker||''}</span>
         <span>{closed[closed.length-1]?.date||closed[closed.length-1]?.ticker||''}</span>
       </div>
@@ -1547,7 +1547,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       }
     } catch(e){ console.log('Cloud sync (saved locally):',e.message) }
   }
-  const gradeCol=g=>g==='A+'?C.green:g==='A'?C.green:g==='B'?C.orange:C.red
+  const gradeCol=g=>g==='A+'?C.purple:g==='A'?C.green:g==='B'?C.orange:C.red
   // Auth props injected by Router.jsx in the deployed app.
   // Defaults allow the app to run standalone (artifact preview / local dev).
   const isAdmin     = props.isAdmin     || false
@@ -1708,6 +1708,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         select option{background:${C.inputBg}}
         .scanrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:5px}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:${C.bgDeep}}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px}
+        .dash-grid{display:flex;flex-direction:column;gap:0}
+        .dash-left{display:flex;flex-direction:column;gap:0}
+        .dash-right{display:flex;flex-direction:column;gap:0}
+        @media(min-width:1024px){.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}.dash-left,.dash-right{display:flex;flex-direction:column;gap:0}}
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -1719,12 +1723,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
         ].map(({sym,data,color},i)=>(
           <div key={sym} style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
-            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,letterSpacing:2,color:C.dim}}>{sym}</span>
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:2,color:C.subtext}}>{sym}</span>
             {data ? (
               <>
                 <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:1,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                <span style={{fontSize:10,color,fontWeight:600}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
-                <span style={{fontSize:10,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
+                <span style={{fontSize:13,color,fontWeight:700}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
+                <span style={{fontSize:12,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
               </>
             ) : (
               <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
@@ -1737,11 +1741,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       </div>
 
       {/* ═══════════════ MAIN CONTENT ════════════════════════════════════════ */}
-      <div style={{padding:'20px 24px',maxWidth:1100,margin:'0 auto'}}>
+      <div style={{padding:'20px 24px',maxWidth:1400,margin:'0 auto'}}>
 
         {/* ── DASHBOARD TAB ──────────────────────────────────────────────── */}
         {tab==='dash' && (
           <div className="si">
+          <div className="dash-grid">
+          <div className="dash-left">
 
             {/* ── SPX / NDX price cards ── */}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
@@ -1755,13 +1761,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div key={sym} style={{background:C.card,border:`1px solid ${data?bc+'40':C.border}`,borderLeft:`3px solid ${bc}`,borderRadius:10,padding:'16px 20px',boxShadow:C.shadow}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}}>
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:2,color:bc}}>{sym}</span>
-                      {data && <span style={{fontSize:8,color:bc,border:`1px solid ${bc}40`,padding:'1px 5px',borderRadius:3}}>{up?'▲ BULL':'▼ BEAR'}</span>}
+                      {data && <span style={{fontSize:11,color:bc,border:`1px solid ${bc}40`,padding:'1px 5px',borderRadius:3}}>{up?'▲ BULL':'▼ BEAR'}</span>}
                     </div>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:C.text,letterSpacing:1,lineHeight:1.1}}>
                       {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
                     </div>
                     {data && <div style={{fontSize:13,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}% ({data.chg>=0?'+':''}{data.chg.toFixed(2)})</div>}
-                    {!data && <div style={{fontSize:9,color:C.dim,marginTop:2}}>{label}</div>}
+                    {!data && <div style={{fontSize:11,color:C.dim,marginTop:2}}>{label}</div>}
                   </div>
                 )
               })}
@@ -1771,25 +1777,25 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {!esBar && !nqBar && !barLoading && (
               <div style={{background:C.bgDeep,border:`1px dashed ${C.border}`,borderRadius:10,padding:'11px 13px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',boxShadow:C.shadow}}>
                 <div>
-                  <div style={{fontSize:10,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
-                  <div style={{fontSize:9,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
+                  <div style={{fontSize:12,color:C.orange,marginBottom:2}}>⚠ Market data unavailable</div>
+                  <div style={{fontSize:11,color:C.dim}}>Click refresh to retry. Check Vercel logs if issue persists.</div>
                 </div>
                 <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
-                  style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>
+                  style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',whiteSpace:'nowrap'}}>
                   {barLoading ? '⏳ refreshing...' : `↺ ${nextRefresh}s`}
                 </button>
       </div>
             )}
             {!esBar && !nqBar && barLoading && (
               <div style={{background:C.bgDeep,border:`1px dashed ${C.border}`,borderRadius:10,padding:'11px 13px',marginBottom:12,boxShadow:C.shadow}}>
-                <div style={{fontSize:10,color:C.dim}}>⏳ Loading market data...</div>
+                <div style={{fontSize:12,color:C.dim}}>⏳ Loading market data...</div>
               </div>
             )}
 
             {/* ── Market Conviction ── */}
             <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION</div>
+                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION</div>
                 <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
                   style={{fontSize:11,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}50`,padding:'5px 12px',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontWeight:600}}>
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}
@@ -1800,8 +1806,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,fontWeight:700,color:marketConviction.color,letterSpacing:1,lineHeight:1}}>{marketConviction.score}%</div>
                     <div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:marketConviction.color,letterSpacing:2}}>{marketConviction.direction}</div>
-                      <div style={{fontSize:10,color:C.dim,marginTop:2}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:marketConviction.color,letterSpacing:2,fontWeight:900}}>{marketConviction.direction}</div>
+                      <div style={{fontSize:12,color:C.dim,marginTop:2}}>
                         SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% {'·'} NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%
                       </div>
                     </div>
@@ -1810,7 +1816,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
                     <div style={{position:'absolute',left:'50%',top:0,bottom:0,width:1,background:C.border}}/>
                   </div>
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:C.subtext,marginTop:3}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.subtext,marginTop:3}}>
                     <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
                   </div>
                 </>
@@ -1823,8 +1829,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
-                  <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>SPX / NDX INDEX SETUPS</div>
-                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
+                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>SPX / NDX INDEX SETUPS</div>
+                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>All timeframes {'·'} sorted by conviction</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background: indexAlertsLoading ? C.cardAlt : C.green,
@@ -1839,7 +1845,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 </button>
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
-                <div style={{fontSize:10,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
+                <div style={{fontSize:12,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
                   {'Hit GENERATE to scan SPX & NDX across all 4 timeframes'}
                 </div>
               )}
@@ -1850,43 +1856,46 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div key={i} style={{background:C.cardAlt,border:`1px solid ${cardC}30`,borderRadius:8,padding:'12px 14px',marginBottom:6,boxShadow:C.shadow}}>
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:4}}>
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,color:cardC,letterSpacing:2}}>{al.sym}</span>
-                      <span style={{fontSize:10,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
-                      <span style={{fontSize:8,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 5px',borderRadius:2}}>{al.tfBadge} {al.tfLabel}</span>
-                      {high&&<span style={{fontSize:8,color:C.green,border:`1px solid ${C.green}40`,padding:'1px 5px',borderRadius:2}}>90%+ HIGH CONVICTION</span>}
+                      <span style={{fontSize:12,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
+                      <span style={{fontSize:11,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 5px',borderRadius:2}}>{al.tfBadge} {al.tfLabel}</span>
+                      {high&&<span style={{fontSize:11,fontWeight:700,color:C.purple,background:`${C.purple}15`,border:`1px solid ${C.purple}50`,padding:'2px 8px',borderRadius:4,letterSpacing:0.5}}>⚡ HIGH CONVICTION</span>}
                       <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
                     </div>
-                    <div style={{display:'flex',gap:10,fontSize:10,color:C.dim,marginBottom:4,flexWrap:'wrap'}}>
+                    <div style={{display:'flex',gap:10,fontSize:12,color:C.dim,marginBottom:4,flexWrap:'wrap'}}>
                       <span>Entry: <span style={{color:C.subtext}}>{al.entry}</span></span>
                       <span>Tgt: <span style={{color:C.green}}>{al.target}</span></span>
                       <span>Stp: <span style={{color:C.red}}>{al.stop}</span></span>
                     </div>
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                      <span style={{fontSize:9,color:C.subtext}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv} {'·'} Delta: {al.delta}</span>
+                      <span style={{fontSize:11,color:C.subtext}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv} {'·'} Delta: {al.delta}</span>
                       {tgToken&&tgChatId&&(
-                        <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:9,cursor:'pointer'}}>TG</button>
+                        <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:11,cursor:'pointer'}}>TG</button>
                       )}
                     </div>
-                    {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:8,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
+                    {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:11,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
                   </div>
                 )
               })}
-              {tgStatus&&<div style={{fontSize:10,color:C.green,marginTop:4}}>{tgStatus}</div>}
+              {tgStatus&&<div style={{fontSize:12,color:C.green,marginTop:4}}>{tgStatus}</div>}
             </div>
 
-            {/* ── Morning Readout ── */}
+            </div>{/* end dash-left */}
+            <div className="dash-right">
+
+            {/* ── Market Readout ── */}
             <MorningBrief getToken={getAuthToken} theme={C} />
 
             {/* ── Checklist ── */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
-                <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
+                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
                 <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:12,color:'#000',background:C.blue,border:'none',padding:'8px 18px',borderRadius:4,cursor:'pointer',fontWeight:700,fontFamily:"'Bebas Neue',sans-serif",letterSpacing:.8}}>OPEN</button>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:clColor,letterSpacing:1,lineHeight:1}}>{clScore}%</div>
                 <div>
                   <div style={{fontSize:11,color:clScore>=80?C.green:clScore>=60?C.orange:C.red}}>{clScore>=80?'STRONG SETUP':clScore>=60?'CAUTION':'SKIP THIS TRADE'}</div>
-                  <div style={{fontSize:9,color:C.dim,marginTop:1}}>{Object.values(checked).filter(Boolean).length}/{CHECKLIST.length} checks</div>
+                  <div style={{fontSize:11,color:C.dim,marginTop:1}}>{Object.values(checked).filter(Boolean).length}/{CHECKLIST.length} checks</div>
                 </div>
               </div>
               <div style={{width:'100%',height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
@@ -1902,12 +1911,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {l:'OPEN',     v:String(jStats.open),c:C.blue},
               ].map((s,i)=>(
                 <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderTop:`3px solid ${s.c}`,borderRadius:10,padding:'9px 11px',boxShadow:C.shadow}}>
-                  <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase',marginBottom:2}}>{s.l}</div>
+                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase',marginBottom:2}}>{s.l}</div>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:s.c}}>{s.v}</div>
                 </div>
               ))}
             </div>
             <Link to="/app/trades" style={{display:'block',textAlign:'center',padding:'12px 16px',borderRadius:10,marginBottom:4,border:`1px solid ${C.blue}40`,color:C.blue,fontSize:13,fontWeight:600,letterSpacing:1.5,textDecoration:'none',background:`${C.blue}10`,boxShadow:C.shadow,fontFamily:"'Inter',sans-serif"}}>≡ VIEW FULL TRADE LOG & BACKTEST →</Link>
+            </div>{/* end dash-right */}
+          </div>{/* end dash-grid */}
           </div>
         )}
 
@@ -1918,15 +1929,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <div style={{background:C.bgDeep,border:`1px solid ${C.orange}50`,borderRadius:6,padding:'10px 13px',marginBottom:11,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
                 <div>
                   <div style={{fontSize:11,color:C.orange,marginBottom:2}}>⚡ Daily scan limit reached ({usageCount}/{scanLimit})</div>
-                  <div style={{fontSize:10,color:C.subtext}}>Free tier: {scanLimit} scans/day. Resets at midnight UTC.</div>
+                  <div style={{fontSize:12,color:C.subtext}}>Free tier: {scanLimit} scans/day. Resets at midnight UTC.</div>
                 </div>
-                <button className="hv" onClick={()=>window.location.href='/app'} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',whiteSpace:'nowrap'}}>UPGRADE →</button>
+                <button className="hv" onClick={()=>window.location.href='/app'} style={{background:`${C.green}20`,border:`1px solid ${C.green}`,color:C.green,padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',whiteSpace:'nowrap'}}>UPGRADE →</button>
               </div>
             )}
 
             {/* Timeframe */}
             <div style={{marginBottom:12}}>
-              <div style={{fontSize:11,color:C.dim,letterSpacing:0.5,fontWeight:600,fontFamily:"'Inter',sans-serif",textTransform:'uppercase',marginBottom:7}}>TIMEFRAME</div>
+              <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase',marginBottom:7}}>TIMEFRAME</div>
               <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:6}}>
                 {Object.entries(TF_CONFIG).map(([key,cfg])=>{
                   const active=scanTF===key
@@ -1940,9 +1951,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2}}>
                         <span style={{fontSize:13}}>{cfg.badge}</span>
                         <span style={{fontFamily:"'Inter',sans-serif",fontWeight:600,fontSize:13,letterSpacing:0,color:active?cfg.color:C.text}}>{cfg.label}</span>
-                        {active&&<span style={{marginLeft:'auto',fontSize:8,color:cfg.color,border:`1px solid ${cfg.color}`,padding:'1px 4px',borderRadius:2}}>ACTIVE</span>}
+                        {active&&<span style={{marginLeft:'auto',fontSize:11,color:cfg.color,border:`1px solid ${cfg.color}`,padding:'1px 4px',borderRadius:2}}>ACTIVE</span>}
                       </div>
-                      <div style={{fontSize:10,color:active?cfg.color+'cc':C.dim}}>{cfg.desc}</div>
+                      <div style={{fontSize:12,color:active?cfg.color+'cc':C.dim}}>{cfg.desc}</div>
                     </button>
                   )
                 })}
@@ -1996,18 +2007,18 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:gradeCol(scanResult.grade),letterSpacing:1.5,marginBottom:1}}>{scanResult.tradeType}</div>
                       <div style={{fontSize:11,color:C.dim}}>Conviction: <span style={{color:scanResult.score>=80?C.green:C.orange,fontWeight:600}}>{scanResult.score}%</span> · {scanResult.confidence}</div>
                       <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:3,padding:'2px 6px',borderRadius:3,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
-                        <span style={{fontSize:10}}>{scanResult.tfBadge}</span>
-                        <span style={{fontSize:9,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
+                        <span style={{fontSize:12}}>{scanResult.tfBadge}</span>
+                        <span style={{fontSize:11,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
                       </div>
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
-                    <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
+                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
+                    <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
-                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:10,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
+                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
                     )}
-                    {tgStatus&&<span style={{fontSize:10,color:C.green}}>{tgStatus}</span>}
+                    {tgStatus&&<span style={{fontSize:12,color:C.green}}>{tgStatus}</span>}
                   </div>
                 </div>
 
@@ -2018,12 +2029,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div key={i} style={{background:C.bgDeep,border:`1px solid ${C.red}60`,borderRadius:5,padding:'9px 13px',marginBottom:5,display:'flex',gap:8,alignItems:'flex-start'}}>
                         <span style={{fontSize:14,flexShrink:0}}>🚫</span>
                         <div>
-                          <div style={{fontSize:9,color:C.red,letterSpacing:1.5,marginBottom:2}}>SKIP THIS TRADE</div>
+                          <div style={{fontSize:11,color:C.red,letterSpacing:1.5,marginBottom:2}}>SKIP THIS TRADE</div>
                           <div style={{fontSize:11,color:C.red,lineHeight:1.6}}>{b}</div>
                         </div>
                       </div>
                     ))}
-                    <div style={{fontSize:9,color:C.subtext,padding:'4px 8px',borderRadius:3,background:C.bgDeep,border:`1px solid ${C.red}30`}}>
+                    <div style={{fontSize:11,color:C.subtext,padding:'4px 8px',borderRadius:3,background:C.bgDeep,border:`1px solid ${C.red}30`}}>
                       Hard blocks cap conviction at 48% regardless of other signals. Fix the issue above before entering.
                     </div>
                   </div>
@@ -2031,7 +2042,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
                 {/* ── PRIMARY TRADE BOX: strike + real option prices ── */}
                 <div style={{background:isDark?C.bgDeep:C.cardAlt,border:`1px solid ${C.green}50`,borderRadius:6,padding:'12px 14px',marginBottom:11,boxShadow:C.shadowMd}}>
-                  <div style={{fontSize:8,color:C.green,letterSpacing:2,marginBottom:8}}>
+                  <div style={{fontSize:11,color:C.green,letterSpacing:2,marginBottom:8}}>
                     {scanResult.isSpread ? 'SPREAD EXECUTION' : 'OPTION TRADE'}
                     {' — '}{scanResult.tradeType}
                   </div>
@@ -2039,16 +2050,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {/* Strike + Expiry prominently */}
                   <div style={{display:'flex',gap:14,alignItems:'baseline',marginBottom:10,flexWrap:'wrap'}}>
                     <div>
-                      <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>STRIKE</div>
+                      <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:2}}>STRIKE</div>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:C.text,letterSpacing:2,lineHeight:1}}>{scanResult.strikeStr}</div>
                     </div>
                     <div>
-                      <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>EXPIRY</div>
+                      <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:2}}>EXPIRY</div>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text,letterSpacing:1}}>{scanResult.expiryDisplay}</div>
                     </div>
                     {!scanResult.isSpread&&(
                       <div>
-                        <div style={{fontSize:8,color:C.dim,letterSpacing:2,marginBottom:2}}>OPTION PRICE (MID)</div>
+                        <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:2}}>OPTION PRICE (MID)</div>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.green,letterSpacing:1}}>{scanResult.mid}</div>
                       </div>
                     )}
@@ -2089,7 +2100,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       ))}
                     </div>
                   ) : (
-                    <div style={{background:C.bgDeep,borderRadius:4,padding:'8px 10px',marginBottom:10,fontSize:9,color:C.subtext,lineHeight:1.5}}>
+                    <div style={{background:C.bgDeep,borderRadius:4,padding:'8px 10px',marginBottom:10,fontSize:11,color:C.subtext,lineHeight:1.5}}>
                       <span style={{color:C.blue,letterSpacing:1}}>NET COST — </span>
                       Debit/credit shown per leg below. Buy the spread at net debit or collect net credit.
                     </div>
@@ -2104,7 +2115,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     ].map((f,i)=>(
                       <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:4,padding:'7px 9px'}}>
                         <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:2}}>{f.l}</div>
-                        <div style={{fontSize:10,color:f.c,fontWeight:600,lineHeight:1.5}}>{f.v}</div>
+                        <div style={{fontSize:12,color:f.c,fontWeight:600,lineHeight:1.5}}>{f.v}</div>
                       </div>
                     ))}
                   </div>
@@ -2113,7 +2124,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {/* ── Legs breakdown (only for spreads) ── */}
                 {scanResult.isSpread&&scanResult.legsList?.length>0&&(
                   <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:6,padding:'10px 13px',marginBottom:11}}>
-                    <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
+                    <div style={{fontSize:11,color:C.blue,letterSpacing:2,marginBottom:8}}>LEG-BY-LEG EXECUTION</div>
                     {scanResult.legsList.map((leg,i)=>{
                       const isNet  = leg.startsWith('NET')||leg.startsWith('TOTAL')
                       const isBuy  = leg.startsWith('BUY')
@@ -2127,7 +2138,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           <span style={{fontSize:11,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.dim,flexShrink:0,width:16}}>
                             {isNet?'$':isBuy?'↑':isSell?'↓':'·'}
                           </span>
-                          <span style={{fontSize:10,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.7,wordBreak:'break-all'}}>{leg}</span>
+                          <span style={{fontSize:12,color:isNet?C.blue:isBuy?C.green:isSell?C.red:C.subtext,fontFamily:'monospace',lineHeight:1.7,wordBreak:'break-all'}}>{leg}</span>
                         </div>
                       )
                     })}
@@ -2147,7 +2158,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       {l:'VOL/AV', v:scanResult.volRatio,c:C.dim},
                     ].map((f,i)=>(
                       <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 8px',boxShadow:C.shadow}}>
-                        <div style={{fontSize:10,color:C.dim,letterSpacing:0.5,fontFamily:"'Inter',sans-serif",marginBottom:1}}>{f.l}</div>
+                        <div style={{fontSize:12,color:C.dim,letterSpacing:0.5,fontFamily:"'Inter',sans-serif",marginBottom:1}}>{f.l}</div>
                         <div style={{fontSize:13,color:f.c,fontWeight:600}}>{safe(f.v)}</div>
                       </div>
                     ))}
@@ -2164,7 +2175,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {/* ── S/R Levels + Ticker Brief ── */}
                 {(srLoading || srData || tickerBrief) && (
                   <div style={{background:C.bgDeep,border:`1px solid ${C.blue}40`,borderRadius:10,padding:'14px 16px',marginBottom:11}}>
-                    <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:10}}>📊 SUPPORT & RESISTANCE — {scanResult.ticker}</div>
+                    <div style={{fontSize:11,color:C.blue,letterSpacing:2,marginBottom:10}}>📊 SUPPORT & RESISTANCE — {scanResult.ticker}</div>
                     {srLoading && !srData && (
                       <div style={{fontSize:11,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}><span className="pulse">Computing S/R levels + AI brief...</span></div>
                     )}
@@ -2180,9 +2191,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             <div style={{position:'absolute',left:0,top:0,bottom:0,width:s1Pct+'%',background:'rgba(74,222,128,0.08)',borderRight:'1px dashed rgba(74,222,128,0.4)'}}/>
                             <div style={{position:'absolute',right:0,top:0,bottom:0,width:(100-r1Pct)+'%',background:'rgba(248,113,113,0.08)',borderLeft:'1px dashed rgba(248,113,113,0.4)'}}/>
                             <div style={{position:'absolute',top:0,bottom:0,left:pricePct+'%',width:2,background:C.text,borderRadius:1}}/>
-                            <div style={{position:'absolute',left:'6px',top:'50%',transform:'translateY(-50%)',fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.green}}>S1 ${srData.s1}</div>
-                            <div style={{position:'absolute',left:pricePct+'%',top:'18%',marginLeft:5,fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.text,fontWeight:600,whiteSpace:'nowrap'}}>{scanResult.price}</div>
-                            <div style={{position:'absolute',right:'6px',top:'50%',transform:'translateY(-50%)',fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:C.red}}>R1 ${srData.r1}</div>
+                            <div style={{position:'absolute',left:'6px',top:'50%',transform:'translateY(-50%)',fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:C.green}}>S1 ${srData.s1}</div>
+                            <div style={{position:'absolute',left:pricePct+'%',top:'18%',marginLeft:5,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:C.text,fontWeight:600,whiteSpace:'nowrap'}}>{scanResult.price}</div>
+                            <div style={{position:'absolute',right:'6px',top:'50%',transform:'translateY(-50%)',fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:C.red}}>R1 ${srData.r1}</div>
                           </div>
                           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'5px 20px',marginBottom:10}}>
                             {[
@@ -2209,11 +2220,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     })()}
                     {tickerBrief && (
                       <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-                        <div style={{fontSize:8,color:C.blue,letterSpacing:2,marginBottom:8}}>
+                        <div style={{fontSize:11,color:C.blue,letterSpacing:2,marginBottom:8}}>
                           🤖 AI BRIEF
                           {tickerBrief.bias && (
                             <span style={{
-                              marginLeft:8,padding:'1px 7px',borderRadius:3,fontSize:8,
+                              marginLeft:8,padding:'1px 7px',borderRadius:3,fontSize:11,
                               background:tickerBrief.tone==='bullish'?`${C.green}20`:tickerBrief.tone==='bearish'?`${C.red}20`:`${C.orange}20`,
                               color:tickerBrief.tone==='bullish'?C.green:tickerBrief.tone==='bearish'?C.red:C.orange,
                               border:`1px solid ${tickerBrief.tone==='bullish'?C.green:tickerBrief.tone==='bearish'?C.red:C.orange}40`,
@@ -2222,7 +2233,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         </div>
                         <div style={{fontSize:12,color:C.subtext,lineHeight:1.7,marginBottom:8}}>{tickerBrief.summary}</div>
                         <div style={{display:'flex',gap:6,alignItems:'flex-start'}}>
-                          <span style={{fontSize:9,color:C.orange,letterSpacing:1,flexShrink:0,marginTop:1}}>CATALYST</span>
+                          <span style={{fontSize:11,color:C.orange,letterSpacing:1,flexShrink:0,marginTop:1}}>CATALYST</span>
                           <span style={{fontSize:11,color:C.text,lineHeight:1.6}}>{tickerBrief.catalyst}</span>
                         </div>
                       </div>
@@ -2248,7 +2259,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <span style={{width:6,height:6,borderRadius:'50%',background:autoOn?C.green:C.dim,display:'inline-block',boxShadow:autoOn?`0 0 8px ${C.green}`:'none'}}/>
                     AUTO-SCANNER {autoOn?'ACTIVE':'— OFF'}
                   </div>
-                  <div style={{fontSize:9,color:C.subtext,marginTop:2}}>
+                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>
                     Every {scanFreq} min · {minScore}%+ conviction · {watchlist?watchlist.split(',').map(t=>t.trim()).filter(Boolean).join(', '):'Full S&P 500'}
                   </div>
                 </div>
@@ -2262,13 +2273,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* Watchlist + Frequency */}
               <div style={{display:'grid',gridTemplateColumns:'1fr 140px',gap:8,alignItems:'end',marginBottom:4}}>
                 <div>
-                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Watchlist <span style={{fontWeight:400,color:C.subtext}}>(blank = S&P 500)</span></div>
+                  <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Watchlist <span style={{fontWeight:400,color:C.subtext}}>(blank = S&P 500)</span></div>
                   <input value={watchlist} onChange={e=>setWatchlist(e.target.value.toUpperCase())}
                     placeholder="NVDA,AAPL,MSFT,SPY…"
                     style={{...iSt,width:'100%',boxSizing:'border-box'}}/>
                 </div>
                 <div>
-                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
+                  <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
                   <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
@@ -2277,8 +2288,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* Min Edge Score — inline in scanner */}
               <div style={{marginBottom:10}}>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-                  <div style={{fontSize:10,fontWeight:600,color:C.dim,letterSpacing:.5,fontFamily:"'Inter',sans-serif"}}>Min Edge Score</div>
-                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.green,fontWeight:700}}>{minScore}%+</span>
+                  <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,fontFamily:"'Inter',sans-serif"}}>Min Edge Score</div>
+                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.green,fontWeight:700}}>{minScore}%+</span>
                 </div>
                 <input type="range" min={40} max={95} step={5} value={minScore}
                   onChange={e=>{
@@ -2288,7 +2299,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   }}
                   style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
                 />
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.dim,marginTop:2}}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.dim,marginTop:2}}>
                   <span>40% — more alerts</span><span>95% — high conviction only</span>
                 </div>
               </div>
@@ -2298,12 +2309,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 <div style={{marginBottom:10}}>
                   {/* Table header */}
                   <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28}}>DTE</span>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:90}}>CONVICTION</span>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28,textAlign:'center'}}>GRADE</span>
-                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28}}>DTE</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:90}}>CONVICTION</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28,textAlign:'center'}}>GRADE</span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
                     <span style={{width:14}}/>
                   </div>
                   {alertHistory.map((al,i)=>{
@@ -2325,19 +2336,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           transition:'all .15s',
                         }}>
                           <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scoreCol,letterSpacing:1.5,width:52}}>${al.ticker}</span>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.dim,width:28}}>{al.dte||'—'}D</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.dim,width:28}}>{al.dte||'—'}D</span>
                           <div style={{width:90,display:'flex',alignItems:'center',gap:4}}>
                             <div style={{flex:1,height:3,background:C.border,borderRadius:2,overflow:'hidden'}}>
                               <div style={{height:'100%',width:`${al.score||0}%`,background:`linear-gradient(90deg,${scoreCol}80,${scoreCol})`,borderRadius:2}}/>
                             </div>
-                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:scoreCol,fontWeight:700,width:22,textAlign:'right'}}>{al.score}</span>
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:scoreCol,fontWeight:700,width:22,textAlign:'right'}}>{al.score}</span>
                           </div>
                           <div style={{width:28,textAlign:'center'}}>
-                            <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:3,padding:'1px 5px',color:scoreCol,fontWeight:700,fontSize:10}}>{grade}</span>
+                            <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:3,padding:'1px 5px',color:scoreCol,fontWeight:700,fontSize:12}}>{grade}</span>
                           </div>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
-                          <span style={{fontSize:9,color:C.dim,width:14,textAlign:'center'}}>{isSelected?'▲':'▼'}</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
+                          <span style={{fontSize:11,color:C.dim,width:14,textAlign:'center'}}>{isSelected?'▲':'▼'}</span>
                         </div>
                         {/* Expanded detail */}
                         {isSelected&&(
@@ -2352,24 +2363,24 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 {l:'IV',     v:al.iv?`${(al.iv*100).toFixed(0)}%`:'—'},
                               ].map(({l,v})=>(
                                 <div key={l}>
-                                  <div style={{fontSize:8,color:C.dim,letterSpacing:1,marginBottom:3}}>{l}</div>
+                                  <div style={{fontSize:11,color:C.dim,letterSpacing:1,marginBottom:3}}>{l}</div>
                                   <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.text,fontWeight:600}}>{v||'—'}</div>
                                 </div>
                               ))}
                             </div>
-                            {al.tfLabel&&<div style={{fontSize:9,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
+                            {al.tfLabel&&<div style={{fontSize:11,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
                             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                               <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
                                 background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
-                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
+                                padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>{alertCopied?'✅ COPIED':'📋 COPY'}</button>
                               <button className="hv" onClick={()=>pushToJournal(al)} style={{
                                 background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
-                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
+                                padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>📋 PAPER TRADE</button>
                               <button className="hv" onClick={()=>pushToAlert(al)} style={{
                                 background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
-                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
+                                padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>⚡ SET ALERT</button>
                             </div>
                           </div>
@@ -2383,10 +2394,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* Scanner log */}
               {autoLog.length>0&&(
                 <div style={{background:C.bgDeep,borderRadius:8,padding:9,maxHeight:140,overflowY:'auto',border:`1px solid ${C.border}`}}>
-                  <div style={{fontSize:9,letterSpacing:1.5,color:C.dim,marginBottom:5,fontWeight:600}}>SCAN LOG</div>
+                  <div style={{fontSize:11,letterSpacing:1.5,color:C.dim,marginBottom:5,fontWeight:600}}>SCAN LOG</div>
                   {autoLog.map((l,i)=>(
                     <div key={i} style={{
-                      fontSize:9,
+                      fontSize:11,
                       color:l.includes('🚀')?C.green:l.includes('❌')?C.red:l.includes('▶')||l.includes('◼')||l.includes('↺')?C.blue:C.subtext,
                       fontFamily:'monospace',lineHeight:1.7,
                       fontWeight:l.includes('🚀')?600:400,
@@ -2456,7 +2467,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 {/* ── Header ── */}
                 <div style={{marginBottom:14}}>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.text,letterSpacing:3,lineHeight:1}}>STRATEGY BACKTEST</div>
-                  <div style={{fontSize:10,color:C.dim,marginTop:2}}>Based on trades logged in your Journal · tap 📋 PAPER TRADE on any scan result to track it here</div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:2}}>Based on trades logged in your Journal · tap 📋 PAPER TRADE on any scan result to track it here</div>
                 </div>
 
                 {closed.length===0 ? (
@@ -2495,25 +2506,25 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     {/* ── Filter impact: blocked vs passed ── */}
                     {(blocked.length>0||passed.length>0)&&(
                       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>NEW FILTER IMPACT ANALYSIS</div>
+                        <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:10}}>NEW FILTER IMPACT ANALYSIS</div>
                         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
                           <div style={{background:isDark?'#100205':'#fff0f2',border:`1px solid ${C.red}40`,borderRadius:5,padding:'10px 12px'}}>
-                            <div style={{fontSize:9,color:C.red,letterSpacing:1.5,marginBottom:4}}>🚫 WOULD HAVE BLOCKED</div>
+                            <div style={{fontSize:11,color:C.red,letterSpacing:1.5,marginBottom:4}}>🚫 WOULD HAVE BLOCKED</div>
                             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.red}}>{blocked.length}</div>
-                            <div style={{fontSize:10,color:C.dim,marginTop:2}}>trades match skip criteria</div>
+                            <div style={{fontSize:12,color:C.dim,marginTop:2}}>trades match skip criteria</div>
                             {blockedWr!==null&&<div style={{fontSize:11,color:C.red,marginTop:4}}>Actual win rate: <strong>{blockedWr}%</strong></div>}
                             <div style={{fontSize:11,color:C.dim,marginTop:1}}>P&L if skipped: <span style={{color:totPL(blocked)<=0?C.green:C.red}}>{totPL(blocked)<=0?'Saved':'Lost'} ${Math.abs(totPL(blocked)).toFixed(0)}</span></div>
                           </div>
                           <div style={{background:isDark?'#020e06':'#f0fff4',border:`1px solid ${C.green}40`,borderRadius:5,padding:'10px 12px'}}>
-                            <div style={{fontSize:9,color:C.green,letterSpacing:1.5,marginBottom:4}}>✅ PASSES ALL FILTERS</div>
+                            <div style={{fontSize:11,color:C.green,letterSpacing:1.5,marginBottom:4}}>✅ PASSES ALL FILTERS</div>
                             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:C.green}}>{passed.length}</div>
-                            <div style={{fontSize:10,color:C.dim,marginTop:2}}>clean setups</div>
+                            <div style={{fontSize:12,color:C.dim,marginTop:2}}>clean setups</div>
                             {passedWr!==null&&<div style={{fontSize:11,color:C.green,marginTop:4}}>Win rate: <strong>{passedWr}%</strong></div>}
                             <div style={{fontSize:11,color:C.dim,marginTop:1}}>P&L: <span style={{color:totPL(passed)>=0?C.green:C.red}}>${totPL(passed).toFixed(0)}</span></div>
                           </div>
                         </div>
                         {blocked.length>0&&(
-                          <div style={{fontSize:9,color:C.dim,lineHeight:1.8}}>
+                          <div style={{fontSize:11,color:C.dim,lineHeight:1.8}}>
                             <strong style={{color:C.orange}}>What triggered the blocks:</strong>{' '}
                             {blocked.filter(t=>ivAt(t)>55).length>0&&<span style={{color:C.orange}}>High IV ({blocked.filter(t=>ivAt(t)>55).length})</span>}
                             {blocked.filter(t=>Math.abs(chgAt(t))>2).length>0&&<span style={{color:C.orange}}> · Chasing ({blocked.filter(t=>Math.abs(chgAt(t))>2).length})</span>}
@@ -2526,7 +2537,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     {/* ── Conviction band breakdown ── */}
                     {(hi90.length>0||hi70.length>0||lo70.length>0)&&(
                       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY CONVICTION BAND</div>
+                        <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY CONVICTION BAND</div>
                         {[
                           {label:'90%+  HIGH CONVICTION', arr:hi90, color:C.green},
                           {label:'70–89%  MODERATE',      arr:hi70, color:C.orange},
@@ -2538,15 +2549,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           return (
                             <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
                               <div style={{flex:1}}>
-                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
-                                <div style={{display:'flex',gap:12,fontSize:10,color:C.dim}}>
+                                <div style={{fontSize:11,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{display:'flex',gap:12,fontSize:12,color:C.dim}}>
                                   <span>{b.arr.length} trades · {w}W/{b.arr.length-w}L</span>
                                   <span style={{color:bPL>=0?C.green:C.red}}>{bPL>=0?'+':''}{bPL.toFixed(0)} P&L</span>
                                 </div>
                               </div>
                               <div style={{textAlign:'right'}}>
                                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:bWr>=60?C.green:bWr>=45?C.orange:C.red,lineHeight:1}}>{bWr}%</div>
-                                <div style={{fontSize:8,color:C.dim}}>win rate</div>
+                                <div style={{fontSize:11,color:C.dim}}>win rate</div>
                               </div>
                               <div style={{width:50,height:6,background:C.border,borderRadius:3,overflow:'hidden'}}>
                                 <div style={{width:(bWr||0)+'%',height:'100%',background:b.color,borderRadius:3}}/>
@@ -2560,7 +2571,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     {/* ── P&L by IV level ── */}
                     {closed.filter(t=>ivAt(t)>0).length>=2&&(
                       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>OUTCOME BY IV AT ENTRY</div>
+                        <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:10}}>OUTCOME BY IV AT ENTRY</div>
                         {[
                           {label:'Low IV  (<40%)',    arr:closed.filter(t=>ivAt(t)>0&&ivAt(t)<40),   color:C.green},
                           {label:'Moderate IV  (40–55%)', arr:closed.filter(t=>ivAt(t)>=40&&ivAt(t)<=55), color:C.orange},
@@ -2570,14 +2581,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           return (
                             <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
                               <div style={{flex:1}}>
-                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
-                                <div style={{fontSize:10,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L · <span style={{color:bPL>=0?C.green:C.red}}>{bPL>=0?'+':''}{bPL.toFixed(0)}</span></div>
+                                <div style={{fontSize:11,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{fontSize:12,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L · <span style={{color:bPL>=0?C.green:C.red}}>{bPL>=0?'+':''}{bPL.toFixed(0)}</span></div>
                               </div>
                               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
                             </div>
                           )
                         })}
-                        <div style={{fontSize:9,color:C.subtext,marginTop:6,lineHeight:1.8}}>
+                        <div style={{fontSize:11,color:C.subtext,marginTop:6,lineHeight:1.8}}>
                           MSTR lesson: buying high IV (66%) loses even when direction is right, because IV crush overwhelms the premium gain.
                         </div>
                       </div>
@@ -2586,7 +2597,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     {/* ── Break-even analysis ── */}
                     {closed.filter(t=>beReq(t)>0).length>=2&&(
                       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-                        <div style={{fontSize:9,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY BREAK-EVEN MOVE REQUIRED</div>
+                        <div style={{fontSize:11,color:C.dim,letterSpacing:2,marginBottom:10}}>WIN RATE BY BREAK-EVEN MOVE REQUIRED</div>
                         {[
                           {label:'Easy  (<3% move needed)',   arr:closed.filter(t=>beReq(t)>0&&beReq(t)<3),  color:C.green},
                           {label:'Moderate  (3–5% needed)',   arr:closed.filter(t=>beReq(t)>=3&&beReq(t)<=5),color:C.orange},
@@ -2596,14 +2607,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           return (
                             <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',borderRadius:4,marginBottom:5,background:isDark?'#04080e':'#f5f7fa',border:`1px solid ${b.color}30`}}>
                               <div style={{flex:1}}>
-                                <div style={{fontSize:9,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
-                                <div style={{fontSize:10,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L</div>
+                                <div style={{fontSize:11,color:b.color,letterSpacing:1,marginBottom:2}}>{b.label}</div>
+                                <div style={{fontSize:12,color:C.dim}}>{b.arr.length} trades · {w}W/{b.arr.length-w}L</div>
                               </div>
                               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
                             </div>
                           )
                         })}
-                        <div style={{fontSize:9,color:C.subtext,marginTop:6,lineHeight:1.8}}>
+                        <div style={{fontSize:11,color:C.subtext,marginTop:6,lineHeight:1.8}}>
                           GOOGL needed +4.3% — historically that puts you in the bottom 30% of probability outcomes. Sticking to trades requiring {'<'}3% move improves win rate dramatically.
                         </div>
                       </div>
@@ -2619,7 +2630,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         {id:'open',    l:'Open / Paper'},
                       ].map(f=>(
                         <button key={f.id} className="hv" onClick={()=>setBtFilter(f.id)} style={{
-                          padding:'5px 10px',borderRadius:3,fontSize:10,letterSpacing:.5,cursor:'pointer',
+                          padding:'5px 10px',borderRadius:3,fontSize:12,letterSpacing:.5,cursor:'pointer',
                           border:`1px solid ${btFilter===f.id?C.green:C.border}`,
                           color:btFilter===f.id?C.green:C.dim,
                           background:btFilter===f.id?`${C.green}15`:'transparent',
@@ -2638,26 +2649,26 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:4}}>
                                 <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                                   <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:C.text,letterSpacing:2}}>{t.ticker}</span>
-                                  <span style={{fontSize:9,color:stC,border:`1px solid ${stC}40`,padding:'1px 5px',borderRadius:2}}>{t.status}</span>
-                                  <span style={{fontSize:10,color:C.dim}}>{t.type}</span>
-                                  {t.strike&&<span style={{fontSize:10,color:C.dim}}>{t.strike}</span>}
-                                  {t.expiry&&<span style={{fontSize:9,color:C.dim}}>{t.expiry}</span>}
-                                  {t.conviction&&<span style={{fontSize:9,color:C.blue,border:`1px solid ${C.blue}30`,padding:'1px 5px',borderRadius:2}}>{t.conviction}%</span>}
-                                  {blocked_&&<span style={{fontSize:8,color:C.red,border:`1px solid ${C.red}40`,padding:'1px 5px',borderRadius:2}}>🚫 BLOCKED</span>}
+                                  <span style={{fontSize:11,color:stC,border:`1px solid ${stC}40`,padding:'1px 5px',borderRadius:2}}>{t.status}</span>
+                                  <span style={{fontSize:12,color:C.dim}}>{t.type}</span>
+                                  {t.strike&&<span style={{fontSize:12,color:C.dim}}>{t.strike}</span>}
+                                  {t.expiry&&<span style={{fontSize:11,color:C.dim}}>{t.expiry}</span>}
+                                  {t.conviction&&<span style={{fontSize:11,color:C.blue,border:`1px solid ${C.blue}30`,padding:'1px 5px',borderRadius:2}}>{t.conviction}%</span>}
+                                  {blocked_&&<span style={{fontSize:11,color:C.red,border:`1px solid ${C.red}40`,padding:'1px 5px',borderRadius:2}}>🚫 BLOCKED</span>}
                                 </div>
                                 <div style={{display:'flex',gap:8,alignItems:'center'}}>
                                   {p!==0&&<span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:isWin?C.green:C.red}}>{p>=0?'+':'-'}${Math.abs(p).toFixed(0)}</span>}
-                                  {t.status==='Open'&&<span style={{fontSize:9,color:C.orange,border:`1px solid ${C.orange}40`,padding:'1px 5px',borderRadius:2}}>PAPER</span>}
+                                  {t.status==='Open'&&<span style={{fontSize:11,color:C.orange,border:`1px solid ${C.orange}40`,padding:'1px 5px',borderRadius:2}}>PAPER</span>}
                                 </div>
                               </div>
-                              <div style={{display:'flex',gap:10,marginTop:5,fontSize:10,color:C.dim,flexWrap:'wrap'}}>
+                              <div style={{display:'flex',gap:10,marginTop:5,fontSize:12,color:C.dim,flexWrap:'wrap'}}>
                                 {t.entry&&<span>Entry: <span style={{color:C.subtext}}>{t.entry}</span></span>}
                                 {t.exitPrice&&<span>Exit: <span style={{color:C.subtext}}>{t.exitPrice}</span></span>}
                                 {t.iv&&<span>IV: <span style={{color:parseFloat(t.iv)>55?C.red:parseFloat(t.iv)>40?C.orange:C.green}}>{t.iv}%</span></span>}
                                 {t.chgPctAtEntry&&<span>Stk Δ: <span style={{color:Math.abs(parseFloat(t.chgPctAtEntry))>2?C.red:C.subtext}}>{t.chgPctAtEntry}%</span></span>}
                                 {t.breakevenReqPct&&<span>BE req: <span style={{color:parseFloat(t.breakevenReqPct)>5?C.red:parseFloat(t.breakevenReqPct)>3?C.orange:C.green}}>+{t.breakevenReqPct}%</span></span>}
                               </div>
-                              {t.notes&&<div style={{marginTop:4,fontSize:10,color:C.subtext,lineHeight:1.5}}>{t.notes}</div>}
+                              {t.notes&&<div style={{marginTop:4,fontSize:12,color:C.subtext,lineHeight:1.5}}>{t.notes}</div>}
                             </div>
                           )
                         })
@@ -2756,7 +2767,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           background:tgToken&&tgChatId?`${C.blue}20`:'transparent',
                           border:`1px solid ${tgToken&&tgChatId?C.blue:C.border}`,
                           color:tgToken&&tgChatId?C.blue:C.dim,
-                          padding:'7px 16px',borderRadius:4,fontSize:10,letterSpacing:.8,
+                          padding:'7px 16px',borderRadius:4,fontSize:12,letterSpacing:.8,
                           cursor:tgToken&&tgChatId?'pointer':'not-allowed'
                         }}>📤 SEND TEST</button>
                         {tgStatus&&<span style={{fontSize:11,color:tgStatus.startsWith('✅')?C.green:C.red}}>{tgStatus}</span>}
@@ -2795,8 +2806,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',marginBottom:14,display:'flex',gap:10,alignItems:'flex-start'}}>
                       <span style={{fontSize:14,flexShrink:0,marginTop:1}}>📬</span>
                       <div>
-                        <div style={{fontSize:10,color:C.text,fontWeight:600,marginBottom:3}}>Sent once daily at 10 AM ET, Mon–Fri</div>
-                        <div style={{fontSize:10,color:C.dim,lineHeight:1.6}}>You'll only receive an email when high-conviction setups exist. No email means no strong setups today — that's normal.</div>
+                        <div style={{fontSize:12,color:C.text,fontWeight:600,marginBottom:3}}>Sent once daily at 10 AM ET, Mon–Fri</div>
+                        <div style={{fontSize:12,color:C.dim,lineHeight:1.6}}>You'll only receive an email when high-conviction setups exist. No email means no strong setups today — that's normal.</div>
                       </div>
                     </div>
 
@@ -2810,7 +2821,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         onChange={e=>setAlertPrefs(p=>({...p,min_edge_score:Number(e.target.value)}))}
                         style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
                       />
-                      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.dim,marginTop:2}}>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.dim,marginTop:2}}>
                         <span>40% — more alerts</span><span>95% — high conviction only</span>
                       </div>
                     </div>
@@ -2823,7 +2834,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         {PRESET_SYMS.map(s=>{
                           const on=alertPrefs.symbols.includes(s)
                           return <button key={s} className="hv" onClick={()=>toggleAlertSym(s)} style={{
-                            padding:'4px 10px',borderRadius:4,fontSize:10,cursor:'pointer',fontWeight:700,letterSpacing:.5,
+                            padding:'4px 10px',borderRadius:4,fontSize:12,cursor:'pointer',fontWeight:700,letterSpacing:.5,
                             background:on?`${C.green}20`:'transparent',
                             border:`1px solid ${on?C.green:C.border}`,
                             color:on?C.green:C.dim,
@@ -2832,7 +2843,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       </div>
                       {alertPrefs.symbols.filter(s=>!PRESET_SYMS.includes(s)).map(s=>(
                         <span key={s} style={{display:'inline-flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:4,
-                          fontSize:10,background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,marginRight:6,marginBottom:6}}>
+                          fontSize:12,background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,marginRight:6,marginBottom:6}}>
                           {s}
                           <button className="hv" onClick={()=>setAlertPrefs(p=>({...p,symbols:p.symbols.filter(x=>x!==s)}))}
                             style={{background:'transparent',border:'none',color:C.orange,cursor:'pointer',padding:0,fontSize:11,lineHeight:1}}>✕</button>
@@ -2843,10 +2854,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           onKeyDown={e=>e.key==='Enter'&&addCustomSym()}
                           placeholder="Add ticker…" maxLength={8}
                           style={{flex:1,background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:4,
-                            color:C.text,fontSize:10,padding:'5px 8px',fontFamily:"'IBM Plex Mono',monospace",outline:'none'}}/>
+                            color:C.text,fontSize:12,padding:'5px 8px',fontFamily:"'IBM Plex Mono',monospace",outline:'none'}}/>
                         <button className="hv" onClick={addCustomSym}
                           style={{background:`${C.green}20`,border:`1px solid ${C.green}40`,color:C.green,
-                            padding:'5px 12px',borderRadius:4,fontSize:10,cursor:'pointer'}}>ADD</button>
+                            padding:'5px 12px',borderRadius:4,fontSize:12,cursor:'pointer'}}>ADD</button>
                       </div>
                     </div>
 
@@ -2855,7 +2866,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         background:alertPrefsSaving?'transparent':C.green,
                         border:`1px solid ${alertPrefsSaving?C.border:C.green}`,
                         color:alertPrefsSaving?C.dim:'#000',fontWeight:700,
-                        padding:'7px 18px',borderRadius:4,fontSize:10,letterSpacing:.8,
+                        padding:'7px 18px',borderRadius:4,fontSize:12,letterSpacing:.8,
                         cursor:alertPrefsSaving?'not-allowed':'pointer',
                       }}>{alertPrefsSaving?'SAVING…':'SAVE PREFERENCES'}</button>
                       {alertPrefsSaved&&<span style={{fontSize:11,color:C.green}}>✓ Saved</span>}
@@ -2869,7 +2880,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                       <div>
                         <div style={{fontSize:11,color:C.text,fontWeight:600}}>Theme</div>
-                        <div style={{fontSize:10,color:C.dim,marginTop:2}}>{isDark?'Dark mode active':'Light mode active'}</div>
+                        <div style={{fontSize:12,color:C.dim,marginTop:2}}>{isDark?'Dark mode active':'Light mode active'}</div>
                       </div>
                       <button className="hv" onClick={()=>setIsDark(p=>!p)} style={{
                         width:38,height:20,borderRadius:10,border:'none',cursor:'pointer',
@@ -2887,11 +2898,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                       <button className="hv" onClick={openPortal} style={{
                         background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
-                        padding:'7px 14px',borderRadius:4,fontSize:10,fontWeight:700,letterSpacing:.8,cursor:'pointer'
+                        padding:'7px 14px',borderRadius:4,fontSize:12,fontWeight:700,letterSpacing:.8,cursor:'pointer'
                       }}>MANAGE BILLING</button>
                       <button className="hv" onClick={onSignOut} style={{
                         background:'transparent',border:`1px solid ${C.border}`,color:C.dim,
-                        padding:'7px 14px',borderRadius:4,fontSize:10,letterSpacing:.8,cursor:'pointer'
+                        padding:'7px 14px',borderRadius:4,fontSize:12,letterSpacing:.8,cursor:'pointer'
                       }}>SIGN OUT</button>
                     </div>
                   </Card>
@@ -2921,16 +2932,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
                       <Lbl C={C}>📱 Preview</Lbl>
                       <div style={{display:'flex',gap:6}}>
-                        <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildTgAlert(alert));setCopied(true);setTimeout(()=>setCopied(false),2000)}} style={{background:copied?`${C.green}20`:'transparent',border:`1px solid ${copied?C.green:C.border}`,color:copied?C.green:C.dim,padding:'5px 11px',borderRadius:3,fontSize:9,cursor:'pointer'}}>
+                        <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildTgAlert(alert));setCopied(true);setTimeout(()=>setCopied(false),2000)}} style={{background:copied?`${C.green}20`:'transparent',border:`1px solid ${copied?C.green:C.border}`,color:copied?C.green:C.dim,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>
                           {copied?'✅ COPIED':'📋 COPY'}
                         </button>
                         {tgToken&&tgChatId&&(
-                          <button className="hv" onClick={async()=>{const r=await sendTelegram(buildTgAlert(alert),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'5px 11px',borderRadius:3,fontSize:9,cursor:'pointer'}}>📤 SEND</button>
+                          <button className="hv" onClick={async()=>{const r=await sendTelegram(buildTgAlert(alert),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>📤 SEND</button>
                         )}
                       </div>
                     </div>
-                    {tgStatus&&<div style={{fontSize:10,color:C.green,marginBottom:7}}>{tgStatus}</div>}
-                    <pre style={{fontSize:10,lineHeight:1.8,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{buildTgAlert(alert)}</pre>
+                    {tgStatus&&<div style={{fontSize:12,color:C.green,marginBottom:7}}>{tgStatus}</div>}
+                    <pre style={{fontSize:12,lineHeight:1.8,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{buildTgAlert(alert)}</pre>
                   </Card>
                 </div>
               )}
@@ -2943,18 +2954,18 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:clColor,letterSpacing:2}}>
                         {clScore}% — {clScore>=80?'STRONG SETUP 🔥':clScore>=60?'CAUTION ⚠️':'SKIP ❌'}
                       </div>
-                      <div style={{fontSize:10,color:C.dim}}>{Object.values(checked).filter(Boolean).length} of {CHECKLIST.length} met</div>
+                      <div style={{fontSize:12,color:C.dim}}>{Object.values(checked).filter(Boolean).length} of {CHECKLIST.length} met</div>
                     </div>
                     <div style={{display:'flex',gap:8,alignItems:'center'}}>
                       <div style={{width:70,height:5,background:C.border,borderRadius:3,overflow:'hidden'}}>
                         <div style={{width:clScore+'%',height:'100%',background:clColor,transition:'width .4s'}}/>
                       </div>
-                      <button className="hv" onClick={()=>setChecked({})} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'4px 9px',borderRadius:3,fontSize:9,cursor:'pointer'}}>RESET</button>
+                      <button className="hv" onClick={()=>setChecked({})} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'4px 9px',borderRadius:3,fontSize:11,cursor:'pointer'}}>RESET</button>
                     </div>
                   </div>
                   {['TA','Flow','News','Risk'].map(cat=>(
                     <div key={cat} style={{marginBottom:13}}>
-                      <div style={{fontSize:9,letterSpacing:2,color:CAT_COLOR[cat],marginBottom:6,display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{fontSize:11,letterSpacing:2,color:CAT_COLOR[cat],marginBottom:6,display:'flex',alignItems:'center',gap:6}}>
                         <span style={{display:'inline-block',width:12,height:1.5,background:CAT_COLOR[cat]}}/>
                         {cat==='TA'?'TECHNICAL':cat==='Flow'?'OPTIONS FLOW':cat==='News'?'NEWS / CATALYST':'RISK MGMT'}
                       </div>
@@ -2964,7 +2975,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             background:checked[item.id]?`${CAT_COLOR[cat]}0a`:C.card,
                             border:`1px solid ${checked[item.id]?CAT_COLOR[cat]+'40':C.border}`}}>
                           <div style={{width:14,height:14,borderRadius:2,border:`2px solid ${checked[item.id]?CAT_COLOR[cat]:C.border}`,background:checked[item.id]?CAT_COLOR[cat]:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:1}}>
-                            {checked[item.id]&&<span style={{color:'#000',fontSize:8,fontWeight:700}}>✓</span>}
+                            {checked[item.id]&&<span style={{color:'#000',fontSize:11,fontWeight:700}}>✓</span>}
                           </div>
                           <div>
                             <div style={{fontSize:12,color:checked[item.id]?C.text:C.subtext,fontFamily:"'Inter',sans-serif"}}>{item.l}</div>
@@ -2995,7 +3006,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   ))}
                   <div style={{background:C.panel,border:`1px dashed ${C.border}`,borderRadius:4,padding:11,fontSize:11,color:C.subtext,lineHeight:1.7}}>
-                    <span style={{fontSize:9,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
+                    <span style={{fontSize:11,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
                     Require <span style={{color:C.green}}>2+ TA</span> + <span style={{color:C.blue}}>1 flow</span> or <span style={{color:C.orange}}>1 catalyst</span> before entry.
                   </div>
                 </div>
@@ -3009,7 +3020,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:sec.color,letterSpacing:2,marginBottom:7}}>{sec.type}</div>
                       {sec.rules.map((r,j)=>(
                         <div key={j} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${sec.color}`,borderRadius:4,padding:'8px 12px',display:'grid',gridTemplateColumns:'100px 1fr',gap:8,alignItems:'center',marginBottom:4}}>
-                          <span style={{fontSize:9,color:sec.color,letterSpacing:.8,fontWeight:600}}>{r.tr.toUpperCase()}</span>
+                          <span style={{fontSize:11,color:sec.color,letterSpacing:.8,fontWeight:600}}>{r.tr.toUpperCase()}</span>
                           <span style={{fontSize:11,color:C.subtext,lineHeight:1.5}}>{r.a}</span>
                         </div>
                       ))}
@@ -3039,7 +3050,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         background:futSym===sym?`${C.green}18`:C.card,
                       }}>
                         <div>{cfg.display}</div>
-                        <div style={{fontSize:8,fontFamily:"'IBM Plex Mono',monospace",opacity:.6,marginTop:1}}>{cfg.name.split('—')[1]?.trim()||''}</div>
+                        <div style={{fontSize:11,fontFamily:"'IBM Plex Mono',monospace",opacity:.6,marginTop:1}}>{cfg.name.split('—')[1]?.trim()||''}</div>
                       </button>
                     ))}
                   </div>
@@ -3057,7 +3068,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {futErr&&(
                     <div style={{background:C.bgDeep,border:`1px solid ${C.red}40`,borderRadius:5,padding:10,marginBottom:10,lineHeight:1.6}}>
                       <div style={{color:C.red,fontSize:11,marginBottom:5}}>{futErr}</div>
-                      <div style={{fontSize:10,color:C.subtext}}>
+                      <div style={{fontSize:12,color:C.subtext}}>
                         <strong style={{color:C.orange}}>Tip:</strong> Futures + index symbols need Tradier production tier.
                         The ETF proxy (SPY/QQQ etc.) always works — it's loaded as final fallback automatically.
                         If all 3 fail, your token is missing or invalid — add it in Settings.
@@ -3076,11 +3087,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:futData.biasColor,letterSpacing:1}}>${futData.price.toFixed(2)}</div>
                             <div style={{display:'flex',gap:8,alignItems:'center',marginTop:3}}>
                               <span style={{fontSize:12,color:futData.chgPct>=0?C.green:C.red}}>{futData.chgPct>=0?'+':''}{futData.chgPct.toFixed(2)}%</span>
-                              <span style={{fontSize:10,color:futData.biasColor,padding:'1px 7px',borderRadius:3,border:`1px solid ${futData.biasColor}40`,background:`${futData.biasColor}15`}}>{futData.bias}</span>
-                              <span style={{fontSize:9,color:C.dim}}>{futData.fetchedAt}</span>
+                              <span style={{fontSize:12,color:futData.biasColor,padding:'1px 7px',borderRadius:3,border:`1px solid ${futData.biasColor}40`,background:`${futData.biasColor}15`}}>{futData.bias}</span>
+                              <span style={{fontSize:11,color:C.dim}}>{futData.fetchedAt}</span>
                             </div>
                           </div>
-                          <button className="hv" onClick={()=>fetchFutures(futData.sym)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:3,fontSize:9,cursor:'pointer'}}>↺ REFRESH</button>
+                          <button className="hv" onClick={()=>fetchFutures(futData.sym)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'6px 12px',borderRadius:3,fontSize:11,cursor:'pointer'}}>↺ REFRESH</button>
                         </div>
 
                         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,marginBottom:10}}>
@@ -3107,7 +3118,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                               :futData.resistance.map((lvl,i)=>(
                                 <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:i<futData.resistance.length-1?`1px solid ${C.border}`:'none'}}>
                                   <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:C.red}}>${lvl.toFixed(2)}</span>
-                                  <span style={{fontSize:9,color:C.dim}}>{((lvl/futData.price-1)*100).toFixed(1)}%</span>
+                                  <span style={{fontSize:11,color:C.dim}}>{((lvl/futData.price-1)*100).toFixed(1)}%</span>
                                 </div>
                               ))
                             }
@@ -3119,7 +3130,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                               :futData.support.map((lvl,i)=>(
                                 <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:i<futData.support.length-1?`1px solid ${C.border}`:'none'}}>
                                   <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:C.green}}>${lvl.toFixed(2)}</span>
-                                  <span style={{fontSize:9,color:C.dim}}>{(((lvl/futData.price)-1)*100).toFixed(1)}%</span>
+                                  <span style={{fontSize:11,color:C.dim}}>{(((lvl/futData.price)-1)*100).toFixed(1)}%</span>
                                 </div>
                               ))
                             }
@@ -3135,7 +3146,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                   <div style={{display:'flex',gap:7,alignItems:'center'}}>
                                     <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:s.color,letterSpacing:1}}>{s.type}</span>
                                     <span style={{fontSize:11,color:C.text}}>{s.strike}</span>
-                                    <span style={{fontSize:9,color:s.color,border:`1px solid ${s.color}40`,padding:'1px 5px',borderRadius:2}}>{s.conviction}</span>
+                                    <span style={{fontSize:11,color:s.color,border:`1px solid ${s.color}40`,padding:'1px 5px',borderRadius:2}}>{s.conviction}</span>
                                   </div>
                                 </div>
                                 <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4}}>
@@ -3146,11 +3157,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                   ].map((f,j)=>(
                                     <div key={j} style={{background:C.cardAlt,borderRadius:3,padding:'5px 7px'}}>
                                       <div style={{fontSize:7,color:C.dim,letterSpacing:1.5,marginBottom:1}}>{f.l}</div>
-                                      <div style={{fontSize:10,color:f.c,fontWeight:600}}>{f.v}</div>
+                                      <div style={{fontSize:12,color:f.c,fontWeight:600}}>{f.v}</div>
                                     </div>
                                   ))}
                                 </div>
-                                <div style={{display:'flex',gap:12,marginTop:6,fontSize:10,color:C.dim}}>
+                                <div style={{display:'flex',gap:12,marginTop:6,fontSize:12,color:C.dim}}>
                                   <span>IV: <span style={{color:C.subtext}}>{s.iv}</span></span>
                                   <span>Δ: <span style={{color:C.subtext}}>{s.delta}</span></span>
                                   <span>OI: <span style={{color:C.subtext}}>{s.oi.toLocaleString()}</span></span>
