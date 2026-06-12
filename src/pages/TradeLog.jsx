@@ -110,7 +110,8 @@ export default function TradeLog(props) {
   // ── API helpers ────────────────────────────────────────────────────────────
   async function authHeaders() {
     const token = await getToken()
-    return token ? { Authorization:`Bearer ${token}` } : {}
+    if (!token) throw new Error('Session expired — please sign out and sign back in.')
+    return { Authorization:`Bearer ${token}` }
   }
 
   async function loadTrades() {
@@ -483,7 +484,15 @@ export default function TradeLog(props) {
                     color:C.red, fontSize:12, marginTop:12,
                     padding:'10px 14px', background:`${C.red}12`,
                     borderRadius:6, border:`1px solid ${C.red}30`,
-                  }}>{formError}</div>
+                    lineHeight:1.5,
+                  }}>
+                    ⚠ {formError}
+                    {(formError.includes('Session') || formError.includes('401') || formError.includes('token')) && (
+                      <div style={{marginTop:6, fontSize:11, color:C.orange}}>
+                        Your session may have expired. Please <span style={{textDecoration:'underline',cursor:'pointer'}} onClick={()=>window.location.reload()}>refresh the page</span> and sign in again.
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 <div style={{marginTop:18, display:'flex', gap:10}}>
