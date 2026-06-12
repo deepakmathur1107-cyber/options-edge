@@ -6,6 +6,7 @@ import {
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import App      from './App'
 import TradeLog from './pages/TradeLog'
+import Landing  from './Landing'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
@@ -367,10 +368,10 @@ function AuthShell() {
       <Route path="/sign-in/*" element={signInPage} />
       <Route path="/sign-up/*" element={signUpPage} />
       <Route path="/" element={
-        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
+        isSignedIn ? <Navigate to="/app" replace /> : <Landing />
       } />
       <Route path="*" element={
-        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
+        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
       } />
     </Routes>
   )

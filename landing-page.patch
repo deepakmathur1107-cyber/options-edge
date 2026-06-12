@@ -1,0 +1,1872 @@
+From 7e80c80f36dbb0bc7b1f648ec434bc833e80f74e Mon Sep 17 00:00:00 2001
+From: Deepak <deepak@optionsedgeflow.com>
+Date: Fri, 12 Jun 2026 05:06:26 +0000
+Subject: [PATCH 1/3] =?UTF-8?q?security:=20full=20audit=20fixes=20?=
+ =?UTF-8?q?=E2=80=94=20auth,=20CORS,=20JWT=20dedup,=20cron=20secret,=20red?=
+ =?UTF-8?q?is=20cache?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+P0 fixes:
+- api/user/prefs.js: replace decodeJwt (no sig verify) with getAuth from _lib/auth
+- api/brief.js: replace decodeJwt with getAuth on ticker and morning brief GET endpoints
+- api/telegram.js: add CRON_SECRET auth gate; bot token never accepted from request body
+- src/lib/adminBypass.js: create missing frontend module (was causing import error)
+- src/lib/useSubscription.js: fix wrong URL /api/subscription -> /api/user/subscription
+
+P1 fixes:
+- All API files: restrict CORS Allow-Origin from * to optionsedgeflow.com
+- api/alerts/send.js + trigger.js: remove CRON_SECRET from query param (was in logs)
+- api/user/subscription.js + trades.js + checkout.js + portal.js + tradier.js:
+  consolidate all duplicate verifyClerkJWT/getClerkId/b64d to shared getAuth
+
+P2 fixes:
+- api/brief.js: FMP key reads FMP_API_KEY env var with demo fallback
+- api/brief.js: delete().neq('id',0) -> delete().lt('generated_at', cutoff)
+- api/tradier.js: cacheSet uses POST pipeline instead of GET URL-encoding
+- api/user/subscription.js: add 1hr grace period to expiry check
+---
+ api/alerts/send.js         |  6 +--
+ api/alerts/trigger.js      |  6 +--
+ api/brief.js               | 30 +++++---------
+ api/stripe/checkout.js     | 82 +++++++-------------------------------
+ api/stripe/portal.js       | 49 ++++-------------------
+ api/telegram.js            | 66 +++++++++++++++++-------------
+ api/tradier.js             | 49 +++++------------------
+ api/user/prefs.js          | 38 +++++-------------
+ api/user/subscription.js   | 82 ++++++++++----------------------------
+ api/user/trades.js         | 44 ++------------------
+ src/lib/adminBypass.js     | 15 +++++++
+ src/lib/useSubscription.js | 56 ++++++++++++--------------
+ 12 files changed, 166 insertions(+), 357 deletions(-)
+ create mode 100644 src/lib/adminBypass.js
+
+diff --git a/api/alerts/send.js b/api/alerts/send.js
+index 0ff68d4..9e8b2d2 100644
+--- a/api/alerts/send.js
++++ b/api/alerts/send.js
+@@ -333,7 +333,7 @@ async function sendEmail(to, subject, html) {
+ // ── Main handler ──────────────────────────────────────────────────────────────
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-cron-secret')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+@@ -341,8 +341,8 @@ module.exports = async function handler(req, res) {
+     return res.status(405).json({ error: 'GET or POST only' })
+   }
+ 
+-  const secret = req.query?.secret ||
+-    req.headers['x-cron-secret'] ||
++  // Security: accept secret via header only, never query param (would appear in logs)
++  const secret = req.headers['x-cron-secret'] ||
+     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+   if (secret !== process.env.CRON_SECRET) {
+     return res.status(401).json({ error: 'Unauthorized' })
+diff --git a/api/alerts/trigger.js b/api/alerts/trigger.js
+index a15dcd4..12087b5 100644
+--- a/api/alerts/trigger.js
++++ b/api/alerts/trigger.js
+@@ -6,12 +6,12 @@
+ const sendHandler = require('./send')
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+   // Accept secret from query param OR header
+-  const secret = req.query.secret ||
+-    req.headers['x-cron-secret'] ||
++  // Security: accept secret via header only, never query param (would appear in logs)
++  const secret = req.headers['x-cron-secret'] ||
+     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+ 
+   if (secret !== process.env.CRON_SECRET) {
+diff --git a/api/brief.js b/api/brief.js
+index 3986e00..91a6671 100644
+--- a/api/brief.js
++++ b/api/brief.js
+@@ -7,31 +7,21 @@
+ const { createClient } = require('@supabase/supabase-js')
+ const { getSRLevels }    = require('./_lib/srLevels')
+ const { getTickerBrief } = require('./_lib/tickerBrief')
++const { getAuth }        = require('./_lib/auth')
++const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
+ 
+ const supabase = createClient(
+   process.env.SUPABASE_URL,
+   process.env.SUPABASE_SERVICE_ROLE_KEY
+ )
+ 
+-function decodeJwt(token) {
+-  try {
+-    const parts = token.split('.')
+-    if (parts.length !== 3) return null
+-    return JSON.parse(
+-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+-    )
+-  } catch { return null }
+-}
+-
+-const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
+-
+ 
+ async function fetchMarketSnapshot() {
+   const snap = { sp500: null, nasdaq: null, dow: null, vix: null, dxy: null, crude: null, btc: null }
+   try {
+     const symbols = encodeURIComponent('^SP500,^NDX,^DJI,^VIX,DX-Y.NYB,CL=F,BTCUSD')
+     const r = await fetch(
+-      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=demo`,
++      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=${process.env.FMP_API_KEY || "demo"}`,
+       { signal: AbortSignal.timeout(5000) }
+     )
+     if (r.ok) {
+@@ -101,7 +91,9 @@ async function generateAndStore(now) {
+   }
+ 
+   // Store — delete old row first, insert fresh one
+-  await supabase.from('morning_brief').delete().neq('id', 0)
++  // Prune briefs older than 7 days
++  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
++  await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
+   const { error } = await supabase.from('morning_brief').insert({
+     generated_at: now.toISOString(),
+     tone:         brief.tone,
+@@ -117,15 +109,15 @@ async function generateAndStore(now) {
+ }
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+   // ── TICKER ANALYSIS MODE — GET /api/brief?ticker=AMZN&... ────────────────
+   if (req.method === 'GET' && req.query.ticker) {
+-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
++    const { clerkId } = await getAuth(req)
++    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+     const ticker    = (req.query.ticker || '').toUpperCase().trim()
+     const price     = parseFloat(req.query.price    || 0)
+     const chgPct    = parseFloat(req.query.chgPct   || 0)
+@@ -164,8 +156,8 @@ module.exports = async function handler(req, res) {
+ 
+   // GET — serve cached brief; generate on-demand if none exists during market hours
+   if (req.method === 'GET') {
+-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
++    const { clerkId } = await getAuth(req)
++    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+ 
+     const { data, error } = await supabase
+       .from('morning_brief')
+diff --git a/api/stripe/checkout.js b/api/stripe/checkout.js
+index 0068023..bd4c669 100644
+--- a/api/stripe/checkout.js
++++ b/api/stripe/checkout.js
+@@ -1,89 +1,37 @@
+ // api/stripe/checkout.js
+-// Verifies Clerk JWT using JWKS (networkless after first fetch, no SDK needed)
+-
+-const Stripe = require('stripe')
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
++const Stripe        = require('stripe')
+ const { createClient } = require('@supabase/supabase-js')
++const { getAuth }   = require('../_lib/auth')
+ 
+ const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
+ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+ 
+-// ─── Lightweight JWT verification via Clerk JWKS ──────────────────────────────
+-// Decodes the JWT, fetches Clerk's public key, verifies the signature.
+-// Works with any Clerk instance — no SDK, no authorizedParties issue.
+-
+-function base64urlDecode(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-
+-async function getClerkPublicKey(kid) {
+-  const res  = await fetch('https://api.clerk.com/v1/jwks', {
+-    headers: { Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}` }
+-  })
+-  if (!res.ok) throw new Error('Failed to fetch JWKS')
+-  const jwks = await res.json()
+-  const key  = jwks.keys?.find(k => k.kid === kid)
+-  if (!key) throw new Error(`No JWKS key found for kid: ${kid}`)
+-  return key
+-}
+-
+-async function verifyClerkJWT(token) {
+-  // 1. Decode header to get kid
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
+-
+-  // 2. Check expiry
+-  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+-
+-  // 3. Fetch public key and verify using Node crypto
+-  const jwkKey  = await getClerkPublicKey(header.kid)
+-  const crypto  = require('crypto')
+-  const keyObj  = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const sigInput = Buffer.from(parts[0] + '.' + parts[1])
+-  const sig      = base64urlDecode(parts[2])
+-  const valid    = crypto.verify('sha256', sigInput, { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING }, sig)
+-  if (!valid) throw new Error('Invalid signature')
+-
+-  return payload   // { sub: userId, ... }
+-}
+-
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+ 
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Authentication failed' })
++
+   let body = req.body
+   if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+   body = body || {}
+ 
+-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
+-  if (!token) return res.status(401).json({ error: 'No token provided' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-    if (!clerkUserId) throw new Error('No user ID in token')
+-  } catch (e) {
+-    console.error('JWT verify error:', e.message)
+-    return res.status(401).json({ error: 'Authentication failed: ' + e.message })
+-  }
+-
+   const email  = body.email || ''
+   const origin = req.headers.origin || `https://${req.headers.host}`
+ 
+   try {
++    // Reuse existing Stripe customer if one exists
+     let stripeCustomerId
+     const { data: existingSub } = await supabase
+       .from('subscriptions')
+       .select('stripe_customer_id')
+-      .eq('clerk_id', clerkUserId)
++      .eq('clerk_id', clerkId)
+       .maybeSingle()
+ 
+     if (existingSub?.stripe_customer_id) {
+@@ -91,29 +39,27 @@ module.exports = async function handler(req, res) {
+     } else {
+       const customer   = await stripe.customers.create({
+         email,
+-        metadata: { clerk_id: clerkUserId },
++        metadata: { clerk_id: clerkId },
+       })
+       stripeCustomerId = customer.id
+     }
+ 
+-    // When `customer` is set, Stripe forbids also passing `customer_email`
+-    const sessionParams = {
++    const session = await stripe.checkout.sessions.create({
+       customer:   stripeCustomerId,
+       mode:       'subscription',
+       line_items: [{ price: process.env.STRIPE_PRICE_ID_PRO, quantity: 1 }],
+       subscription_data: {
+         trial_period_days: 7,
+-        metadata: { clerk_id: clerkUserId },
++        metadata: { clerk_id: clerkId },
+       },
+       success_url: `${origin}/app?sub=success`,
+       cancel_url:  `${origin}/app`,
+       allow_promotion_codes:      true,
+       billing_address_collection: 'required',
+-    }
+-    const session = await stripe.checkout.sessions.create(sessionParams)
++    })
+ 
+     await supabase.from('subscriptions').upsert({
+-      clerk_id:           clerkUserId,
++      clerk_id:           clerkId,
+       stripe_customer_id: stripeCustomerId,
+       status:             'pending',
+       plan:               'pro',
+diff --git a/api/stripe/portal.js b/api/stripe/portal.js
+index c793c70..b031966 100644
+--- a/api/stripe/portal.js
++++ b/api/stripe/portal.js
+@@ -1,60 +1,27 @@
+ // api/stripe/portal.js
+-const Stripe = require('stripe')
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
++const Stripe        = require('stripe')
+ const { createClient } = require('@supabase/supabase-js')
++const { getAuth }   = require('../_lib/auth')
++
+ const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
+ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+ 
+-function base64urlDecode(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-async function verifyClerkJWT(token) {
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
+-  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+-  const jwksRes = await fetch('https://api.clerk.com/v1/jwks', {
+-    headers: { Authorization: 'Bearer ' + process.env.CLERK_SECRET_KEY }
+-  })
+-  if (!jwksRes.ok) throw new Error('Failed to fetch JWKS')
+-  const jwks   = await jwksRes.json()
+-  const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
+-  if (!jwkKey) throw new Error('No matching JWKS key')
+-  const crypto = require('crypto')
+-  const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const valid  = crypto.verify('sha256', Buffer.from(parts[0] + '.' + parts[1]),
+-    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-    base64urlDecode(parts[2]))
+-  if (!valid) throw new Error('Invalid signature')
+-  return payload
+-}
+-
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+ 
+-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
+-  if (!token) return res.status(401).json({ error: 'No token' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-    if (!clerkUserId) throw new Error('No user ID')
+-  } catch (e) {
+-    return res.status(401).json({ error: 'Authentication failed: ' + e.message })
+-  }
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Authentication failed' })
+ 
+   const { data, error } = await supabase
+     .from('subscriptions')
+     .select('stripe_customer_id')
+-    .eq('clerk_id', clerkUserId)
++    .eq('clerk_id', clerkId)
+     .maybeSingle()
+ 
+   if (error || !data?.stripe_customer_id) {
+diff --git a/api/telegram.js b/api/telegram.js
+index 5af4025..6804e72 100644
+--- a/api/telegram.js
++++ b/api/telegram.js
+@@ -1,36 +1,46 @@
+ // api/telegram.js — Vercel serverless proxy for Telegram API
+-// Runs server-side so no CORS issues
++// Admin-only: requires valid CRON_SECRET header.
++// Runs server-side so no CORS issues and bot token stays server-side only.
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*');
+-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
+-
+-  // Vercel does NOT auto-parse JSON body — parse it manually if needed
+-  let body = req.body;
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
++  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
++  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-cron-secret, Authorization')
++  if (req.method === 'OPTIONS') { res.status(200).end(); return }
++  if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return }
++
++  // ── Auth: require CRON_SECRET (admin-only endpoint) ───────────────────────
++  const secret = req.headers['x-cron-secret'] ||
++    (req.headers['authorization'] || '').replace('Bearer ', '').trim()
++  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
++    res.status(401).json({ error: 'Unauthorized' })
++    return
++  }
++
++  // Parse body
++  let body = req.body
+   if (typeof body === 'string') {
+-    try { body = JSON.parse(body); } catch (e) { body = {}; }
++    try { body = JSON.parse(body) } catch { body = {} }
+   }
+-  if (!body) body = {};
++  if (!body) body = {}
+ 
+-  const { message, chat_id, token } = body;
++  const { message, chat_id } = body
+ 
+-  // Use env vars (set in Vercel dashboard) or fall back to values from request
+-  const botToken = process.env.TELEGRAM_BOT_TOKEN || token;
+-  const chatId   = process.env.TELEGRAM_CHAT_ID   || chat_id;
++  // Bot token and chat ID must come from server env vars — never from request body
++  const botToken = process.env.TELEGRAM_BOT_TOKEN
++  const chatId   = process.env.TELEGRAM_CHAT_ID || chat_id
+ 
+-  if (!botToken || !chatId) {
+-    res.status(400).json({
+-      error: 'Missing bot token or chat ID. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Vercel env vars, or pass token and chat_id in request body.'
+-    });
+-    return;
++  if (!botToken) {
++    res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not configured in Vercel env vars' })
++    return
++  }
++  if (!chatId) {
++    res.status(400).json({ error: 'Missing chat_id (or set TELEGRAM_CHAT_ID in env vars)' })
++    return
+   }
+-
+   if (!message) {
+-    res.status(400).json({ error: 'Missing message in request body' });
+-    return;
++    res.status(400).json({ error: 'Missing message in request body' })
++    return
+   }
+ 
+   try {
+@@ -43,11 +53,11 @@ module.exports = async function handler(req, res) {
+         parse_mode:               'Markdown',
+         disable_web_page_preview: true,
+       }),
+-    });
++    })
+ 
+-    const data = await r.json();
+-    res.status(200).json(data);
++    const data = await r.json()
++    res.status(r.ok ? 200 : 502).json(data)
+   } catch (err) {
+-    res.status(500).json({ error: err.message });
++    res.status(500).json({ error: err.message })
+   }
+-};
++}
+diff --git a/api/tradier.js b/api/tradier.js
+index 787d426..71246dd 100644
+--- a/api/tradier.js
++++ b/api/tradier.js
+@@ -34,9 +34,13 @@ async function cacheGet(key) {
+ async function cacheSet(key, value, ttl) {
+   if (!REDIS_URL || !REDIS_TOKEN) return
+   try {
+-    // Use Upstash REST SET with EX
+-    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}?ex=${ttl}`,
+-      { method: 'GET', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
++    // Use Upstash REST pipeline SET — POST with JSON body avoids URL length limits
++    // for large option chain payloads
++    await fetch(`${REDIS_URL}/pipeline`, {
++      method: 'POST',
++      headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
++      body: JSON.stringify([['SET', key, JSON.stringify(value), 'EX', ttl]]),
++    })
+   } catch {}
+ }
+ 
+@@ -68,38 +72,7 @@ function getTTL(path) {
+ }
+ 
+ // ─── Clerk JWT verify ──────────────────────────────────────────────────────────
+-function b64d(str) {
+-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
+-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
+-  return Buffer.from(b64+pad,'base64')
+-}
+-
+-async function getClerkId(authHeader) {
+-  const token = (authHeader||'').replace('Bearer ','').trim()
+-  if (!token) return null
+-  try {
+-    const parts   = token.split('.')
+-    if (parts.length!==3) return null
+-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-    if (payload.exp && Date.now()/1000 > payload.exp) return null
+-    const clerkKey = process.env.CLERK_SECRET_KEY
+-    if (!clerkKey) return null
+-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
+-      { headers: { Authorization: 'Bearer '+clerkKey } })
+-    if (!jwksRes.ok) return null
+-    const jwks   = await jwksRes.json()
+-    const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
+-    if (!jwkKey) return null
+-    const crypto = require('crypto')
+-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-    const valid  = crypto.verify('sha256',
+-      Buffer.from(parts[0]+'.'+parts[1]),
+-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-      b64d(parts[2]))
+-    return valid ? payload.sub : null
+-  } catch { return null }
+-}
++const { getAuth, ADMIN_IDS: LIB_ADMIN_IDS } = require('./_lib/auth')
+ 
+ async function getPlan(clerkId) {
+   const url = process.env.SUPABASE_URL
+@@ -117,7 +90,7 @@ async function getPlan(clerkId) {
+ 
+ // ─── Main handler ──────────────────────────────────────────────────────────────
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tradier-token, x-tradier-mode')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+@@ -134,8 +107,8 @@ module.exports = async function handler(req, res) {
+   }
+ 
+   // ── Admin check ─────────────────────────────────────────────────────────────
+-  const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
+-  const clerkId   = await getClerkId(req.headers.authorization)
++  const ADMIN_IDS = LIB_ADMIN_IDS || (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
++  const { clerkId } = await getAuth(req)
+   const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
+ 
+   // ── Usage gate (free users only) ─────────────────────────────────────────────
+diff --git a/api/user/prefs.js b/api/user/prefs.js
+index 15e700d..4a158ed 100644
+--- a/api/user/prefs.js
++++ b/api/user/prefs.js
+@@ -9,51 +9,35 @@
+  *   min_edge_score (integer), alert_timing (text), symbols (text),
+  *   alert_email (text), alert_types (ARRAY), tg_token, tg_chat_id,
+  *   sms_on (boolean), phone_number (text), updated_at, created_at
++ *
++ * Security fix: replaced decodeJwt (no signature check) with getAuth
++ * from _lib/auth.js which fully verifies the Clerk RS256 JWT.
+  */
+ 
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '')
+-  .split(',').map(s => s.trim()).filter(Boolean)
++const { getAuth }      = require('../_lib/auth')
+ 
+ const supabase = createClient(
+   process.env.SUPABASE_URL,
+   process.env.SUPABASE_SERVICE_ROLE_KEY
+ )
+ 
+-function decodeJwt(token) {
+-  try {
+-    const parts = token.split('.')
+-    if (parts.length !== 3) return null
+-    return JSON.parse(
+-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+-    )
+-  } catch { return null }
+-}
+-
+-async function getUserId(req) {
+-  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-  if (!token) return null
+-  return decodeJwt(token)?.sub || null
+-}
+-
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+-  const userId = await getUserId(req)
+-  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
+-
+-  const isAdmin = ADMIN_IDS.includes(userId)
++  // ── Auth — full JWT signature verification ────────────────────────────────
++  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
+ 
+   // ── GET ──────────────────────────────────────────────────────────────────
+   if (req.method === 'GET') {
+     const { data, error } = await supabase
+       .from('alert_prefs')
+       .select('*')
+-      .eq('clerk_user_id', userId)
++      .eq('clerk_user_id', clerkId)
+       .maybeSingle()
+ 
+     if (error) {
+@@ -93,7 +77,7 @@ module.exports = async function handler(req, res) {
+       .join(',')
+ 
+     const payload = {
+-      clerk_user_id:  userId,
++      clerk_user_id:  clerkId,
+       email_alerts:   body.email_alerts   ?? false,
+       alert_email:    (body.alert_email   || '').trim(),
+       min_edge_score: body.min_edge_score ?? 50,
+@@ -103,7 +87,7 @@ module.exports = async function handler(req, res) {
+       updated_at:     new Date().toISOString(),
+     }
+ 
+-    console.log('prefs upsert:', JSON.stringify(payload))
++    console.log('prefs upsert for', clerkId)
+ 
+     const { data, error } = await supabase
+       .from('alert_prefs')
+diff --git a/api/user/subscription.js b/api/user/subscription.js
+index f73127f..d63fdb9 100644
+--- a/api/user/subscription.js
++++ b/api/user/subscription.js
+@@ -1,76 +1,35 @@
+ // api/user/subscription.js
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+-
+-function b64d(str) {
+-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
+-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
+-  return Buffer.from(b64+pad,'base64')
+-}
+-async function verifyClerkJWT(token) {
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('Token expired')
+-  const clerkKey = process.env.CLERK_SECRET_KEY
+-  const jwksRes  = await fetch('https://api.clerk.com/v1/jwks',
+-    { headers: { Authorization: 'Bearer '+clerkKey } })
+-  if (!jwksRes.ok) throw new Error('JWKS failed')
+-  const jwks   = await jwksRes.json()
+-  const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
+-  if (!jwkKey) throw new Error('No key')
+-  const crypto = require('crypto')
+-  const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const valid  = crypto.verify('sha256',
+-    Buffer.from(parts[0]+'.'+parts[1]),
+-    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-    b64d(parts[2]))
+-  if (!valid) throw new Error('Invalid signature')
+-  return payload
+-}
++const { getAuth }      = require('../_lib/auth')
+ 
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
+ 
+-  const token = (req.headers.authorization||'').replace('Bearer ','').trim()
+-  if (!token) return res.status(401).json({ error: 'No token' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-  } catch (e) {
+-    return res.status(401).json({ error: 'Auth failed: '+e.message })
+-  }
++  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Auth failed' })
+ 
+   // ── Admin always gets active status ───────────────────────────────────────
+-  if (ADMIN_IDS.includes(clerkUserId)) {
+-    return res.status(200).json({
+-      status:  'active',
+-      plan:    'admin',
+-      isAdmin: true,
+-    })
++  if (isAdmin) {
++    return res.status(200).json({ status: 'active', plan: 'admin', isAdmin: true })
+   }
+ 
+   // ── Regular user — check Supabase ─────────────────────────────────────────
+   const supaUrl = process.env.SUPABASE_URL
+   const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+   if (!supaUrl || !supaKey) {
+-    // No DB configured — grant access (dev mode)
+-    return res.status(200).json({ status: 'active', plan: 'pro' })
++    return res.status(200).json({ status: 'active', plan: 'pro' }) // dev mode fallback
+   }
+ 
+   const supabase = createClient(supaUrl, supaKey)
+   const { data, error } = await supabase
+     .from('subscriptions')
+     .select('status, plan, current_period_end, stripe_subscription_id, stripe_customer_id')
+-    .eq('clerk_id', clerkUserId)
++    .eq('clerk_id', clerkId)
+     .maybeSingle()
+ 
+   if (error) return res.status(500).json({ error: error.message })
+@@ -78,7 +37,7 @@ module.exports = async function handler(req, res) {
+ 
+   let status = data.status
+ 
+-  // Check Stripe directly if pending (race condition fix)
++  // Check Stripe directly if pending (race condition between checkout redirect and webhook)
+   if ((status === 'pending' || status === 'inactive') && data.stripe_customer_id) {
+     try {
+       const Stripe = require('stripe')
+@@ -86,31 +45,34 @@ module.exports = async function handler(req, res) {
+       const subs   = await stripe.subscriptions.list({
+         customer: data.stripe_customer_id, limit: 5, status: 'all'
+       })
+-      const active = subs.data.find(s => s.status==='active'||s.status==='trialing')
++      const active = subs.data.find(s => s.status === 'active' || s.status === 'trialing')
+       if (active) {
+         status = active.status
+-        const periodEnd = new Date(active.current_period_end*1000).toISOString()
++        const periodEnd = new Date(active.current_period_end * 1000).toISOString()
+         await supabase.from('subscriptions').upsert({
+-          clerk_id:               clerkUserId,
++          clerk_id:               clerkId,
+           stripe_subscription_id: active.id,
+           status,
+           current_period_end:     periodEnd,
+           updated_at:             new Date().toISOString(),
+         }, { onConflict: 'clerk_id' })
+       }
+-    } catch {}
++    } catch (e) {
++      console.warn('Stripe fallback check failed:', e.message)
++    }
+   }
+ 
+-  // Period expiry check
++  // Period expiry check — add 1hr grace for webhook delivery delay
+   const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
+-  if ((status==='active'||status==='trialing') && periodEnd && periodEnd < new Date()) {
++  const grace     = 60 * 60 * 1000  // 1 hour grace period
++  if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < new Date(Date.now() - grace)) {
+     status = 'expired'
+   }
+ 
+   return res.status(200).json({
+     status,
+-    plan:              data.plan,
+-    current_period_end:data.current_period_end,
+-    subscription_id:   data.stripe_subscription_id,
++    plan:               data.plan,
++    current_period_end: data.current_period_end,
++    subscription_id:    data.stripe_subscription_id,
+   })
+ }
+diff --git a/api/user/trades.js b/api/user/trades.js
+index 4c07035..0ba3c43 100644
+--- a/api/user/trades.js
++++ b/api/user/trades.js
+@@ -11,43 +11,7 @@
+ //   close_date, closed_at, updated_at
+ 
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+-
+-function b64d(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-
+-async function getClerkId(authHeader) {
+-  const token = (authHeader || '').replace('Bearer ', '').trim()
+-  if (!token) return null
+-  try {
+-    const parts   = token.split('.')
+-    if (parts.length !== 3) return null
+-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-    if (payload.exp && Date.now() / 1000 > payload.exp) return null
+-    const clerkKey = process.env.CLERK_SECRET_KEY
+-    if (!clerkKey) return null
+-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
+-      { headers: { Authorization: 'Bearer ' + clerkKey } })
+-    if (!jwksRes.ok) return null
+-    const jwks   = await jwksRes.json()
+-    const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
+-    if (!jwkKey) return null
+-    const crypto = require('crypto')
+-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-    const valid  = crypto.verify(
+-      'sha256',
+-      Buffer.from(parts[0] + '.' + parts[1]),
+-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-      b64d(parts[2])
+-    )
+-    return valid ? payload.sub : null
+-  } catch { return null }
+-}
++const { getAuth, ADMIN_IDS } = require('../_lib/auth')
+ 
+ async function hasActiveSub(clerkId, supabase) {
+   if (ADMIN_IDS.includes(clerkId)) return true
+@@ -73,13 +37,13 @@ function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
+ 
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+ 
+-  const clerkId = await getClerkId(req.headers.authorization)
+-  if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
+ 
+   const supabase = createClient(
+     process.env.SUPABASE_URL,
+diff --git a/src/lib/adminBypass.js b/src/lib/adminBypass.js
+new file mode 100644
+index 0000000..c236d4b
+--- /dev/null
++++ b/src/lib/adminBypass.js
+@@ -0,0 +1,15 @@
++/**
++ * src/lib/adminBypass.js
++ * Client-side admin check using VITE env var.
++ * Mirror of api/_lib/adminBypass.js — kept separate because
++ * server files use CommonJS (require/module.exports) and can't
++ * be imported directly into Vite/React ESM bundles.
++ */
++const ADMIN_IDS = (import.meta.env.VITE_ADMIN_CLERK_IDS || '')
++  .split(',')
++  .map(s => s.trim())
++  .filter(Boolean)
++
++export function isAdmin(userId) {
++  return !!userId && ADMIN_IDS.includes(userId)
++}
+diff --git a/src/lib/useSubscription.js b/src/lib/useSubscription.js
+index 871b9ef..7e343d9 100644
+--- a/src/lib/useSubscription.js
++++ b/src/lib/useSubscription.js
+@@ -4,69 +4,65 @@
+  * Admins always get { active: true, plan: 'admin', loading: false }.
+  */
+ 
+-import { useEffect, useState } from "react";
+-import { useAuth } from "@clerk/clerk-react";
+-import { isAdmin } from "./adminBypass";
++import { useEffect, useState } from 'react'
++import { useAuth } from '@clerk/clerk-react'
++import { isAdmin } from './adminBypass'
+ 
+ export default function useSubscription() {
+-  const { userId, getToken, isLoaded } = useAuth();
++  const { userId, getToken, isLoaded } = useAuth()
+   const [status, setStatus] = useState({
+     active: false,
+     plan: null,
+     loading: true,
+     error: null,
+-  });
++  })
+ 
+   useEffect(() => {
+-    if (!isLoaded) return;
++    if (!isLoaded) return
+ 
+     // Admin bypass — no Supabase/Stripe lookup needed
+     if (isAdmin(userId)) {
+-      setStatus({ active: true, plan: "admin", loading: false, error: null });
+-      return;
++      setStatus({ active: true, plan: 'admin', loading: false, error: null })
++      return
+     }
+ 
+     if (!userId) {
+-      setStatus({ active: false, plan: null, loading: false, error: null });
+-      return;
++      setStatus({ active: false, plan: null, loading: false, error: null })
++      return
+     }
+ 
+-    let cancelled = false;
++    let cancelled = false
+ 
+     async function fetchSubscription() {
+       try {
+-        const token = await getToken();
+-        const res = await fetch("/api/subscription", {
++        const token = await getToken()
++        // Fixed: was incorrectly /api/subscription (404). Correct path is /api/user/subscription
++        const res = await fetch('/api/user/subscription', {
+           headers: { Authorization: `Bearer ${token}` },
+-        });
++        })
+ 
+-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+-        const data = await res.json();
++        if (!res.ok) throw new Error(`HTTP ${res.status}`)
++        const data = await res.json()
+ 
+         if (!cancelled) {
++          const isActive = data.status === 'active' || data.status === 'trialing'
+           setStatus({
+-            active: data.active ?? false,
+-            plan: data.plan ?? null,
++            active: isActive,
++            plan:   data.plan ?? null,
+             loading: false,
+             error: null,
+-          });
++          })
+         }
+       } catch (err) {
+         if (!cancelled) {
+-          setStatus((prev) => ({
+-            ...prev,
+-            loading: false,
+-            error: err.message,
+-          }));
++          setStatus(prev => ({ ...prev, loading: false, error: err.message }))
+         }
+       }
+     }
+ 
+-    fetchSubscription();
+-    return () => {
+-      cancelled = true;
+-    };
+-  }, [userId, isLoaded, getToken]);
++    fetchSubscription()
++    return () => { cancelled = true }
++  }, [userId, isLoaded, getToken])
+ 
+-  return status;
++  return status
+ }
+-- 
+2.43.0
+
+
+From 30db2a16614522f3355a00e61fc8b01d279ea57b Mon Sep 17 00:00:00 2001
+From: Deepak <deepak@optionsedgeflow.com>
+Date: Fri, 12 Jun 2026 05:16:15 +0000
+Subject: [PATCH 2/3] =?UTF-8?q?fix:=20P2/P3=20audit=20items=20=E2=80=94=20?=
+ =?UTF-8?q?subscription=20gates,=20trade=20limits,=20brief=20polling,=20ti?=
+ =?UTF-8?q?mezone?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+P2 fixes:
+- api/alerts/send.js: subscription inner-join before sending alerts — free/inactive
+  users no longer receive email or SMS notifications
+- api/user/prefs.js: block free users from enabling email_alerts or sms_alerts;
+  returns 402 if no active subscription
+- api/user/trades.js: enforce 500-trade max per user (admins unlimited);
+  returns 429 with clear message when limit reached
+
+P3 fixes:
+- src/Router.jsx: subscription status now refreshes on window focus event,
+  catching mid-session expiry without requiring page reload
+- src/components/MorningBrief.jsx:
+  - load() converted to useCallback to fix stale closure in useEffect deps
+  - isPreCronWindow cutoff corrected: 7:30 AM CT -> 9:30 AM CT
+    (cron fires at 9 AM ET = 8 AM CT, was stopping poll 90min too early)
+  - isTradingDay now uses America/New_York (NYSE timezone, not Chicago)
+  - UI copy updated: '7 AM CT' -> '8 AM CT'
+- api/_lib/marketCalendar.js: isTradingDay timezone America/Chicago -> New_York
+  (holiday detection must use NYSE timezone to be correct)
+---
+ api/_lib/marketCalendar.js      |  2 +-
+ api/alerts/send.js              |  6 ++++--
+ api/user/prefs.js               | 15 +++++++++++++++
+ api/user/trades.js              | 12 ++++++++++++
+ src/Router.jsx                  | 27 +++++++++++++++------------
+ src/components/MorningBrief.jsx | 25 +++++++++++++------------
+ 6 files changed, 60 insertions(+), 27 deletions(-)
+
+diff --git a/api/_lib/marketCalendar.js b/api/_lib/marketCalendar.js
+index f297e9d..4e5ba0d 100644
+--- a/api/_lib/marketCalendar.js
++++ b/api/_lib/marketCalendar.js
+@@ -55,7 +55,7 @@ function tzParts(date, tz) {
+ }
+ 
+ function isTradingDay(date) {
+-  const p = tzParts(date, 'America/Chicago')
++  const p = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
+   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+   const key = `${p.year}-${p.month}-${p.day}`
+   return !getHolidays(parseInt(p.year, 10)).has(key)
+diff --git a/api/alerts/send.js b/api/alerts/send.js
+index 9e8b2d2..8029d1c 100644
+--- a/api/alerts/send.js
++++ b/api/alerts/send.js
+@@ -351,11 +351,13 @@ module.exports = async function handler(req, res) {
+   const scannedAt = new Date().toISOString()
+ 
+   try {
+-    // 1. Fetch users with alerts enabled
++    // 1. Fetch users with alerts enabled AND active subscription
++    // Join with subscriptions so free/inactive users never receive alerts
+     const { data: users, error: usersErr } = await supabase
+       .from('alert_prefs')
+-      .select('*')
++      .select('*, subscriptions!inner(status)')
+       .or('email_alerts.eq.true,sms_on.eq.true')
++      .in('subscriptions.status', ['active', 'trialing'])
+ 
+     if (usersErr) return res.status(500).json({ error: usersErr.message })
+     if (!users?.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
+diff --git a/api/user/prefs.js b/api/user/prefs.js
+index 4a158ed..7f6bc8d 100644
+--- a/api/user/prefs.js
++++ b/api/user/prefs.js
+@@ -68,6 +68,21 @@ module.exports = async function handler(req, res) {
+   if (req.method === 'POST') {
+     const body = req.body || {}
+ 
++    // Only active subscribers (or admins) can enable alert delivery
++    if (!isAdmin && (body.email_alerts || body.sms_alerts)) {
++      const { createClient } = require('@supabase/supabase-js')
++      const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
++      const { data: sub } = await sb
++        .from('subscriptions')
++        .select('status')
++        .eq('clerk_id', clerkId)
++        .maybeSingle()
++      const s = sub?.status || 'inactive'
++      if (s !== 'active' && s !== 'trialing') {
++        return res.status(402).json({ error: 'Active subscription required to enable alerts' })
++      }
++    }
++
+     const rawSymbols = Array.isArray(body.symbols) ? body.symbols : ['SPY', 'QQQ']
+     const MAX_SYMBOLS = isAdmin ? 999 : 5
+     const symbolsText = rawSymbols
+diff --git a/api/user/trades.js b/api/user/trades.js
+index 0ba3c43..040eb5b 100644
+--- a/api/user/trades.js
++++ b/api/user/trades.js
+@@ -79,6 +79,18 @@ module.exports = async function handler(req, res) {
+     const ticker = (b.ticker || b.symbol || '').toUpperCase().trim()
+     if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+ 
++    // Enforce per-user row limit (500 trades max, admins unlimited)
++    const MAX_TRADES = ADMIN_IDS.includes(clerkId) ? Infinity : 500
++    if (MAX_TRADES !== Infinity) {
++      const { count } = await supabase
++        .from('trades')
++        .select('id', { count: 'exact', head: true })
++        .eq('clerk_user_id', clerkId)
++      if ((count || 0) >= MAX_TRADES) {
++        return res.status(429).json({ error: `Trade log limit reached (${MAX_TRADES} max). Archive or delete old trades to add new ones.` })
++      }
++    }
++
+     const row = {
+       clerk_user_id:    clerkId,
+       ticker,
+diff --git a/src/Router.jsx b/src/Router.jsx
+index aff373b..3985fe7 100644
+--- a/src/Router.jsx
++++ b/src/Router.jsx
+@@ -223,23 +223,16 @@ function AuthShell() {
+     catch { return null }
+   }, [getToken])
+ 
+-  // Check subscription once on sign-in
+-  useEffect(() => {
+-    if (!isLoaded || !isSignedIn) {
+-      setSubStatus(null)
+-      return
+-    }
++  // Fetch subscription status — called on mount and on tab focus
++  const fetchSubStatus = useCallback(() => {
++    if (!isLoaded || !isSignedIn) { setSubStatus(null); return }
+     // Admin client-side bypass
+     if (userId && ADMIN_IDS.includes(userId)) {
+       setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
+       return
+     }
+     stableGetToken().then(token => {
+-      if (!token) {
+-        // No token — default to active so we don't block
+-        setSubStatus({ status: 'active', plan: 'pro' })
+-        return
+-      }
++      if (!token) { setSubStatus({ status: 'active', plan: 'pro' }); return }
+       fetch('/api/user/subscription', {
+         headers: { Authorization: `Bearer ${token}` },
+       })
+@@ -247,7 +240,17 @@ function AuthShell() {
+         .then(d => setSubStatus(d))
+         .catch(() => setSubStatus({ status: 'active', plan: 'pro' }))
+     })
+-  }, [isLoaded, isSignedIn, userId]) // stableGetToken intentionally omitted — stable ref
++  }, [isLoaded, isSignedIn, userId, stableGetToken])
++
++  // Check subscription on sign-in
++  useEffect(() => { fetchSubStatus() }, [fetchSubStatus])
++
++  // Re-check when user returns to the tab (catches mid-session expiry)
++  useEffect(() => {
++    const onFocus = () => { if (isSignedIn) fetchSubStatus() }
++    window.addEventListener('focus', onFocus)
++    return () => window.removeEventListener('focus', onFocus)
++  }, [isSignedIn, fetchSubStatus])
+ 
+   const openPortal = async () => {
+     try {
+diff --git a/src/components/MorningBrief.jsx b/src/components/MorningBrief.jsx
+index c77193d..0c7c9d7 100644
+--- a/src/components/MorningBrief.jsx
++++ b/src/components/MorningBrief.jsx
+@@ -3,7 +3,7 @@
+  * Displays cached morning brief from /api/brief
+  * Conclusion-first layout: Bias → Risk Trigger → expandable details
+  */
+-import { useState, useEffect, useRef } from 'react'
++import { useState, useEffect, useRef, useCallback } from 'react'
+ 
+ const BIAS_COLOR = { Bullish: '#00ff88', Neutral: '#ff9500', Bearish: '#ff4466' }
+ const BIAS_BG    = { Bullish: '#00ff8815', Neutral: '#ff950015', Bearish: '#ff446615' }
+@@ -62,7 +62,7 @@ function tzParts(date, tz) {
+ }
+ 
+ function isTradingDay(date) {
+-  const p    = tzParts(date, 'America/Chicago')
++  const p    = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
+   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+   const key  = `${p.year}-${p.month}-${p.day}`
+   const year = parseInt(p.year, 10)
+@@ -96,12 +96,13 @@ function getMarketStatus(now = new Date()) {
+   return { open: true, reason: 'Market open', nextLabel: null }
+ }
+ 
+-// Is it a trading day and before 7:30 AM CT? (waiting for cron)
++// Is it a trading day and before 9:30 AM CT? (cron fires at 8 AM CT = 9 AM ET)
++// Poll window covers the time before + shortly after cron fires
+ function isPreCronWindow(now = new Date()) {
+   if (!isTradingDay(now)) return false
+   const p    = tzParts(now, 'America/Chicago')
+   const mins = parseInt(p.hour, 10) * 60 + parseInt(p.minute, 10)
+-  return mins < 7 * 60 + 30
++  return mins < 9 * 60 + 30
+ }
+ 
+ // Calendar date key in CT: "YYYY-MM-DD"
+@@ -141,7 +142,7 @@ export default function MorningBrief({ getToken }) {
+     return () => clearInterval(t)
+   }, [])
+ 
+-  async function load() {
++  const load = useCallback(async () => {
+     try {
+       const token = await getToken()
+       const res = await fetch('/api/brief', {
+@@ -152,20 +153,20 @@ export default function MorningBrief({ getToken }) {
+       const data = await res.json()
+       setBrief(data.brief)
+       setGeneratedAt(data.generatedAt)
+-      const old = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
+-      setIsOldBrief(old)
++      const isOld = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
++      setIsOldBrief(isOld)
+       setError(null)
+     } catch (e) {
+       setError(e.message)
+     } finally {
+       setLoading(false)
+     }
+-  }
++  }, [getToken])
+ 
+   // Initial load
+-  useEffect(() => { load() }, [getToken])  // eslint-disable-line react-hooks/exhaustive-deps
++  useEffect(() => { load() }, [load])
+ 
+-  // If brief is from yesterday and we're pre-7:30am CT, poll every 5 min for cron
++  // If brief is from yesterday and we're pre-9:30am CT, poll every 5 min for cron
+   useEffect(() => {
+     if (!isOldBrief || !isPreCronWindow()) return
+     pollRef.current = setInterval(() => {
+@@ -173,7 +174,7 @@ export default function MorningBrief({ getToken }) {
+       load()
+     }, 5 * 60 * 1000)
+     return () => clearInterval(pollRef.current)
+-  }, [isOldBrief])  // eslint-disable-line react-hooks/exhaustive-deps
++  }, [isOldBrief, load])
+ 
+   const biasColor = brief ? (BIAS_COLOR[brief.bias] || '#c8d8e8') : '#c8d8e8'
+   const biasBg    = brief ? (BIAS_BG[brief.bias]    || '#c8d8e820') : '#c8d8e820'
+@@ -217,7 +218,7 @@ export default function MorningBrief({ getToken }) {
+       </div>
+       <div style={{ padding: '24px 16px', textAlign: 'center' }}>
+         <div style={{ fontSize: 28, marginBottom: 8 }}>🕐</div>
+-        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 7 AM CT</div>
++        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 8 AM CT</div>
+         <div style={{ fontSize: 10, color: '#4a7a8a', fontFamily: 'IBM Plex Mono, monospace', marginTop: 4 }}>Use GENERATE to create one now</div>
+       </div>
+     </div>
+-- 
+2.43.0
+
+
+From 01fe03cf934e9e87d903a426487aec8825a7ff8e Mon Sep 17 00:00:00 2001
+From: Deepak <deepak@optionsedgeflow.com>
+Date: Fri, 12 Jun 2026 05:28:15 +0000
+Subject: [PATCH 3/3] feat: hero landing page with live scanner mockup, brief
+ preview, pricing, FAQ
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Animated auto-scanner mockup cycles through real-looking setups with score bars
+- Morning brief preview card
+- Stats bar, feature grid, 'why trades fail' section with blocked examples
+- Single PRO plan pricing (9/mo, 7-day trial) — clean card layout
+- Accordion FAQ
+- Final CTA section
+- Responsive nav with sticky blur
+- Router: root path now shows Landing to signed-out visitors
+  (was redirecting straight to /sign-in with no context)
+---
+ src/Landing.jsx | 531 +++++++++++++++++++++++++++++++++++++-----------
+ src/Router.jsx  |   5 +-
+ 2 files changed, 412 insertions(+), 124 deletions(-)
+
+diff --git a/src/Landing.jsx b/src/Landing.jsx
+index 6343da7..b81ce7d 100644
+--- a/src/Landing.jsx
++++ b/src/Landing.jsx
+@@ -1,173 +1,460 @@
++import { useState, useEffect } from 'react'
+ import { useNavigate } from 'react-router-dom'
+ 
+-const F = 'IBM Plex Mono, monospace'
+-const BB = 'Bebas Neue, Georgia, serif'
++const BB = "'Bebas Neue', Impact, sans-serif"
++const MONO = "'IBM Plex Mono', 'Courier New', monospace"
++const SANS = "'Inter', system-ui, sans-serif"
+ 
+-const FEATURES = [
+-  { icon:'⌁', title:'GEX-Weighted Scanner',  desc:'Scores every strike using Open Interest, Volume, and Gamma Exposure — not just delta' },
+-  { icon:'◈', title:'SPX / NDX Index Alerts', desc:'Live SPX and NDX setups across all 4 timeframes with 90%+ conviction threshold' },
+-  { icon:'🛡', title:'6 Hard-Block Filters',   desc:'Blocks chasing, high IV traps, morning noise, DTE/IV crush, and no-catalyst trades automatically' },
+-  { icon:'📊', title:'Break-even Reality Check',desc:'Shows exactly how much the stock must move to profit before you enter a single trade' },
+-  { icon:'◎', title:'Backtest Analytics',      desc:'Win rate by conviction band, IV level, and break-even requirement — built from your own trade history' },
+-  { icon:'⚡', title:'Morning AI Readout',      desc:'Daily pre-market brief covering market direction, key levels, and economic calendar via Claude AI' },
+-  { icon:'📱', title:'Email + Telegram Alerts', desc:'Push alerts when conviction hits your threshold — never miss a setup' },
+-  { icon:'📋', title:'Trade Journal',           desc:'Log paper and real trades with one tap from any scan result. Track your edge over time.' },
++// ── Mock scanner data — realistic setups ──────────────────────────────────────
++const MOCK_ALERTS = [
++  { symbol:'SPY',  type:'CALL', strike:545, dte:21, score:88, mid:3.42, grade:'A', chg:'+1.2%', iv:'18%', color:'#00ff88' },
++  { symbol:'NVDA', type:'CALL', strike:135, dte:28, score:82, mid:4.15, grade:'A', chg:'+0.8%', iv:'42%', color:'#00ff88' },
++  { symbol:'QQQ',  type:'PUT',  strike:455, dte:14, score:76, mid:2.88, grade:'B', chg:'-0.6%', iv:'22%', color:'#00c8ff' },
++  { symbol:'TSLA', type:'CALL', strike:265, dte:35, score:71, mid:5.60, grade:'B', chg:'+1.9%', iv:'55%', color:'#00c8ff' },
++  { symbol:'AAPL', type:'CALL', strike:215, dte:21, score:68, mid:2.10, grade:'B', chg:'+0.4%', iv:'24%', color:'#00c8ff' },
+ ]
+ 
+-const PLANS = [
++const FEATURES = [
++  {
++    icon: '⚡',
++    title: 'Conviction-Scored Alerts',
++    desc: 'Every setup gets a 0–100 score built from GEX, delta quality, IV environment, liquidity, and directional alignment. Only high-conviction trades make it through.',
++    color: '#00ff88',
++  },
++  {
++    icon: '🛡',
++    title: '6 Hard-Block Filters',
++    desc: 'Automatically kills chasing trades, IV traps, morning noise, DTE crush, and no-catalyst setups — the exact patterns that drain accounts.',
++    color: '#00c8ff',
++  },
+   {
+-    name:'FREE', price:'$0', period:'forever',
+-    color:'#4a7a8a',
+-    features:['5 manual scans per day','Basic scoring (volume + delta)','10 trades in journal','—  No auto-scanner','—  No email alerts','—  No index setups','—  No backtest analytics'],
+-    cta:'Get Started Free', action:'free',
++    icon: '📊',
++    title: 'Morning AI Readout',
++    desc: 'Daily pre-market brief with market bias, key levels, risk triggers, and today\'s catalysts. Generated fresh every morning from live market data.',
++    color: '#ff9500',
+   },
+   {
+-    name:'PRO', price:'$29', period:'/ month',
+-    color:'#00ff88', badge:'7-DAY FREE TRIAL',
+-    features:['Unlimited manual scans','GEX + OI + Volume strike scoring','Auto-scanner (full S&P 500)','SPX / NDX index alerts','Email + Telegram alerts','Morning AI readout','Unlimited journal + backtest','All 6 hard-block filters'],
+-    cta:'Start Free Trial', action:'pro', highlight:true,
++    icon: '📈',
++    title: 'Structure Intelligence',
++    desc: 'Recommends the right structure for each setup — naked, spread, condor, butterfly — based on IV environment and directional conviction.',
++    color: '#00ff88',
+   },
++  {
++    icon: '📋',
++    title: 'Trade Journal & Backtest',
++    desc: 'Log every trade with one tap. Track win rate by conviction band, IV level, and strategy. See exactly where your edge is — and where it isn\'t.',
++    color: '#00c8ff',
++  },
++  {
++    icon: '🔔',
++    title: 'Email & SMS Alerts',
++    desc: 'Push notifications the moment a high-conviction setup hits your threshold. Never miss a setup because you weren\'t watching.',
++    color: '#ff9500',
++  },
++]
++
++const STATS = [
++  { value: '8', label: 'Symbols scanned', suffix: '' },
++  { value: '6', label: 'Hard-block filters', suffix: '' },
++  { value: '21', label: 'Ideal DTE window', suffix: '-35' },
++  { value: '$29', label: 'Per month', suffix: '' },
+ ]
+ 
+ const FAQS = [
+-  { q:'Do I need a brokerage account?', a:'No. Options Edge provides trade ideas and analytics. You execute trades through your own broker (TD Ameritrade, IBKR, Tastytrade, etc.).' },
+-  { q:'Where does the market data come from?', a:'Live options chain data via Tradier API. You can use your own Tradier token (free) or leave it server-side.' },
+-  { q:'What happens if I cancel?', a:'Your access continues until the end of the current billing period. After that, you can still sign in but the app shows a subscription required screen. Your journal data is preserved.' },
+-  { q:'Is this financial advice?', a:'No. Options Edge is an analytical tool. All trade ideas are generated algorithmically. You are solely responsible for your trading decisions.' },
+-  { q:'Can I get a refund?', a:'Yes — if you are unsatisfied within 7 days of your first paid charge (after the free trial), contact us for a full refund.' },
++  { q: 'Do I need a brokerage account?', a: 'No. Options Edge provides trade ideas and analytics. You execute through your own broker — TD Ameritrade, IBKR, Tastytrade, etc.' },
++  { q: 'Where does the market data come from?', a: 'Live options chain data via Tradier API — real bid/ask, Greeks, open interest, and volume on every scan.' },
++  { q: 'What happens after the free trial?', a: 'You\'re charged $29/month after 7 days. Cancel anytime before then and you won\'t be charged. Your journal data is always preserved.' },
++  { q: 'Is this financial advice?', a: 'No. Options Edge is an analytical tool. All setups are generated algorithmically. You are solely responsible for your trading decisions.' },
++  { q: 'What makes this different from a screener?', a: 'Screeners show you what moved. Options Edge scores why a specific contract makes sense right now — accounting for structure, IV, liquidity, direction, and risk — then blocks the trades that look good but historically lose.' },
+ ]
+ 
++// ── Animated scanner ticker ───────────────────────────────────────────────────
++function ScannerMockup() {
++  const [active, setActive] = useState(0)
++  const [scanning, setScanning] = useState(false)
++  const [progress, setProgress] = useState(0)
++
++  useEffect(() => {
++    const cycle = setInterval(() => {
++      setScanning(true)
++      setProgress(0)
++      let p = 0
++      const prog = setInterval(() => {
++        p += 12
++        setProgress(Math.min(p, 100))
++        if (p >= 100) {
++          clearInterval(prog)
++          setScanning(false)
++          setActive(a => (a + 1) % MOCK_ALERTS.length)
++        }
++      }, 80)
++    }, 3200)
++    return () => clearInterval(cycle)
++  }, [])
++
++  const alert = MOCK_ALERTS[active]
++
++  return (
++    <div style={{ background: '#060c14', border: '1px solid #1a2e3e', borderRadius: 10, overflow: 'hidden', fontFamily: MONO, fontSize: 11, boxShadow: '0 24px 64px rgba(0,255,136,0.08), 0 8px 24px rgba(0,0,0,0.6)' }}>
++
++      {/* Window chrome */}
++      <div style={{ background: '#0a1520', borderBottom: '1px solid #1a2e3e', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
++        <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ff5f57' }} />
++        <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#febc2e' }} />
++        <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#28c840' }} />
++        <span style={{ marginLeft: 8, color: '#2a4a5a', fontSize: 10, letterSpacing: 1 }}>OPTIONS EDGE — AUTO SCANNER</span>
++        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
++          <div style={{ width: 6, height: 6, borderRadius: '50%', background: scanning ? '#ff9500' : '#00ff88', boxShadow: scanning ? '0 0 6px #ff9500' : '0 0 6px #00ff88' }} />
++          <span style={{ color: scanning ? '#ff9500' : '#00ff88', fontSize: 9, letterSpacing: 1 }}>{scanning ? 'SCANNING' : 'LIVE'}</span>
++        </div>
++      </div>
++
++      {/* Scanner progress bar */}
++      {scanning && (
++        <div style={{ height: 2, background: '#0a1520' }}>
++          <div style={{ height: '100%', background: 'linear-gradient(90deg, #00ff88, #00c8ff)', width: `${progress}%`, transition: 'width 0.08s linear' }} />
++        </div>
++      )}
++
++      {/* Watchlist row */}
++      <div style={{ padding: '10px 14px', borderBottom: '1px solid #0d1e2a', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
++        {['SPY','QQQ','NVDA','TSLA','AAPL','META','AMZN','IWM'].map(s => (
++          <span key={s} style={{ fontSize: 9, color: s === alert.symbol ? '#00ff88' : '#2a4a5a', background: s === alert.symbol ? '#00ff8815' : 'transparent', border: `1px solid ${s === alert.symbol ? '#00ff8840' : '#0d1e2a'}`, borderRadius: 3, padding: '2px 6px', transition: 'all 0.3s' }}>{s}</span>
++        ))}
++        <span style={{ marginLeft: 'auto', fontSize: 9, color: '#2a4a5a' }}>SWING (21–45 DTE)</span>
++      </div>
++
++      {/* Alert rows */}
++      <div style={{ padding: '8px 0' }}>
++        {MOCK_ALERTS.map((a, i) => (
++          <div key={i} style={{
++            padding: '8px 14px',
++            display: 'flex',
++            alignItems: 'center',
++            gap: 10,
++            background: i === active ? '#0a1e14' : 'transparent',
++            borderLeft: `2px solid ${i === active ? a.color : 'transparent'}`,
++            transition: 'all 0.4s',
++            opacity: i === active ? 1 : 0.35,
++          }}>
++            <span style={{ color: a.color, fontWeight: 700, width: 36, fontSize: 12 }}>{a.symbol}</span>
++            <span style={{ color: '#c8d8e8', width: 70 }}>{a.type} {a.strike}</span>
++            <span style={{ color: '#4a7a8a', width: 50 }}>{a.dte}DTE</span>
++            <span style={{ color: '#4a7a8a', width: 36 }}>{a.iv}</span>
++            {/* Score bar */}
++            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
++              <div style={{ flex: 1, height: 3, background: '#0d1e2a', borderRadius: 2, overflow: 'hidden' }}>
++                <div style={{ height: '100%', width: i === active ? `${a.score}%` : '0%', background: `linear-gradient(90deg, ${a.color}80, ${a.color})`, transition: 'width 0.6s ease', borderRadius: 2 }} />
++              </div>
++              <span style={{ color: a.color, fontWeight: 700, width: 22, textAlign: 'right' }}>{a.score}</span>
++            </div>
++            <div style={{ background: `${a.color}20`, border: `1px solid ${a.color}50`, borderRadius: 3, padding: '1px 7px', color: a.color, fontWeight: 700, fontSize: 12, width: 22, textAlign: 'center' }}>{a.grade}</div>
++            <span style={{ color: '#c8d8e8', width: 36, textAlign: 'right' }}>${a.mid}</span>
++          </div>
++        ))}
++      </div>
++
++      {/* Bottom bar */}
++      <div style={{ borderTop: '1px solid #0d1e2a', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', color: '#2a4a5a', fontSize: 9, letterSpacing: 1 }}>
++        <span>TRADIER LIVE DATA · REAL BID/ASK</span>
++        <span>GEX + OI + VOLUME SCORING</span>
++        <span>NOT FINANCIAL ADVICE</span>
++      </div>
++    </div>
++  )
++}
++
++// ── Morning Brief mockup ──────────────────────────────────────────────────────
++function BriefMockup() {
++  return (
++    <div style={{ background: '#0d1a26', border: '1px solid #1a2e3e', borderRadius: 8, overflow: 'hidden', fontFamily: MONO, fontSize: 11 }}>
++      <div style={{ background: '#0a1520', borderBottom: '1px solid #1a2e3e', padding: '10px 14px', display: 'flex', justifyContent: 'space-between' }}>
++        <span style={{ color: '#c8d8e8', fontWeight: 700, letterSpacing: 1.5 }}>📊 MORNING READOUT</span>
++        <span style={{ color: '#4a7a8a', fontSize: 9 }}>08:42 CT</span>
++      </div>
++      <div style={{ padding: 14 }}>
++        <div style={{ background: '#00ff8812', border: '1px solid #00ff8830', borderRadius: 6, padding: '10px 12px', marginBottom: 10 }}>
++          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
++            <span style={{ color: '#00ff88', fontSize: 16, fontWeight: 900 }}>▲</span>
++            <span style={{ color: '#00ff88', fontFamily: BB, fontSize: 18, letterSpacing: 2 }}>BULLISH</span>
++            <span style={{ color: '#4a7a8a', fontSize: 9, marginLeft: 'auto' }}>Risk-on / Tech-led / Momentum</span>
++          </div>
++          <div style={{ color: '#c8d8e8', fontSize: 11, lineHeight: 1.6 }}>Fed hold confirmed. Tech earnings beat driving broad risk appetite into the session.</div>
++        </div>
++        <div style={{ background: '#ff446610', border: '1px solid #ff446630', borderRadius: 6, padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
++          <span style={{ color: '#ff6688', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>⚡ RISK TRIGGER</span>
++          <span style={{ color: '#c8d8e8', fontSize: 10, lineHeight: 1.5, marginLeft: 4 }}>CPI print above 3.5% or hawkish Fed speaker reverses rally</span>
++        </div>
++      </div>
++    </div>
++  )
++}
++
++// ── Main Landing component ────────────────────────────────────────────────────
+ export default function Landing() {
+   const navigate = useNavigate()
+-
+-  const handleCTA = (action) => {
+-    if (action === 'free' || action === 'pro') navigate('/sign-up')
+-  }
++  const [openFaq, setOpenFaq] = useState(null)
+ 
+   return (
+-    <div style={{ background:'#090e14', color:'#c8d8e8', fontFamily:F, minHeight:'100vh' }}>
++    <div style={{ background: '#090e14', color: '#c8d8e8', fontFamily: SANS, minHeight: '100vh', overflowX: 'hidden' }}>
+       <style>{`
+-        *{box-sizing:border-box;margin:0;padding:0}
+-        .hv{cursor:pointer;transition:opacity .15s}.hv:hover{opacity:.8}
+-        a{color:inherit;text-decoration:none}
+-        ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#1a3040}
++        * { box-sizing: border-box; margin: 0; padding: 0 }
++        a { color: inherit; text-decoration: none }
++        ::-webkit-scrollbar { width: 4px }
++        ::-webkit-scrollbar-thumb { background: #1a3040 }
++        .btn-primary {
++          background: #00ff8820; border: 1px solid #00ff88; color: #00ff88;
++          padding: 14px 32px; border-radius: 6px; font-size: 13px; cursor: pointer;
++          font-family: ${BB}; letter-spacing: 2px; transition: all 0.2s;
++          white-space: nowrap;
++        }
++        .btn-primary:hover { background: #00ff8835; box-shadow: 0 0 24px #00ff8825; }
++        .btn-secondary {
++          background: transparent; border: 1px solid #1a2e3e; color: #4a7a8a;
++          padding: 14px 28px; border-radius: 6px; font-size: 13px; cursor: pointer;
++          font-family: ${BB}; letter-spacing: 2px; transition: all 0.2s;
++        }
++        .btn-secondary:hover { border-color: #2a4a5a; color: #6a9aaa; }
++        .feature-card {
++          background: #0d1a26; border: 1px solid #1a2e3e; border-radius: 8px;
++          padding: 24px; transition: all 0.2s;
++        }
++        .feature-card:hover { border-color: #2a4a5a; transform: translateY(-2px); }
++        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
++        @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
++        .fade-up { animation: fadeUp 0.6s ease forwards; }
+       `}</style>
+ 
+-      {/* ── Nav ── */}
+-      <nav style={{ borderBottom:'1px solid #1a2e3e', padding:'14px 24px', display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, background:'#090e14', zIndex:100 }}>
+-        <div style={{ fontFamily:BB, fontSize:22, letterSpacing:3, color:'#00ff88' }}>OPTIONS EDGE</div>
+-        <div style={{ display:'flex', gap:10 }}>
+-          <button className="hv" onClick={()=>navigate('/sign-in')} style={{ background:'transparent', border:'1px solid #1a2e3e', color:'#4a7a8a', padding:'7px 16px', borderRadius:4, fontSize:11, cursor:'pointer', fontFamily:F }}>SIGN IN</button>
+-          <button className="hv" onClick={()=>navigate('/sign-up')} style={{ background:'#00ff8820', border:'1px solid #00ff88', color:'#00ff88', padding:'7px 16px', borderRadius:4, fontSize:11, cursor:'pointer', fontFamily:F }}>START FREE TRIAL</button>
++      {/* ── Sticky Nav ─────────────────────────────────────────────────────── */}
++      <nav style={{ borderBottom: '1px solid #1a2e3e', padding: '14px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#090e14ee', backdropFilter: 'blur(12px)', zIndex: 100 }}>
++        <div style={{ fontFamily: BB, fontSize: 22, letterSpacing: 3, color: '#00ff88' }}>OPTIONS EDGE</div>
++        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
++          <button className="btn-secondary" style={{ padding: '8px 18px', fontSize: 11 }} onClick={() => navigate('/sign-in')}>SIGN IN</button>
++          <button className="btn-primary" style={{ padding: '8px 18px', fontSize: 11 }} onClick={() => navigate('/sign-up')}>START FREE TRIAL</button>
+         </div>
+       </nav>
+ 
+-      {/* ── Hero ── */}
+-      <div style={{ maxWidth:860, margin:'0 auto', padding:'72px 24px 56px', textAlign:'center' }}>
+-        <div style={{ fontSize:10, color:'#00c8ff', letterSpacing:3, marginBottom:16, border:'1px solid #00c8ff30', display:'inline-block', padding:'4px 14px', borderRadius:3 }}>REAL-TIME OPTIONS INTELLIGENCE</div>
+-        <h1 style={{ fontFamily:BB, fontSize:'clamp(38px,8vw,72px)', color:'#c8d8e8', letterSpacing:4, lineHeight:1.05, marginBottom:20 }}>
+-          FIND THE TRADE.<br/><span style={{ color:'#00ff88' }}>SKIP THE TRAP.</span>
+-        </h1>
+-        <p style={{ fontSize:13, color:'#6a9aaa', lineHeight:1.9, maxWidth:560, margin:'0 auto 32px' }}>
+-          GEX-weighted options scanner with hard-block filters that stop you from taking high-IV, 
+-          chasing, and no-catalyst trades — the exact setups that lose money.
+-        </p>
+-        <div style={{ display:'flex', gap:10, justifyContent:'center', flexWrap:'wrap' }}>
+-          <button className="hv" onClick={()=>navigate('/sign-up')} style={{ background:'#00ff8822', border:'1px solid #00ff88', color:'#00ff88', padding:'13px 32px', borderRadius:5, fontSize:13, cursor:'pointer', fontFamily:BB, letterSpacing:2 }}>START FREE TRIAL →</button>
+-          <button className="hv" onClick={()=>navigate('/sign-in')} style={{ background:'transparent', border:'1px solid #1a2e3e', color:'#4a7a8a', padding:'13px 28px', borderRadius:5, fontSize:13, cursor:'pointer', fontFamily:BB, letterSpacing:2 }}>SIGN IN</button>
+-        </div>
+-        <div style={{ fontSize:10, color:'#2a5060', marginTop:14 }}>7-day free trial · No credit card required to start · Cancel anytime</div>
++      {/* ── Hero ───────────────────────────────────────────────────────────── */}
++      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 32px 60px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 60, alignItems: 'center' }}>
++        {/* Left — copy */}
++        <div>
++          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: '1px solid #00c8ff30', background: '#00c8ff08', borderRadius: 4, padding: '5px 14px', marginBottom: 20 }}>
++            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#00ff88', animation: 'pulse 2s infinite' }} />
++            <span style={{ fontFamily: MONO, fontSize: 10, color: '#00c8ff', letterSpacing: 2 }}>LIVE OPTIONS SCANNER</span>
++          </div>
++
++          <h1 style={{ fontFamily: BB, fontSize: 'clamp(44px,5vw,68px)', lineHeight: 1.0, letterSpacing: 3, marginBottom: 20, color: '#c8d8e8' }}>
++            FIND THE<br />
++            SETUP.<br />
++            <span style={{ color: '#00ff88' }}>SKIP THE</span><br />
++            <span style={{ color: '#00ff88' }}>TRAP.</span>
++          </h1>
++
++          <p style={{ fontSize: 15, color: '#6a9aaa', lineHeight: 1.8, marginBottom: 12, fontFamily: SANS }}>
++            GEX-weighted options scanner that scores every contract on conviction, then automatically blocks the trades that look good but historically lose.
++          </p>
++          <p style={{ fontSize: 13, color: '#4a7a8a', lineHeight: 1.8, marginBottom: 32, fontFamily: MONO }}>
++            Live Tradier data · Real bid/ask · Hard-block filters · AI morning brief
++          </p>
++
++          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
++            <button className="btn-primary" onClick={() => navigate('/sign-up')}>START FREE TRIAL →</button>
++            <button className="btn-secondary" onClick={() => navigate('/sign-in')}>SIGN IN</button>
++          </div>
++
++          <div style={{ fontFamily: MONO, fontSize: 10, color: '#2a4a5a', lineHeight: 2 }}>
++            ✓ 7-day free trial &nbsp;·&nbsp; ✓ No credit card to start &nbsp;·&nbsp; ✓ Cancel anytime
++          </div>
++        </div>
++
++        {/* Right — live scanner mockup */}
++        <div>
++          <ScannerMockup />
++        </div>
+       </div>
+ 
+-      {/* ── Features grid ── */}
+-      <div style={{ maxWidth:860, margin:'0 auto', padding:'0 24px 64px' }}>
+-        <div style={{ textAlign:'center', marginBottom:36 }}>
+-          <div style={{ fontFamily:BB, fontSize:28, letterSpacing:3, color:'#c8d8e8' }}>WHAT YOU GET</div>
+-        </div>
+-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))', gap:12 }}>
+-          {FEATURES.map((f,i)=>(
+-            <div key={i} style={{ background:'#0d1a26', border:'1px solid #1a2e3e', borderRadius:6, padding:'16px 18px' }}>
+-              <div style={{ fontSize:20, marginBottom:8 }}>{f.icon}</div>
+-              <div style={{ fontFamily:BB, fontSize:14, color:'#c8d8e8', letterSpacing:1.5, marginBottom:6 }}>{f.title}</div>
+-              <div style={{ fontSize:11, color:'#4a7a8a', lineHeight:1.7 }}>{f.desc}</div>
++      {/* ── Stats bar ──────────────────────────────────────────────────────── */}
++      <div style={{ borderTop: '1px solid #1a2e3e', borderBottom: '1px solid #1a2e3e', background: '#04080e', padding: '28px 32px' }}>
++        <div style={{ maxWidth: 900, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 24 }}>
++          {STATS.map((s, i) => (
++            <div key={i} style={{ textAlign: 'center' }}>
++              <div style={{ fontFamily: BB, fontSize: 40, color: '#00ff88', letterSpacing: 2, lineHeight: 1 }}>
++                {s.value}<span style={{ fontSize: 24, color: '#00c8ff' }}>{s.suffix}</span>
++              </div>
++              <div style={{ fontFamily: MONO, fontSize: 10, color: '#4a7a8a', letterSpacing: 1, marginTop: 4 }}>{s.label.toUpperCase()}</div>
+             </div>
+           ))}
+         </div>
+       </div>
+ 
+-      {/* ── Why trades fail section ── */}
+-      <div style={{ background:'#04080e', borderTop:'1px solid #1a2e3e', borderBottom:'1px solid #1a2e3e', padding:'48px 24px' }}>
+-        <div style={{ maxWidth:760, margin:'0 auto' }}>
+-          <div style={{ fontFamily:BB, fontSize:26, letterSpacing:3, color:'#c8d8e8', marginBottom:8, textAlign:'center' }}>WHY MOST OPTION TRADES LOSE</div>
+-          <div style={{ fontSize:11, color:'#4a7a8a', textAlign:'center', marginBottom:32 }}>Real examples from trades our system would have blocked</div>
+-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
++      {/* ── Morning Brief section ──────────────────────────────────────────── */}
++      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 32px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 60, alignItems: 'center' }}>
++        <div>
++          <BriefMockup />
++        </div>
++        <div>
++          <div style={{ fontFamily: MONO, fontSize: 10, color: '#ff9500', letterSpacing: 2, marginBottom: 14 }}>EVERY MORNING · 8 AM CT</div>
++          <h2 style={{ fontFamily: BB, fontSize: 'clamp(30px,4vw,48px)', color: '#c8d8e8', letterSpacing: 3, lineHeight: 1.1, marginBottom: 18 }}>
++            KNOW THE<br />MARKET BEFORE<br /><span style={{ color: '#ff9500' }}>YOU TRADE IT</span>
++          </h2>
++          <p style={{ fontSize: 14, color: '#6a9aaa', lineHeight: 1.8, marginBottom: 16 }}>
++            Every trading day at 8 AM CT, an AI-generated market brief lands in your app. Bias, key levels, today's catalysts, and the one risk trigger that would flip everything.
++          </p>
++          <p style={{ fontSize: 13, color: '#4a7a8a', lineHeight: 1.8, fontFamily: MONO }}>
++            Built from live S&P 500, VIX, DXY, crude oil, and BTC data. Not recycled news — fresh analysis every session.
++          </p>
++        </div>
++      </div>
++
++      {/* ── Why trades fail ────────────────────────────────────────────────── */}
++      <div style={{ background: '#04080e', borderTop: '1px solid #1a2e3e', borderBottom: '1px solid #1a2e3e', padding: '80px 32px' }}>
++        <div style={{ maxWidth: 900, margin: '0 auto' }}>
++          <div style={{ textAlign: 'center', marginBottom: 48 }}>
++            <div style={{ fontFamily: MONO, fontSize: 10, color: '#ff4466', letterSpacing: 2, marginBottom: 12 }}>THE PROBLEM WE SOLVE</div>
++            <h2 style={{ fontFamily: BB, fontSize: 'clamp(28px,4vw,44px)', color: '#c8d8e8', letterSpacing: 3, marginBottom: 12 }}>
++              WHY MOST OPTIONS TRADES LOSE
++            </h2>
++            <p style={{ fontSize: 13, color: '#4a7a8a', fontFamily: MONO, maxWidth: 500, margin: '0 auto' }}>
++              These are real trade patterns our filters block every session
++            </p>
++          </div>
++
++          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+             {[
+-              { ticker:'$MSTR', type:'Long Call $170C', entry:'$5.53 mid · IV 66.1%', blocked:'🚨 Chasing +3.94% · 🔥 IV 66% HIGH', lesson:'Stock already moved 4%. IV at 66% means you\'re paying for a move that already happened. Both filters block this at 9:31 AM.' },
+-              { ticker:'$GOOGL', type:'Long Call $400C', entry:'$8.55 mid · IV 30.6%', blocked:'⚠️ No catalyst · BE +4.3% required', lesson:'IV was fine but no specific catalyst identified. Break-even required +4.3% move in 22 days — historically bottom-quartile probability.' },
+-            ].map((ex,i)=>(
+-              <div key={i} style={{ background:'#0d1a26', border:'1px solid #ff446640', borderRadius:6, padding:'14px 16px' }}>
+-                <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+-                  <span style={{ fontFamily:BB, fontSize:18, color:'#c8d8e8', letterSpacing:2 }}>{ex.ticker}</span>
+-                  <span style={{ fontSize:10, color:'#4a7a8a' }}>{ex.type}</span>
++              { ticker: '$MSTR', setup: 'Long Call $170C · IV 66%', tag: '🚨 BLOCKED', reason: 'Chasing +3.94% move', detail: 'Stock already moved 4%. You\'re buying premium that already priced in the move. Entry blocked at 9:31 AM.' },
++              { ticker: '$GOOGL', setup: 'Long Call $400C · BE +4.3%', tag: '⚠️ BLOCKED', reason: 'No catalyst identified', detail: 'Break-even requires +4.3% in 22 days with no earnings, no catalyst. Historically bottom-quartile win rate.' },
++              { ticker: '$AMZN', setup: 'Long Put $182P · DTE 3', tag: '🚨 BLOCKED', reason: 'DTE crush risk', detail: '3 DTE with 2 days of theta burn before catalyst. Premium decay kills the position before the move happens.' },
++            ].map((ex, i) => (
++              <div key={i} style={{ background: '#0d1a26', border: '1px solid #ff446630', borderRadius: 8, padding: '18px 20px' }}>
++                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
++                  <div>
++                    <div style={{ fontFamily: BB, fontSize: 20, color: '#c8d8e8', letterSpacing: 2 }}>{ex.ticker}</div>
++                    <div style={{ fontFamily: MONO, fontSize: 10, color: '#4a7a8a', marginTop: 2 }}>{ex.setup}</div>
++                  </div>
++                  <div style={{ fontFamily: MONO, fontSize: 9, color: '#ff4466', background: '#ff446615', border: '1px solid #ff446630', borderRadius: 3, padding: '3px 8px', whiteSpace: 'nowrap' }}>{ex.tag}</div>
+                 </div>
+-                <div style={{ fontSize:10, color:'#4a7a8a', marginBottom:8 }}>{ex.entry}</div>
+-                <div style={{ fontSize:10, color:'#ff4466', background:'#1a040840', borderRadius:3, padding:'5px 8px', marginBottom:8, lineHeight:1.6 }}>{ex.blocked}</div>
+-                <div style={{ fontSize:10, color:'#5a7a8a', lineHeight:1.7 }}>{ex.lesson}</div>
++                <div style={{ fontFamily: MONO, fontSize: 10, color: '#ff6688', marginBottom: 8 }}>↳ {ex.reason}</div>
++                <div style={{ fontSize: 11, color: '#4a7a8a', lineHeight: 1.7 }}>{ex.detail}</div>
+               </div>
+             ))}
+           </div>
+         </div>
+       </div>
+ 
+-      {/* ── Pricing ── */}
+-      <div style={{ maxWidth:700, margin:'0 auto', padding:'64px 24px' }}>
+-        <div style={{ textAlign:'center', marginBottom:40 }}>
+-          <div style={{ fontFamily:BB, fontSize:28, letterSpacing:3, color:'#c8d8e8', marginBottom:8 }}>SIMPLE PRICING</div>
+-          <div style={{ fontSize:11, color:'#4a7a8a' }}>Start free. Upgrade when you're ready.</div>
+-        </div>
+-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+-          {PLANS.map((p,i)=>(
+-            <div key={i} style={{ background: p.highlight?'#030e06':'#0d1a26', border:`1px solid ${p.highlight?p.color+'60':'#1a2e3e'}`, borderRadius:8, padding:'24px 22px', position:'relative' }}>
+-              {p.badge&&<div style={{ position:'absolute', top:-11, left:'50%', transform:'translateX(-50%)', background:'#00ff88', color:'#000', fontSize:9, fontWeight:700, letterSpacing:1.5, padding:'3px 10px', borderRadius:3, whiteSpace:'nowrap' }}>{p.badge}</div>}
+-              <div style={{ fontFamily:BB, fontSize:22, color:p.color, letterSpacing:3, marginBottom:4 }}>{p.name}</div>
+-              <div style={{ display:'flex', alignItems:'baseline', gap:4, marginBottom:16 }}>
+-                <span style={{ fontFamily:BB, fontSize:38, color:'#c8d8e8' }}>{p.price}</span>
+-                <span style={{ fontSize:11, color:'#4a7a8a' }}>{p.period}</span>
+-              </div>
+-              <div style={{ marginBottom:20 }}>
+-                {p.features.map((f,j)=>(
+-                  <div key={j} style={{ fontSize:11, color: f.startsWith('—')?'#2a4a5a':'#8ab0c0', padding:'4px 0', borderBottom:'1px solid #0d1a26', lineHeight:1.5 }}>
+-                    {f.startsWith('—') ? f : <><span style={{ color:p.color }}>✓ </span>{f}</>}
+-                  </div>
+-                ))}
+-              </div>
+-              <button className="hv" onClick={()=>handleCTA(p.action)} style={{ width:'100%', padding:'11px', borderRadius:5, fontSize:12, cursor:'pointer', fontFamily:BB, letterSpacing:1.5, background: p.highlight?`${p.color}20`:'transparent', border:`1px solid ${p.color}`, color:p.color }}>
+-                {p.cta}
+-              </button>
++      {/* ── Features grid ──────────────────────────────────────────────────── */}
++      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 32px' }}>
++        <div style={{ textAlign: 'center', marginBottom: 48 }}>
++          <div style={{ fontFamily: MONO, fontSize: 10, color: '#00c8ff', letterSpacing: 2, marginBottom: 12 }}>EVERYTHING IN ONE PLACE</div>
++          <h2 style={{ fontFamily: BB, fontSize: 'clamp(28px,4vw,44px)', color: '#c8d8e8', letterSpacing: 3 }}>BUILT FOR SERIOUS TRADERS</h2>
++        </div>
++        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
++          {FEATURES.map((f, i) => (
++            <div key={i} className="feature-card">
++              <div style={{ fontSize: 28, marginBottom: 14 }}>{f.icon}</div>
++              <div style={{ fontFamily: BB, fontSize: 17, color: f.color, letterSpacing: 1.5, marginBottom: 10 }}>{f.title}</div>
++              <div style={{ fontSize: 13, color: '#4a7a8a', lineHeight: 1.8 }}>{f.desc}</div>
+             </div>
+           ))}
+         </div>
+       </div>
+ 
+-      {/* ── FAQ ── */}
+-      <div style={{ background:'#04080e', borderTop:'1px solid #1a2e3e', padding:'48px 24px' }}>
+-        <div style={{ maxWidth:680, margin:'0 auto' }}>
+-          <div style={{ fontFamily:BB, fontSize:26, letterSpacing:3, color:'#c8d8e8', marginBottom:32, textAlign:'center' }}>FAQ</div>
+-          {FAQS.map((f,i)=>(
+-            <div key={i} style={{ borderBottom:'1px solid #1a2e3e', padding:'16px 0' }}>
+-              <div style={{ fontSize:12, color:'#00ff88', marginBottom:6, letterSpacing:.5 }}>{f.q}</div>
+-              <div style={{ fontSize:11, color:'#4a7a8a', lineHeight:1.8 }}>{f.a}</div>
++      {/* ── Pricing ────────────────────────────────────────────────────────── */}
++      <div style={{ background: '#04080e', borderTop: '1px solid #1a2e3e', borderBottom: '1px solid #1a2e3e', padding: '80px 32px' }}>
++        <div style={{ maxWidth: 760, margin: '0 auto' }}>
++          <div style={{ textAlign: 'center', marginBottom: 48 }}>
++            <div style={{ fontFamily: MONO, fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 12 }}>PRICING</div>
++            <h2 style={{ fontFamily: BB, fontSize: 'clamp(28px,4vw,44px)', color: '#c8d8e8', letterSpacing: 3, marginBottom: 10 }}>SIMPLE. ONE PLAN.</h2>
++            <p style={{ fontFamily: MONO, fontSize: 12, color: '#4a7a8a' }}>Everything included. No feature gating. No upsells.</p>
++          </div>
++
++          <div style={{ maxWidth: 400, margin: '0 auto', background: '#060e06', border: '1px solid #00ff8840', borderRadius: 12, padding: '36px 32px', position: 'relative', boxShadow: '0 0 60px #00ff8810' }}>
++            <div style={{ position: 'absolute', top: -13, left: '50%', transform: 'translateX(-50%)', background: '#00ff88', color: '#000', fontFamily: BB, fontSize: 11, letterSpacing: 2, padding: '4px 16px', borderRadius: 4, whiteSpace: 'nowrap' }}>
++              7-DAY FREE TRIAL
+             </div>
+-          ))}
++
++            <div style={{ fontFamily: BB, fontSize: 28, color: '#00ff88', letterSpacing: 3, marginBottom: 4 }}>PRO</div>
++            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 28 }}>
++              <span style={{ fontFamily: BB, fontSize: 56, color: '#c8d8e8', lineHeight: 1 }}>$29</span>
++              <span style={{ fontFamily: MONO, fontSize: 13, color: '#4a7a8a' }}>/month</span>
++            </div>
++
++            <div style={{ marginBottom: 28 }}>
++              {[
++                'Live options scanner — real Tradier data',
++                'GEX + OI + Volume conviction scoring',
++                'All 6 hard-block filters active',
++                'SPX / NDX index setups',
++                'Auto-scanner across full watchlist',
++                'Morning AI readout — daily brief',
++                'Email + SMS push alerts',
++                'Unlimited trade journal + backtest',
++                'Structure intelligence (spread/condor)',
++              ].map((f, i) => (
++                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '7px 0', borderBottom: '1px solid #0d1e14', fontFamily: MONO, fontSize: 11, color: '#8ab0c0' }}>
++                  <span style={{ color: '#00ff88', flexShrink: 0 }}>✓</span>
++                  {f}
++                </div>
++              ))}
++            </div>
++
++            <button className="btn-primary" onClick={() => navigate('/sign-up')} style={{ width: '100%', padding: '15px', fontSize: 14, textAlign: 'center' }}>
++              START FREE TRIAL →
++            </button>
++            <div style={{ fontFamily: MONO, fontSize: 10, color: '#2a4a5a', textAlign: 'center', marginTop: 12, lineHeight: 1.8 }}>
++              No charge for 7 days · Cancel anytime · Secured by Stripe
++            </div>
++          </div>
++        </div>
++      </div>
++
++      {/* ── FAQ ────────────────────────────────────────────────────────────── */}
++      <div style={{ maxWidth: 700, margin: '0 auto', padding: '80px 32px' }}>
++        <div style={{ textAlign: 'center', marginBottom: 40 }}>
++          <h2 style={{ fontFamily: BB, fontSize: 'clamp(26px,4vw,40px)', color: '#c8d8e8', letterSpacing: 3 }}>QUESTIONS</h2>
++        </div>
++        {FAQS.map((f, i) => (
++          <div key={i} style={{ borderBottom: '1px solid #1a2e3e', overflow: 'hidden' }}>
++            <button
++              onClick={() => setOpenFaq(openFaq === i ? null : i)}
++              style={{ width: '100%', background: 'transparent', border: 'none', padding: '18px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', gap: 16 }}
++            >
++              <span style={{ fontFamily: SANS, fontSize: 14, color: '#c8d8e8', textAlign: 'left', fontWeight: 500 }}>{f.q}</span>
++              <span style={{ color: '#00ff88', fontSize: 18, flexShrink: 0, transition: 'transform 0.2s', transform: openFaq === i ? 'rotate(45deg)' : 'rotate(0deg)' }}>+</span>
++            </button>
++            {openFaq === i && (
++              <div style={{ fontFamily: SANS, fontSize: 13, color: '#4a7a8a', lineHeight: 1.8, paddingBottom: 18, paddingRight: 32 }}>{f.a}</div>
++            )}
++          </div>
++        ))}
++      </div>
++
++      {/* ── Final CTA ──────────────────────────────────────────────────────── */}
++      <div style={{ background: '#04080e', borderTop: '1px solid #1a2e3e', padding: '80px 32px', textAlign: 'center' }}>
++        <div style={{ maxWidth: 600, margin: '0 auto' }}>
++          <div style={{ fontFamily: MONO, fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 16 }}>READY TO TRADE SMARTER?</div>
++          <h2 style={{ fontFamily: BB, fontSize: 'clamp(32px,5vw,56px)', color: '#c8d8e8', letterSpacing: 3, lineHeight: 1.05, marginBottom: 20 }}>
++            STOP GUESSING.<br /><span style={{ color: '#00ff88' }}>START SCORING.</span>
++          </h2>
++          <p style={{ fontFamily: SANS, fontSize: 14, color: '#4a7a8a', lineHeight: 1.8, marginBottom: 32 }}>
++            7-day free trial. Full access from day one. No credit card required to start.
++          </p>
++          <button className="btn-primary" onClick={() => navigate('/sign-up')} style={{ padding: '16px 48px', fontSize: 15 }}>
++            START FREE TRIAL →
++          </button>
++          <div style={{ fontFamily: MONO, fontSize: 10, color: '#1a3040', marginTop: 16 }}>
++            $29/month after trial · Cancel anytime
++          </div>
+         </div>
+       </div>
+ 
+-      {/* ── Footer ── */}
+-      <div style={{ borderTop:'1px solid #1a2e3e', padding:'24px', textAlign:'center' }}>
+-        <div style={{ fontFamily:BB, fontSize:16, letterSpacing:3, color:'#2a4a5a', marginBottom:6 }}>OPTIONS EDGE</div>
+-        <div style={{ fontSize:10, color:'#1a3040', lineHeight:1.8 }}>
+-          Not financial advice. Options trading involves substantial risk of loss.<br/>
+-          Past performance does not guarantee future results.
++      {/* ── Footer ─────────────────────────────────────────────────────────── */}
++      <div style={{ borderTop: '1px solid #1a2e3e', padding: '28px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
++        <div style={{ fontFamily: BB, fontSize: 18, letterSpacing: 3, color: '#2a4a5a' }}>OPTIONS EDGE</div>
++        <div style={{ fontFamily: MONO, fontSize: 9, color: '#1a3040', lineHeight: 1.8, textAlign: 'center' }}>
++          Not financial advice · Options trading involves substantial risk of loss · Past performance does not guarantee future results
++        </div>
++        <div style={{ display: 'flex', gap: 16 }}>
++          <a href="mailto:support@optionsedgeflow.com" style={{ fontFamily: MONO, fontSize: 10, color: '#2a4a5a' }}>SUPPORT</a>
+         </div>
+       </div>
+     </div>
+diff --git a/src/Router.jsx b/src/Router.jsx
+index 3985fe7..bdc5f60 100644
+--- a/src/Router.jsx
++++ b/src/Router.jsx
+@@ -6,6 +6,7 @@ import {
+ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+ import App      from './App'
+ import TradeLog from './pages/TradeLog'
++import Landing  from './Landing'
+ import { DARK_THEME, LIGHT_THEME } from './theme'
+ 
+ const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+@@ -367,10 +368,10 @@ function AuthShell() {
+       <Route path="/sign-in/*" element={signInPage} />
+       <Route path="/sign-up/*" element={signUpPage} />
+       <Route path="/" element={
+-        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
++        isSignedIn ? <Navigate to="/app" replace /> : <Landing />
+       } />
+       <Route path="*" element={
+-        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/sign-in" replace />
++        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
+       } />
+     </Routes>
+   )
+-- 
+2.43.0
+

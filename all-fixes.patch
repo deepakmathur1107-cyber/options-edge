@@ -1,0 +1,1233 @@
+From 7e80c80f36dbb0bc7b1f648ec434bc833e80f74e Mon Sep 17 00:00:00 2001
+From: Deepak <deepak@optionsedgeflow.com>
+Date: Fri, 12 Jun 2026 05:06:26 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?security:=20full=20audit=20fixes=20?=
+ =?UTF-8?q?=E2=80=94=20auth,=20CORS,=20JWT=20dedup,=20cron=20secret,=20red?=
+ =?UTF-8?q?is=20cache?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+P0 fixes:
+- api/user/prefs.js: replace decodeJwt (no sig verify) with getAuth from _lib/auth
+- api/brief.js: replace decodeJwt with getAuth on ticker and morning brief GET endpoints
+- api/telegram.js: add CRON_SECRET auth gate; bot token never accepted from request body
+- src/lib/adminBypass.js: create missing frontend module (was causing import error)
+- src/lib/useSubscription.js: fix wrong URL /api/subscription -> /api/user/subscription
+
+P1 fixes:
+- All API files: restrict CORS Allow-Origin from * to optionsedgeflow.com
+- api/alerts/send.js + trigger.js: remove CRON_SECRET from query param (was in logs)
+- api/user/subscription.js + trades.js + checkout.js + portal.js + tradier.js:
+  consolidate all duplicate verifyClerkJWT/getClerkId/b64d to shared getAuth
+
+P2 fixes:
+- api/brief.js: FMP key reads FMP_API_KEY env var with demo fallback
+- api/brief.js: delete().neq('id',0) -> delete().lt('generated_at', cutoff)
+- api/tradier.js: cacheSet uses POST pipeline instead of GET URL-encoding
+- api/user/subscription.js: add 1hr grace period to expiry check
+---
+ api/alerts/send.js         |  6 +--
+ api/alerts/trigger.js      |  6 +--
+ api/brief.js               | 30 +++++---------
+ api/stripe/checkout.js     | 82 +++++++-------------------------------
+ api/stripe/portal.js       | 49 ++++-------------------
+ api/telegram.js            | 66 +++++++++++++++++-------------
+ api/tradier.js             | 49 +++++------------------
+ api/user/prefs.js          | 38 +++++-------------
+ api/user/subscription.js   | 82 ++++++++++----------------------------
+ api/user/trades.js         | 44 ++------------------
+ src/lib/adminBypass.js     | 15 +++++++
+ src/lib/useSubscription.js | 56 ++++++++++++--------------
+ 12 files changed, 166 insertions(+), 357 deletions(-)
+ create mode 100644 src/lib/adminBypass.js
+
+diff --git a/api/alerts/send.js b/api/alerts/send.js
+index 0ff68d4..9e8b2d2 100644
+--- a/api/alerts/send.js
++++ b/api/alerts/send.js
+@@ -333,7 +333,7 @@ async function sendEmail(to, subject, html) {
+ // ── Main handler ──────────────────────────────────────────────────────────────
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-cron-secret')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+@@ -341,8 +341,8 @@ module.exports = async function handler(req, res) {
+     return res.status(405).json({ error: 'GET or POST only' })
+   }
+ 
+-  const secret = req.query?.secret ||
+-    req.headers['x-cron-secret'] ||
++  // Security: accept secret via header only, never query param (would appear in logs)
++  const secret = req.headers['x-cron-secret'] ||
+     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+   if (secret !== process.env.CRON_SECRET) {
+     return res.status(401).json({ error: 'Unauthorized' })
+diff --git a/api/alerts/trigger.js b/api/alerts/trigger.js
+index a15dcd4..12087b5 100644
+--- a/api/alerts/trigger.js
++++ b/api/alerts/trigger.js
+@@ -6,12 +6,12 @@
+ const sendHandler = require('./send')
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+   // Accept secret from query param OR header
+-  const secret = req.query.secret ||
+-    req.headers['x-cron-secret'] ||
++  // Security: accept secret via header only, never query param (would appear in logs)
++  const secret = req.headers['x-cron-secret'] ||
+     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
+ 
+   if (secret !== process.env.CRON_SECRET) {
+diff --git a/api/brief.js b/api/brief.js
+index 3986e00..91a6671 100644
+--- a/api/brief.js
++++ b/api/brief.js
+@@ -7,31 +7,21 @@
+ const { createClient } = require('@supabase/supabase-js')
+ const { getSRLevels }    = require('./_lib/srLevels')
+ const { getTickerBrief } = require('./_lib/tickerBrief')
++const { getAuth }        = require('./_lib/auth')
++const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
+ 
+ const supabase = createClient(
+   process.env.SUPABASE_URL,
+   process.env.SUPABASE_SERVICE_ROLE_KEY
+ )
+ 
+-function decodeJwt(token) {
+-  try {
+-    const parts = token.split('.')
+-    if (parts.length !== 3) return null
+-    return JSON.parse(
+-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+-    )
+-  } catch { return null }
+-}
+-
+-const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
+-
+ 
+ async function fetchMarketSnapshot() {
+   const snap = { sp500: null, nasdaq: null, dow: null, vix: null, dxy: null, crude: null, btc: null }
+   try {
+     const symbols = encodeURIComponent('^SP500,^NDX,^DJI,^VIX,DX-Y.NYB,CL=F,BTCUSD')
+     const r = await fetch(
+-      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=demo`,
++      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=${process.env.FMP_API_KEY || "demo"}`,
+       { signal: AbortSignal.timeout(5000) }
+     )
+     if (r.ok) {
+@@ -101,7 +91,9 @@ async function generateAndStore(now) {
+   }
+ 
+   // Store — delete old row first, insert fresh one
+-  await supabase.from('morning_brief').delete().neq('id', 0)
++  // Prune briefs older than 7 days
++  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
++  await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
+   const { error } = await supabase.from('morning_brief').insert({
+     generated_at: now.toISOString(),
+     tone:         brief.tone,
+@@ -117,15 +109,15 @@ async function generateAndStore(now) {
+ }
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+   // ── TICKER ANALYSIS MODE — GET /api/brief?ticker=AMZN&... ────────────────
+   if (req.method === 'GET' && req.query.ticker) {
+-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
++    const { clerkId } = await getAuth(req)
++    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+     const ticker    = (req.query.ticker || '').toUpperCase().trim()
+     const price     = parseFloat(req.query.price    || 0)
+     const chgPct    = parseFloat(req.query.chgPct   || 0)
+@@ -164,8 +156,8 @@ module.exports = async function handler(req, res) {
+ 
+   // GET — serve cached brief; generate on-demand if none exists during market hours
+   if (req.method === 'GET') {
+-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
++    const { clerkId } = await getAuth(req)
++    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+ 
+     const { data, error } = await supabase
+       .from('morning_brief')
+diff --git a/api/stripe/checkout.js b/api/stripe/checkout.js
+index 0068023..bd4c669 100644
+--- a/api/stripe/checkout.js
++++ b/api/stripe/checkout.js
+@@ -1,89 +1,37 @@
+ // api/stripe/checkout.js
+-// Verifies Clerk JWT using JWKS (networkless after first fetch, no SDK needed)
+-
+-const Stripe = require('stripe')
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
++const Stripe        = require('stripe')
+ const { createClient } = require('@supabase/supabase-js')
++const { getAuth }   = require('../_lib/auth')
+ 
+ const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
+ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+ 
+-// ─── Lightweight JWT verification via Clerk JWKS ──────────────────────────────
+-// Decodes the JWT, fetches Clerk's public key, verifies the signature.
+-// Works with any Clerk instance — no SDK, no authorizedParties issue.
+-
+-function base64urlDecode(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-
+-async function getClerkPublicKey(kid) {
+-  const res  = await fetch('https://api.clerk.com/v1/jwks', {
+-    headers: { Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}` }
+-  })
+-  if (!res.ok) throw new Error('Failed to fetch JWKS')
+-  const jwks = await res.json()
+-  const key  = jwks.keys?.find(k => k.kid === kid)
+-  if (!key) throw new Error(`No JWKS key found for kid: ${kid}`)
+-  return key
+-}
+-
+-async function verifyClerkJWT(token) {
+-  // 1. Decode header to get kid
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
+-
+-  // 2. Check expiry
+-  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+-
+-  // 3. Fetch public key and verify using Node crypto
+-  const jwkKey  = await getClerkPublicKey(header.kid)
+-  const crypto  = require('crypto')
+-  const keyObj  = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const sigInput = Buffer.from(parts[0] + '.' + parts[1])
+-  const sig      = base64urlDecode(parts[2])
+-  const valid    = crypto.verify('sha256', sigInput, { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING }, sig)
+-  if (!valid) throw new Error('Invalid signature')
+-
+-  return payload   // { sub: userId, ... }
+-}
+-
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+ 
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Authentication failed' })
++
+   let body = req.body
+   if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+   body = body || {}
+ 
+-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
+-  if (!token) return res.status(401).json({ error: 'No token provided' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-    if (!clerkUserId) throw new Error('No user ID in token')
+-  } catch (e) {
+-    console.error('JWT verify error:', e.message)
+-    return res.status(401).json({ error: 'Authentication failed: ' + e.message })
+-  }
+-
+   const email  = body.email || ''
+   const origin = req.headers.origin || `https://${req.headers.host}`
+ 
+   try {
++    // Reuse existing Stripe customer if one exists
+     let stripeCustomerId
+     const { data: existingSub } = await supabase
+       .from('subscriptions')
+       .select('stripe_customer_id')
+-      .eq('clerk_id', clerkUserId)
++      .eq('clerk_id', clerkId)
+       .maybeSingle()
+ 
+     if (existingSub?.stripe_customer_id) {
+@@ -91,29 +39,27 @@ module.exports = async function handler(req, res) {
+     } else {
+       const customer   = await stripe.customers.create({
+         email,
+-        metadata: { clerk_id: clerkUserId },
++        metadata: { clerk_id: clerkId },
+       })
+       stripeCustomerId = customer.id
+     }
+ 
+-    // When `customer` is set, Stripe forbids also passing `customer_email`
+-    const sessionParams = {
++    const session = await stripe.checkout.sessions.create({
+       customer:   stripeCustomerId,
+       mode:       'subscription',
+       line_items: [{ price: process.env.STRIPE_PRICE_ID_PRO, quantity: 1 }],
+       subscription_data: {
+         trial_period_days: 7,
+-        metadata: { clerk_id: clerkUserId },
++        metadata: { clerk_id: clerkId },
+       },
+       success_url: `${origin}/app?sub=success`,
+       cancel_url:  `${origin}/app`,
+       allow_promotion_codes:      true,
+       billing_address_collection: 'required',
+-    }
+-    const session = await stripe.checkout.sessions.create(sessionParams)
++    })
+ 
+     await supabase.from('subscriptions').upsert({
+-      clerk_id:           clerkUserId,
++      clerk_id:           clerkId,
+       stripe_customer_id: stripeCustomerId,
+       status:             'pending',
+       plan:               'pro',
+diff --git a/api/stripe/portal.js b/api/stripe/portal.js
+index c793c70..b031966 100644
+--- a/api/stripe/portal.js
++++ b/api/stripe/portal.js
+@@ -1,60 +1,27 @@
+ // api/stripe/portal.js
+-const Stripe = require('stripe')
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
++const Stripe        = require('stripe')
+ const { createClient } = require('@supabase/supabase-js')
++const { getAuth }   = require('../_lib/auth')
++
+ const stripe   = Stripe(process.env.STRIPE_SECRET_KEY)
+ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+ 
+-function base64urlDecode(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-async function verifyClerkJWT(token) {
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
+-  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+-  const jwksRes = await fetch('https://api.clerk.com/v1/jwks', {
+-    headers: { Authorization: 'Bearer ' + process.env.CLERK_SECRET_KEY }
+-  })
+-  if (!jwksRes.ok) throw new Error('Failed to fetch JWKS')
+-  const jwks   = await jwksRes.json()
+-  const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
+-  if (!jwkKey) throw new Error('No matching JWKS key')
+-  const crypto = require('crypto')
+-  const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const valid  = crypto.verify('sha256', Buffer.from(parts[0] + '.' + parts[1]),
+-    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-    base64urlDecode(parts[2]))
+-  if (!valid) throw new Error('Invalid signature')
+-  return payload
+-}
+-
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+ 
+-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
+-  if (!token) return res.status(401).json({ error: 'No token' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-    if (!clerkUserId) throw new Error('No user ID')
+-  } catch (e) {
+-    return res.status(401).json({ error: 'Authentication failed: ' + e.message })
+-  }
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Authentication failed' })
+ 
+   const { data, error } = await supabase
+     .from('subscriptions')
+     .select('stripe_customer_id')
+-    .eq('clerk_id', clerkUserId)
++    .eq('clerk_id', clerkId)
+     .maybeSingle()
+ 
+   if (error || !data?.stripe_customer_id) {
+diff --git a/api/telegram.js b/api/telegram.js
+index 5af4025..6804e72 100644
+--- a/api/telegram.js
++++ b/api/telegram.js
+@@ -1,36 +1,46 @@
+ // api/telegram.js — Vercel serverless proxy for Telegram API
+-// Runs server-side so no CORS issues
++// Admin-only: requires valid CRON_SECRET header.
++// Runs server-side so no CORS issues and bot token stays server-side only.
+ 
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*');
+-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
+-
+-  // Vercel does NOT auto-parse JSON body — parse it manually if needed
+-  let body = req.body;
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
++  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
++  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-cron-secret, Authorization')
++  if (req.method === 'OPTIONS') { res.status(200).end(); return }
++  if (req.method !== 'POST')    { res.status(405).json({ error: 'Method not allowed' }); return }
++
++  // ── Auth: require CRON_SECRET (admin-only endpoint) ───────────────────────
++  const secret = req.headers['x-cron-secret'] ||
++    (req.headers['authorization'] || '').replace('Bearer ', '').trim()
++  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
++    res.status(401).json({ error: 'Unauthorized' })
++    return
++  }
++
++  // Parse body
++  let body = req.body
+   if (typeof body === 'string') {
+-    try { body = JSON.parse(body); } catch (e) { body = {}; }
++    try { body = JSON.parse(body) } catch { body = {} }
+   }
+-  if (!body) body = {};
++  if (!body) body = {}
+ 
+-  const { message, chat_id, token } = body;
++  const { message, chat_id } = body
+ 
+-  // Use env vars (set in Vercel dashboard) or fall back to values from request
+-  const botToken = process.env.TELEGRAM_BOT_TOKEN || token;
+-  const chatId   = process.env.TELEGRAM_CHAT_ID   || chat_id;
++  // Bot token and chat ID must come from server env vars — never from request body
++  const botToken = process.env.TELEGRAM_BOT_TOKEN
++  const chatId   = process.env.TELEGRAM_CHAT_ID || chat_id
+ 
+-  if (!botToken || !chatId) {
+-    res.status(400).json({
+-      error: 'Missing bot token or chat ID. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Vercel env vars, or pass token and chat_id in request body.'
+-    });
+-    return;
++  if (!botToken) {
++    res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not configured in Vercel env vars' })
++    return
++  }
++  if (!chatId) {
++    res.status(400).json({ error: 'Missing chat_id (or set TELEGRAM_CHAT_ID in env vars)' })
++    return
+   }
+-
+   if (!message) {
+-    res.status(400).json({ error: 'Missing message in request body' });
+-    return;
++    res.status(400).json({ error: 'Missing message in request body' })
++    return
+   }
+ 
+   try {
+@@ -43,11 +53,11 @@ module.exports = async function handler(req, res) {
+         parse_mode:               'Markdown',
+         disable_web_page_preview: true,
+       }),
+-    });
++    })
+ 
+-    const data = await r.json();
+-    res.status(200).json(data);
++    const data = await r.json()
++    res.status(r.ok ? 200 : 502).json(data)
+   } catch (err) {
+-    res.status(500).json({ error: err.message });
++    res.status(500).json({ error: err.message })
+   }
+-};
++}
+diff --git a/api/tradier.js b/api/tradier.js
+index 787d426..71246dd 100644
+--- a/api/tradier.js
++++ b/api/tradier.js
+@@ -34,9 +34,13 @@ async function cacheGet(key) {
+ async function cacheSet(key, value, ttl) {
+   if (!REDIS_URL || !REDIS_TOKEN) return
+   try {
+-    // Use Upstash REST SET with EX
+-    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}?ex=${ttl}`,
+-      { method: 'GET', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
++    // Use Upstash REST pipeline SET — POST with JSON body avoids URL length limits
++    // for large option chain payloads
++    await fetch(`${REDIS_URL}/pipeline`, {
++      method: 'POST',
++      headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
++      body: JSON.stringify([['SET', key, JSON.stringify(value), 'EX', ttl]]),
++    })
+   } catch {}
+ }
+ 
+@@ -68,38 +72,7 @@ function getTTL(path) {
+ }
+ 
+ // ─── Clerk JWT verify ──────────────────────────────────────────────────────────
+-function b64d(str) {
+-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
+-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
+-  return Buffer.from(b64+pad,'base64')
+-}
+-
+-async function getClerkId(authHeader) {
+-  const token = (authHeader||'').replace('Bearer ','').trim()
+-  if (!token) return null
+-  try {
+-    const parts   = token.split('.')
+-    if (parts.length!==3) return null
+-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-    if (payload.exp && Date.now()/1000 > payload.exp) return null
+-    const clerkKey = process.env.CLERK_SECRET_KEY
+-    if (!clerkKey) return null
+-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
+-      { headers: { Authorization: 'Bearer '+clerkKey } })
+-    if (!jwksRes.ok) return null
+-    const jwks   = await jwksRes.json()
+-    const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
+-    if (!jwkKey) return null
+-    const crypto = require('crypto')
+-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-    const valid  = crypto.verify('sha256',
+-      Buffer.from(parts[0]+'.'+parts[1]),
+-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-      b64d(parts[2]))
+-    return valid ? payload.sub : null
+-  } catch { return null }
+-}
++const { getAuth, ADMIN_IDS: LIB_ADMIN_IDS } = require('./_lib/auth')
+ 
+ async function getPlan(clerkId) {
+   const url = process.env.SUPABASE_URL
+@@ -117,7 +90,7 @@ async function getPlan(clerkId) {
+ 
+ // ─── Main handler ──────────────────────────────────────────────────────────────
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tradier-token, x-tradier-mode')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+@@ -134,8 +107,8 @@ module.exports = async function handler(req, res) {
+   }
+ 
+   // ── Admin check ─────────────────────────────────────────────────────────────
+-  const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
+-  const clerkId   = await getClerkId(req.headers.authorization)
++  const ADMIN_IDS = LIB_ADMIN_IDS || (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
++  const { clerkId } = await getAuth(req)
+   const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
+ 
+   // ── Usage gate (free users only) ─────────────────────────────────────────────
+diff --git a/api/user/prefs.js b/api/user/prefs.js
+index 15e700d..4a158ed 100644
+--- a/api/user/prefs.js
++++ b/api/user/prefs.js
+@@ -9,51 +9,35 @@
+  *   min_edge_score (integer), alert_timing (text), symbols (text),
+  *   alert_email (text), alert_types (ARRAY), tg_token, tg_chat_id,
+  *   sms_on (boolean), phone_number (text), updated_at, created_at
++ *
++ * Security fix: replaced decodeJwt (no signature check) with getAuth
++ * from _lib/auth.js which fully verifies the Clerk RS256 JWT.
+  */
+ 
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '')
+-  .split(',').map(s => s.trim()).filter(Boolean)
++const { getAuth }      = require('../_lib/auth')
+ 
+ const supabase = createClient(
+   process.env.SUPABASE_URL,
+   process.env.SUPABASE_SERVICE_ROLE_KEY
+ )
+ 
+-function decodeJwt(token) {
+-  try {
+-    const parts = token.split('.')
+-    if (parts.length !== 3) return null
+-    return JSON.parse(
+-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+-    )
+-  } catch { return null }
+-}
+-
+-async function getUserId(req) {
+-  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
+-  if (!token) return null
+-  return decodeJwt(token)?.sub || null
+-}
+-
+ module.exports = async function handler(req, res) {
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
+   if (req.method === 'OPTIONS') return res.status(204).end()
+ 
+-  const userId = await getUserId(req)
+-  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
+-
+-  const isAdmin = ADMIN_IDS.includes(userId)
++  // ── Auth — full JWT signature verification ────────────────────────────────
++  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
+ 
+   // ── GET ──────────────────────────────────────────────────────────────────
+   if (req.method === 'GET') {
+     const { data, error } = await supabase
+       .from('alert_prefs')
+       .select('*')
+-      .eq('clerk_user_id', userId)
++      .eq('clerk_user_id', clerkId)
+       .maybeSingle()
+ 
+     if (error) {
+@@ -93,7 +77,7 @@ module.exports = async function handler(req, res) {
+       .join(',')
+ 
+     const payload = {
+-      clerk_user_id:  userId,
++      clerk_user_id:  clerkId,
+       email_alerts:   body.email_alerts   ?? false,
+       alert_email:    (body.alert_email   || '').trim(),
+       min_edge_score: body.min_edge_score ?? 50,
+@@ -103,7 +87,7 @@ module.exports = async function handler(req, res) {
+       updated_at:     new Date().toISOString(),
+     }
+ 
+-    console.log('prefs upsert:', JSON.stringify(payload))
++    console.log('prefs upsert for', clerkId)
+ 
+     const { data, error } = await supabase
+       .from('alert_prefs')
+diff --git a/api/user/subscription.js b/api/user/subscription.js
+index f73127f..d63fdb9 100644
+--- a/api/user/subscription.js
++++ b/api/user/subscription.js
+@@ -1,76 +1,35 @@
+ // api/user/subscription.js
++// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+-
+-function b64d(str) {
+-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
+-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
+-  return Buffer.from(b64+pad,'base64')
+-}
+-async function verifyClerkJWT(token) {
+-  const parts = token.split('.')
+-  if (parts.length !== 3) throw new Error('Malformed JWT')
+-  const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-  const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('Token expired')
+-  const clerkKey = process.env.CLERK_SECRET_KEY
+-  const jwksRes  = await fetch('https://api.clerk.com/v1/jwks',
+-    { headers: { Authorization: 'Bearer '+clerkKey } })
+-  if (!jwksRes.ok) throw new Error('JWKS failed')
+-  const jwks   = await jwksRes.json()
+-  const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
+-  if (!jwkKey) throw new Error('No key')
+-  const crypto = require('crypto')
+-  const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-  const valid  = crypto.verify('sha256',
+-    Buffer.from(parts[0]+'.'+parts[1]),
+-    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-    b64d(parts[2]))
+-  if (!valid) throw new Error('Invalid signature')
+-  return payload
+-}
++const { getAuth }      = require('../_lib/auth')
+ 
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin', '*')
++  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
+ 
+-  const token = (req.headers.authorization||'').replace('Bearer ','').trim()
+-  if (!token) return res.status(401).json({ error: 'No token' })
+-
+-  let clerkUserId
+-  try {
+-    const payload = await verifyClerkJWT(token)
+-    clerkUserId   = payload.sub
+-  } catch (e) {
+-    return res.status(401).json({ error: 'Auth failed: '+e.message })
+-  }
++  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Auth failed' })
+ 
+   // ── Admin always gets active status ───────────────────────────────────────
+-  if (ADMIN_IDS.includes(clerkUserId)) {
+-    return res.status(200).json({
+-      status:  'active',
+-      plan:    'admin',
+-      isAdmin: true,
+-    })
++  if (isAdmin) {
++    return res.status(200).json({ status: 'active', plan: 'admin', isAdmin: true })
+   }
+ 
+   // ── Regular user — check Supabase ─────────────────────────────────────────
+   const supaUrl = process.env.SUPABASE_URL
+   const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+   if (!supaUrl || !supaKey) {
+-    // No DB configured — grant access (dev mode)
+-    return res.status(200).json({ status: 'active', plan: 'pro' })
++    return res.status(200).json({ status: 'active', plan: 'pro' }) // dev mode fallback
+   }
+ 
+   const supabase = createClient(supaUrl, supaKey)
+   const { data, error } = await supabase
+     .from('subscriptions')
+     .select('status, plan, current_period_end, stripe_subscription_id, stripe_customer_id')
+-    .eq('clerk_id', clerkUserId)
++    .eq('clerk_id', clerkId)
+     .maybeSingle()
+ 
+   if (error) return res.status(500).json({ error: error.message })
+@@ -78,7 +37,7 @@ module.exports = async function handler(req, res) {
+ 
+   let status = data.status
+ 
+-  // Check Stripe directly if pending (race condition fix)
++  // Check Stripe directly if pending (race condition between checkout redirect and webhook)
+   if ((status === 'pending' || status === 'inactive') && data.stripe_customer_id) {
+     try {
+       const Stripe = require('stripe')
+@@ -86,31 +45,34 @@ module.exports = async function handler(req, res) {
+       const subs   = await stripe.subscriptions.list({
+         customer: data.stripe_customer_id, limit: 5, status: 'all'
+       })
+-      const active = subs.data.find(s => s.status==='active'||s.status==='trialing')
++      const active = subs.data.find(s => s.status === 'active' || s.status === 'trialing')
+       if (active) {
+         status = active.status
+-        const periodEnd = new Date(active.current_period_end*1000).toISOString()
++        const periodEnd = new Date(active.current_period_end * 1000).toISOString()
+         await supabase.from('subscriptions').upsert({
+-          clerk_id:               clerkUserId,
++          clerk_id:               clerkId,
+           stripe_subscription_id: active.id,
+           status,
+           current_period_end:     periodEnd,
+           updated_at:             new Date().toISOString(),
+         }, { onConflict: 'clerk_id' })
+       }
+-    } catch {}
++    } catch (e) {
++      console.warn('Stripe fallback check failed:', e.message)
++    }
+   }
+ 
+-  // Period expiry check
++  // Period expiry check — add 1hr grace for webhook delivery delay
+   const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
+-  if ((status==='active'||status==='trialing') && periodEnd && periodEnd < new Date()) {
++  const grace     = 60 * 60 * 1000  // 1 hour grace period
++  if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < new Date(Date.now() - grace)) {
+     status = 'expired'
+   }
+ 
+   return res.status(200).json({
+     status,
+-    plan:              data.plan,
+-    current_period_end:data.current_period_end,
+-    subscription_id:   data.stripe_subscription_id,
++    plan:               data.plan,
++    current_period_end: data.current_period_end,
++    subscription_id:    data.stripe_subscription_id,
+   })
+ }
+diff --git a/api/user/trades.js b/api/user/trades.js
+index 4c07035..0ba3c43 100644
+--- a/api/user/trades.js
++++ b/api/user/trades.js
+@@ -11,43 +11,7 @@
+ //   close_date, closed_at, updated_at
+ 
+ const { createClient } = require('@supabase/supabase-js')
+-
+-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+-
+-function b64d(str) {
+-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
+-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
+-  return Buffer.from(b64 + pad, 'base64')
+-}
+-
+-async function getClerkId(authHeader) {
+-  const token = (authHeader || '').replace('Bearer ', '').trim()
+-  if (!token) return null
+-  try {
+-    const parts   = token.split('.')
+-    if (parts.length !== 3) return null
+-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
+-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
+-    if (payload.exp && Date.now() / 1000 > payload.exp) return null
+-    const clerkKey = process.env.CLERK_SECRET_KEY
+-    if (!clerkKey) return null
+-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
+-      { headers: { Authorization: 'Bearer ' + clerkKey } })
+-    if (!jwksRes.ok) return null
+-    const jwks   = await jwksRes.json()
+-    const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
+-    if (!jwkKey) return null
+-    const crypto = require('crypto')
+-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
+-    const valid  = crypto.verify(
+-      'sha256',
+-      Buffer.from(parts[0] + '.' + parts[1]),
+-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+-      b64d(parts[2])
+-    )
+-    return valid ? payload.sub : null
+-  } catch { return null }
+-}
++const { getAuth, ADMIN_IDS } = require('../_lib/auth')
+ 
+ async function hasActiveSub(clerkId, supabase) {
+   if (ADMIN_IDS.includes(clerkId)) return true
+@@ -73,13 +37,13 @@ function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
+ 
+ module.exports = async function handler(req, res) {
+   res.setHeader('Content-Type', 'application/json')
+-  res.setHeader('Access-Control-Allow-Origin',  '*')
++  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+   if (req.method === 'OPTIONS') return res.status(200).end()
+ 
+-  const clerkId = await getClerkId(req.headers.authorization)
+-  if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
++  const { clerkId, error: authErr } = await getAuth(req)
++  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
+ 
+   const supabase = createClient(
+     process.env.SUPABASE_URL,
+diff --git a/src/lib/adminBypass.js b/src/lib/adminBypass.js
+new file mode 100644
+index 0000000..c236d4b
+--- /dev/null
++++ b/src/lib/adminBypass.js
+@@ -0,0 +1,15 @@
++/**
++ * src/lib/adminBypass.js
++ * Client-side admin check using VITE env var.
++ * Mirror of api/_lib/adminBypass.js — kept separate because
++ * server files use CommonJS (require/module.exports) and can't
++ * be imported directly into Vite/React ESM bundles.
++ */
++const ADMIN_IDS = (import.meta.env.VITE_ADMIN_CLERK_IDS || '')
++  .split(',')
++  .map(s => s.trim())
++  .filter(Boolean)
++
++export function isAdmin(userId) {
++  return !!userId && ADMIN_IDS.includes(userId)
++}
+diff --git a/src/lib/useSubscription.js b/src/lib/useSubscription.js
+index 871b9ef..7e343d9 100644
+--- a/src/lib/useSubscription.js
++++ b/src/lib/useSubscription.js
+@@ -4,69 +4,65 @@
+  * Admins always get { active: true, plan: 'admin', loading: false }.
+  */
+ 
+-import { useEffect, useState } from "react";
+-import { useAuth } from "@clerk/clerk-react";
+-import { isAdmin } from "./adminBypass";
++import { useEffect, useState } from 'react'
++import { useAuth } from '@clerk/clerk-react'
++import { isAdmin } from './adminBypass'
+ 
+ export default function useSubscription() {
+-  const { userId, getToken, isLoaded } = useAuth();
++  const { userId, getToken, isLoaded } = useAuth()
+   const [status, setStatus] = useState({
+     active: false,
+     plan: null,
+     loading: true,
+     error: null,
+-  });
++  })
+ 
+   useEffect(() => {
+-    if (!isLoaded) return;
++    if (!isLoaded) return
+ 
+     // Admin bypass — no Supabase/Stripe lookup needed
+     if (isAdmin(userId)) {
+-      setStatus({ active: true, plan: "admin", loading: false, error: null });
+-      return;
++      setStatus({ active: true, plan: 'admin', loading: false, error: null })
++      return
+     }
+ 
+     if (!userId) {
+-      setStatus({ active: false, plan: null, loading: false, error: null });
+-      return;
++      setStatus({ active: false, plan: null, loading: false, error: null })
++      return
+     }
+ 
+-    let cancelled = false;
++    let cancelled = false
+ 
+     async function fetchSubscription() {
+       try {
+-        const token = await getToken();
+-        const res = await fetch("/api/subscription", {
++        const token = await getToken()
++        // Fixed: was incorrectly /api/subscription (404). Correct path is /api/user/subscription
++        const res = await fetch('/api/user/subscription', {
+           headers: { Authorization: `Bearer ${token}` },
+-        });
++        })
+ 
+-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+-        const data = await res.json();
++        if (!res.ok) throw new Error(`HTTP ${res.status}`)
++        const data = await res.json()
+ 
+         if (!cancelled) {
++          const isActive = data.status === 'active' || data.status === 'trialing'
+           setStatus({
+-            active: data.active ?? false,
+-            plan: data.plan ?? null,
++            active: isActive,
++            plan:   data.plan ?? null,
+             loading: false,
+             error: null,
+-          });
++          })
+         }
+       } catch (err) {
+         if (!cancelled) {
+-          setStatus((prev) => ({
+-            ...prev,
+-            loading: false,
+-            error: err.message,
+-          }));
++          setStatus(prev => ({ ...prev, loading: false, error: err.message }))
+         }
+       }
+     }
+ 
+-    fetchSubscription();
+-    return () => {
+-      cancelled = true;
+-    };
+-  }, [userId, isLoaded, getToken]);
++    fetchSubscription()
++    return () => { cancelled = true }
++  }, [userId, isLoaded, getToken])
+ 
+-  return status;
++  return status
+ }
+-- 
+2.43.0
+
+
+From 30db2a16614522f3355a00e61fc8b01d279ea57b Mon Sep 17 00:00:00 2001
+From: Deepak <deepak@optionsedgeflow.com>
+Date: Fri, 12 Jun 2026 05:16:15 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?fix:=20P2/P3=20audit=20items=20=E2=80=94=20?=
+ =?UTF-8?q?subscription=20gates,=20trade=20limits,=20brief=20polling,=20ti?=
+ =?UTF-8?q?mezone?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+P2 fixes:
+- api/alerts/send.js: subscription inner-join before sending alerts — free/inactive
+  users no longer receive email or SMS notifications
+- api/user/prefs.js: block free users from enabling email_alerts or sms_alerts;
+  returns 402 if no active subscription
+- api/user/trades.js: enforce 500-trade max per user (admins unlimited);
+  returns 429 with clear message when limit reached
+
+P3 fixes:
+- src/Router.jsx: subscription status now refreshes on window focus event,
+  catching mid-session expiry without requiring page reload
+- src/components/MorningBrief.jsx:
+  - load() converted to useCallback to fix stale closure in useEffect deps
+  - isPreCronWindow cutoff corrected: 7:30 AM CT -> 9:30 AM CT
+    (cron fires at 9 AM ET = 8 AM CT, was stopping poll 90min too early)
+  - isTradingDay now uses America/New_York (NYSE timezone, not Chicago)
+  - UI copy updated: '7 AM CT' -> '8 AM CT'
+- api/_lib/marketCalendar.js: isTradingDay timezone America/Chicago -> New_York
+  (holiday detection must use NYSE timezone to be correct)
+---
+ api/_lib/marketCalendar.js      |  2 +-
+ api/alerts/send.js              |  6 ++++--
+ api/user/prefs.js               | 15 +++++++++++++++
+ api/user/trades.js              | 12 ++++++++++++
+ src/Router.jsx                  | 27 +++++++++++++++------------
+ src/components/MorningBrief.jsx | 25 +++++++++++++------------
+ 6 files changed, 60 insertions(+), 27 deletions(-)
+
+diff --git a/api/_lib/marketCalendar.js b/api/_lib/marketCalendar.js
+index f297e9d..4e5ba0d 100644
+--- a/api/_lib/marketCalendar.js
++++ b/api/_lib/marketCalendar.js
+@@ -55,7 +55,7 @@ function tzParts(date, tz) {
+ }
+ 
+ function isTradingDay(date) {
+-  const p = tzParts(date, 'America/Chicago')
++  const p = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
+   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+   const key = `${p.year}-${p.month}-${p.day}`
+   return !getHolidays(parseInt(p.year, 10)).has(key)
+diff --git a/api/alerts/send.js b/api/alerts/send.js
+index 9e8b2d2..8029d1c 100644
+--- a/api/alerts/send.js
++++ b/api/alerts/send.js
+@@ -351,11 +351,13 @@ module.exports = async function handler(req, res) {
+   const scannedAt = new Date().toISOString()
+ 
+   try {
+-    // 1. Fetch users with alerts enabled
++    // 1. Fetch users with alerts enabled AND active subscription
++    // Join with subscriptions so free/inactive users never receive alerts
+     const { data: users, error: usersErr } = await supabase
+       .from('alert_prefs')
+-      .select('*')
++      .select('*, subscriptions!inner(status)')
+       .or('email_alerts.eq.true,sms_on.eq.true')
++      .in('subscriptions.status', ['active', 'trialing'])
+ 
+     if (usersErr) return res.status(500).json({ error: usersErr.message })
+     if (!users?.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
+diff --git a/api/user/prefs.js b/api/user/prefs.js
+index 4a158ed..7f6bc8d 100644
+--- a/api/user/prefs.js
++++ b/api/user/prefs.js
+@@ -68,6 +68,21 @@ module.exports = async function handler(req, res) {
+   if (req.method === 'POST') {
+     const body = req.body || {}
+ 
++    // Only active subscribers (or admins) can enable alert delivery
++    if (!isAdmin && (body.email_alerts || body.sms_alerts)) {
++      const { createClient } = require('@supabase/supabase-js')
++      const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
++      const { data: sub } = await sb
++        .from('subscriptions')
++        .select('status')
++        .eq('clerk_id', clerkId)
++        .maybeSingle()
++      const s = sub?.status || 'inactive'
++      if (s !== 'active' && s !== 'trialing') {
++        return res.status(402).json({ error: 'Active subscription required to enable alerts' })
++      }
++    }
++
+     const rawSymbols = Array.isArray(body.symbols) ? body.symbols : ['SPY', 'QQQ']
+     const MAX_SYMBOLS = isAdmin ? 999 : 5
+     const symbolsText = rawSymbols
+diff --git a/api/user/trades.js b/api/user/trades.js
+index 0ba3c43..040eb5b 100644
+--- a/api/user/trades.js
++++ b/api/user/trades.js
+@@ -79,6 +79,18 @@ module.exports = async function handler(req, res) {
+     const ticker = (b.ticker || b.symbol || '').toUpperCase().trim()
+     if (!ticker) return res.status(400).json({ error: 'ticker is required' })
+ 
++    // Enforce per-user row limit (500 trades max, admins unlimited)
++    const MAX_TRADES = ADMIN_IDS.includes(clerkId) ? Infinity : 500
++    if (MAX_TRADES !== Infinity) {
++      const { count } = await supabase
++        .from('trades')
++        .select('id', { count: 'exact', head: true })
++        .eq('clerk_user_id', clerkId)
++      if ((count || 0) >= MAX_TRADES) {
++        return res.status(429).json({ error: `Trade log limit reached (${MAX_TRADES} max). Archive or delete old trades to add new ones.` })
++      }
++    }
++
+     const row = {
+       clerk_user_id:    clerkId,
+       ticker,
+diff --git a/src/Router.jsx b/src/Router.jsx
+index aff373b..3985fe7 100644
+--- a/src/Router.jsx
++++ b/src/Router.jsx
+@@ -223,23 +223,16 @@ function AuthShell() {
+     catch { return null }
+   }, [getToken])
+ 
+-  // Check subscription once on sign-in
+-  useEffect(() => {
+-    if (!isLoaded || !isSignedIn) {
+-      setSubStatus(null)
+-      return
+-    }
++  // Fetch subscription status — called on mount and on tab focus
++  const fetchSubStatus = useCallback(() => {
++    if (!isLoaded || !isSignedIn) { setSubStatus(null); return }
+     // Admin client-side bypass
+     if (userId && ADMIN_IDS.includes(userId)) {
+       setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
+       return
+     }
+     stableGetToken().then(token => {
+-      if (!token) {
+-        // No token — default to active so we don't block
+-        setSubStatus({ status: 'active', plan: 'pro' })
+-        return
+-      }
++      if (!token) { setSubStatus({ status: 'active', plan: 'pro' }); return }
+       fetch('/api/user/subscription', {
+         headers: { Authorization: `Bearer ${token}` },
+       })
+@@ -247,7 +240,17 @@ function AuthShell() {
+         .then(d => setSubStatus(d))
+         .catch(() => setSubStatus({ status: 'active', plan: 'pro' }))
+     })
+-  }, [isLoaded, isSignedIn, userId]) // stableGetToken intentionally omitted — stable ref
++  }, [isLoaded, isSignedIn, userId, stableGetToken])
++
++  // Check subscription on sign-in
++  useEffect(() => { fetchSubStatus() }, [fetchSubStatus])
++
++  // Re-check when user returns to the tab (catches mid-session expiry)
++  useEffect(() => {
++    const onFocus = () => { if (isSignedIn) fetchSubStatus() }
++    window.addEventListener('focus', onFocus)
++    return () => window.removeEventListener('focus', onFocus)
++  }, [isSignedIn, fetchSubStatus])
+ 
+   const openPortal = async () => {
+     try {
+diff --git a/src/components/MorningBrief.jsx b/src/components/MorningBrief.jsx
+index c77193d..0c7c9d7 100644
+--- a/src/components/MorningBrief.jsx
++++ b/src/components/MorningBrief.jsx
+@@ -3,7 +3,7 @@
+  * Displays cached morning brief from /api/brief
+  * Conclusion-first layout: Bias → Risk Trigger → expandable details
+  */
+-import { useState, useEffect, useRef } from 'react'
++import { useState, useEffect, useRef, useCallback } from 'react'
+ 
+ const BIAS_COLOR = { Bullish: '#00ff88', Neutral: '#ff9500', Bearish: '#ff4466' }
+ const BIAS_BG    = { Bullish: '#00ff8815', Neutral: '#ff950015', Bearish: '#ff446615' }
+@@ -62,7 +62,7 @@ function tzParts(date, tz) {
+ }
+ 
+ function isTradingDay(date) {
+-  const p    = tzParts(date, 'America/Chicago')
++  const p    = tzParts(date, 'America/New_York')  // NYSE is ET, not CT
+   if (p.weekday === 'Sat' || p.weekday === 'Sun') return false
+   const key  = `${p.year}-${p.month}-${p.day}`
+   const year = parseInt(p.year, 10)
+@@ -96,12 +96,13 @@ function getMarketStatus(now = new Date()) {
+   return { open: true, reason: 'Market open', nextLabel: null }
+ }
+ 
+-// Is it a trading day and before 7:30 AM CT? (waiting for cron)
++// Is it a trading day and before 9:30 AM CT? (cron fires at 8 AM CT = 9 AM ET)
++// Poll window covers the time before + shortly after cron fires
+ function isPreCronWindow(now = new Date()) {
+   if (!isTradingDay(now)) return false
+   const p    = tzParts(now, 'America/Chicago')
+   const mins = parseInt(p.hour, 10) * 60 + parseInt(p.minute, 10)
+-  return mins < 7 * 60 + 30
++  return mins < 9 * 60 + 30
+ }
+ 
+ // Calendar date key in CT: "YYYY-MM-DD"
+@@ -141,7 +142,7 @@ export default function MorningBrief({ getToken }) {
+     return () => clearInterval(t)
+   }, [])
+ 
+-  async function load() {
++  const load = useCallback(async () => {
+     try {
+       const token = await getToken()
+       const res = await fetch('/api/brief', {
+@@ -152,20 +153,20 @@ export default function MorningBrief({ getToken }) {
+       const data = await res.json()
+       setBrief(data.brief)
+       setGeneratedAt(data.generatedAt)
+-      const old = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
+-      setIsOldBrief(old)
++      const isOld = data.generatedAt ? datekeyCT(data.generatedAt) !== todayKeyCT() : false
++      setIsOldBrief(isOld)
+       setError(null)
+     } catch (e) {
+       setError(e.message)
+     } finally {
+       setLoading(false)
+     }
+-  }
++  }, [getToken])
+ 
+   // Initial load
+-  useEffect(() => { load() }, [getToken])  // eslint-disable-line react-hooks/exhaustive-deps
++  useEffect(() => { load() }, [load])
+ 
+-  // If brief is from yesterday and we're pre-7:30am CT, poll every 5 min for cron
++  // If brief is from yesterday and we're pre-9:30am CT, poll every 5 min for cron
+   useEffect(() => {
+     if (!isOldBrief || !isPreCronWindow()) return
+     pollRef.current = setInterval(() => {
+@@ -173,7 +174,7 @@ export default function MorningBrief({ getToken }) {
+       load()
+     }, 5 * 60 * 1000)
+     return () => clearInterval(pollRef.current)
+-  }, [isOldBrief])  // eslint-disable-line react-hooks/exhaustive-deps
++  }, [isOldBrief, load])
+ 
+   const biasColor = brief ? (BIAS_COLOR[brief.bias] || '#c8d8e8') : '#c8d8e8'
+   const biasBg    = brief ? (BIAS_BG[brief.bias]    || '#c8d8e820') : '#c8d8e820'
+@@ -217,7 +218,7 @@ export default function MorningBrief({ getToken }) {
+       </div>
+       <div style={{ padding: '24px 16px', textAlign: 'center' }}>
+         <div style={{ fontSize: 28, marginBottom: 8 }}>🕐</div>
+-        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 7 AM CT</div>
++        <div style={{ fontSize: 12, color: '#c8d8e8' }}>Today's brief generates at 8 AM CT</div>
+         <div style={{ fontSize: 10, color: '#4a7a8a', fontFamily: 'IBM Plex Mono, monospace', marginTop: 4 }}>Use GENERATE to create one now</div>
+       </div>
+     </div>
+-- 
+2.43.0
+
