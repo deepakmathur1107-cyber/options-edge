@@ -11,43 +11,7 @@
 //   close_date, closed_at, updated_at
 
 const { createClient } = require('@supabase/supabase-js')
-
-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
-
-function b64d(str) {
-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
-  const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
-  return Buffer.from(b64 + pad, 'base64')
-}
-
-async function getClerkId(authHeader) {
-  const token = (authHeader || '').replace('Bearer ', '').trim()
-  if (!token) return null
-  try {
-    const parts   = token.split('.')
-    if (parts.length !== 3) return null
-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
-    if (payload.exp && Date.now() / 1000 > payload.exp) return null
-    const clerkKey = process.env.CLERK_SECRET_KEY
-    if (!clerkKey) return null
-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
-      { headers: { Authorization: 'Bearer ' + clerkKey } })
-    if (!jwksRes.ok) return null
-    const jwks   = await jwksRes.json()
-    const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
-    if (!jwkKey) return null
-    const crypto = require('crypto')
-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
-    const valid  = crypto.verify(
-      'sha256',
-      Buffer.from(parts[0] + '.' + parts[1]),
-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
-      b64d(parts[2])
-    )
-    return valid ? payload.sub : null
-  } catch { return null }
-}
+const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 
 async function hasActiveSub(clerkId, supabase) {
   if (ADMIN_IDS.includes(clerkId)) return true
@@ -73,13 +37,13 @@ function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
 
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
   if (req.method === 'OPTIONS') return res.status(200).end()
 
-  const clerkId = await getClerkId(req.headers.authorization)
-  if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
+  const { clerkId, error: authErr } = await getAuth(req)
+  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
 
   const supabase = createClient(
     process.env.SUPABASE_URL,

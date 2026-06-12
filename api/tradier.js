@@ -34,9 +34,13 @@ async function cacheGet(key) {
 async function cacheSet(key, value, ttl) {
   if (!REDIS_URL || !REDIS_TOKEN) return
   try {
-    // Use Upstash REST SET with EX
-    await fetch(`${REDIS_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}?ex=${ttl}`,
-      { method: 'GET', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
+    // Use Upstash REST pipeline SET — POST with JSON body avoids URL length limits
+    // for large option chain payloads
+    await fetch(`${REDIS_URL}/pipeline`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([['SET', key, JSON.stringify(value), 'EX', ttl]]),
+    })
   } catch {}
 }
 
@@ -68,38 +72,7 @@ function getTTL(path) {
 }
 
 // ─── Clerk JWT verify ──────────────────────────────────────────────────────────
-function b64d(str) {
-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
-  return Buffer.from(b64+pad,'base64')
-}
-
-async function getClerkId(authHeader) {
-  const token = (authHeader||'').replace('Bearer ','').trim()
-  if (!token) return null
-  try {
-    const parts   = token.split('.')
-    if (parts.length!==3) return null
-    const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
-    const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
-    if (payload.exp && Date.now()/1000 > payload.exp) return null
-    const clerkKey = process.env.CLERK_SECRET_KEY
-    if (!clerkKey) return null
-    const jwksRes = await fetch('https://api.clerk.com/v1/jwks',
-      { headers: { Authorization: 'Bearer '+clerkKey } })
-    if (!jwksRes.ok) return null
-    const jwks   = await jwksRes.json()
-    const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
-    if (!jwkKey) return null
-    const crypto = require('crypto')
-    const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
-    const valid  = crypto.verify('sha256',
-      Buffer.from(parts[0]+'.'+parts[1]),
-      { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
-      b64d(parts[2]))
-    return valid ? payload.sub : null
-  } catch { return null }
-}
+const { getAuth, ADMIN_IDS: LIB_ADMIN_IDS } = require('./_lib/auth')
 
 async function getPlan(clerkId) {
   const url = process.env.SUPABASE_URL
@@ -117,7 +90,7 @@ async function getPlan(clerkId) {
 
 // ─── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tradier-token, x-tradier-mode')
   if (req.method === 'OPTIONS') return res.status(200).end()
@@ -134,8 +107,8 @@ module.exports = async function handler(req, res) {
   }
 
   // ── Admin check ─────────────────────────────────────────────────────────────
-  const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
-  const clerkId   = await getClerkId(req.headers.authorization)
+  const ADMIN_IDS = LIB_ADMIN_IDS || (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
+  const { clerkId } = await getAuth(req)
   const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
 
   // ── Usage gate (free users only) ─────────────────────────────────────────────

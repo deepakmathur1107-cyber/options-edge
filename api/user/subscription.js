@@ -1,76 +1,35 @@
 // api/user/subscription.js
+// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
 const { createClient } = require('@supabase/supabase-js')
-
-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
-
-function b64d(str) {
-  const b64 = str.replace(/-/g,'+').replace(/_/g,'/')
-  const pad  = b64.length%4 ? '='.repeat(4-b64.length%4) : ''
-  return Buffer.from(b64+pad,'base64')
-}
-async function verifyClerkJWT(token) {
-  const parts = token.split('.')
-  if (parts.length !== 3) throw new Error('Malformed JWT')
-  const header  = JSON.parse(b64d(parts[0]).toString('utf8'))
-  const payload = JSON.parse(b64d(parts[1]).toString('utf8'))
-  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('Token expired')
-  const clerkKey = process.env.CLERK_SECRET_KEY
-  const jwksRes  = await fetch('https://api.clerk.com/v1/jwks',
-    { headers: { Authorization: 'Bearer '+clerkKey } })
-  if (!jwksRes.ok) throw new Error('JWKS failed')
-  const jwks   = await jwksRes.json()
-  const jwkKey = jwks.keys?.find(k=>k.kid===header.kid)
-  if (!jwkKey) throw new Error('No key')
-  const crypto = require('crypto')
-  const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
-  const valid  = crypto.verify('sha256',
-    Buffer.from(parts[0]+'.'+parts[1]),
-    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
-    b64d(parts[2]))
-  if (!valid) throw new Error('Invalid signature')
-  return payload
-}
+const { getAuth }      = require('../_lib/auth')
 
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
 
-  const token = (req.headers.authorization||'').replace('Bearer ','').trim()
-  if (!token) return res.status(401).json({ error: 'No token' })
-
-  let clerkUserId
-  try {
-    const payload = await verifyClerkJWT(token)
-    clerkUserId   = payload.sub
-  } catch (e) {
-    return res.status(401).json({ error: 'Auth failed: '+e.message })
-  }
+  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
+  if (!clerkId) return res.status(401).json({ error: authErr || 'Auth failed' })
 
   // ── Admin always gets active status ───────────────────────────────────────
-  if (ADMIN_IDS.includes(clerkUserId)) {
-    return res.status(200).json({
-      status:  'active',
-      plan:    'admin',
-      isAdmin: true,
-    })
+  if (isAdmin) {
+    return res.status(200).json({ status: 'active', plan: 'admin', isAdmin: true })
   }
 
   // ── Regular user — check Supabase ─────────────────────────────────────────
   const supaUrl = process.env.SUPABASE_URL
   const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supaUrl || !supaKey) {
-    // No DB configured — grant access (dev mode)
-    return res.status(200).json({ status: 'active', plan: 'pro' })
+    return res.status(200).json({ status: 'active', plan: 'pro' }) // dev mode fallback
   }
 
   const supabase = createClient(supaUrl, supaKey)
   const { data, error } = await supabase
     .from('subscriptions')
     .select('status, plan, current_period_end, stripe_subscription_id, stripe_customer_id')
-    .eq('clerk_id', clerkUserId)
+    .eq('clerk_id', clerkId)
     .maybeSingle()
 
   if (error) return res.status(500).json({ error: error.message })
@@ -78,7 +37,7 @@ module.exports = async function handler(req, res) {
 
   let status = data.status
 
-  // Check Stripe directly if pending (race condition fix)
+  // Check Stripe directly if pending (race condition between checkout redirect and webhook)
   if ((status === 'pending' || status === 'inactive') && data.stripe_customer_id) {
     try {
       const Stripe = require('stripe')
@@ -86,31 +45,34 @@ module.exports = async function handler(req, res) {
       const subs   = await stripe.subscriptions.list({
         customer: data.stripe_customer_id, limit: 5, status: 'all'
       })
-      const active = subs.data.find(s => s.status==='active'||s.status==='trialing')
+      const active = subs.data.find(s => s.status === 'active' || s.status === 'trialing')
       if (active) {
         status = active.status
-        const periodEnd = new Date(active.current_period_end*1000).toISOString()
+        const periodEnd = new Date(active.current_period_end * 1000).toISOString()
         await supabase.from('subscriptions').upsert({
-          clerk_id:               clerkUserId,
+          clerk_id:               clerkId,
           stripe_subscription_id: active.id,
           status,
           current_period_end:     periodEnd,
           updated_at:             new Date().toISOString(),
         }, { onConflict: 'clerk_id' })
       }
-    } catch {}
+    } catch (e) {
+      console.warn('Stripe fallback check failed:', e.message)
+    }
   }
 
-  // Period expiry check
+  // Period expiry check — add 1hr grace for webhook delivery delay
   const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
-  if ((status==='active'||status==='trialing') && periodEnd && periodEnd < new Date()) {
+  const grace     = 60 * 60 * 1000  // 1 hour grace period
+  if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < new Date(Date.now() - grace)) {
     status = 'expired'
   }
 
   return res.status(200).json({
     status,
-    plan:              data.plan,
-    current_period_end:data.current_period_end,
-    subscription_id:   data.stripe_subscription_id,
+    plan:               data.plan,
+    current_period_end: data.current_period_end,
+    subscription_id:    data.stripe_subscription_id,
   })
 }

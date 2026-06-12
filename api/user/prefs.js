@@ -9,51 +9,35 @@
  *   min_edge_score (integer), alert_timing (text), symbols (text),
  *   alert_email (text), alert_types (ARRAY), tg_token, tg_chat_id,
  *   sms_on (boolean), phone_number (text), updated_at, created_at
+ *
+ * Security fix: replaced decodeJwt (no signature check) with getAuth
+ * from _lib/auth.js which fully verifies the Clerk RS256 JWT.
  */
 
 const { createClient } = require('@supabase/supabase-js')
-
-const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '')
-  .split(',').map(s => s.trim()).filter(Boolean)
+const { getAuth }      = require('../_lib/auth')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-function decodeJwt(token) {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    return JSON.parse(
-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
-    )
-  } catch { return null }
-}
-
-async function getUserId(req) {
-  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
-  if (!token) return null
-  return decodeJwt(token)?.sub || null
-}
-
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
 
-  const userId = await getUserId(req)
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
-
-  const isAdmin = ADMIN_IDS.includes(userId)
+  // ── Auth — full JWT signature verification ────────────────────────────────
+  const { clerkId, isAdmin, error: authErr } = await getAuth(req)
+  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
 
   // ── GET ──────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('alert_prefs')
       .select('*')
-      .eq('clerk_user_id', userId)
+      .eq('clerk_user_id', clerkId)
       .maybeSingle()
 
     if (error) {
@@ -93,7 +77,7 @@ module.exports = async function handler(req, res) {
       .join(',')
 
     const payload = {
-      clerk_user_id:  userId,
+      clerk_user_id:  clerkId,
       email_alerts:   body.email_alerts   ?? false,
       alert_email:    (body.alert_email   || '').trim(),
       min_edge_score: body.min_edge_score ?? 50,
@@ -103,7 +87,7 @@ module.exports = async function handler(req, res) {
       updated_at:     new Date().toISOString(),
     }
 
-    console.log('prefs upsert:', JSON.stringify(payload))
+    console.log('prefs upsert for', clerkId)
 
     const { data, error } = await supabase
       .from('alert_prefs')

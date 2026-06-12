@@ -333,7 +333,7 @@ async function sendEmail(to, subject, html) {
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-cron-secret')
   if (req.method === 'OPTIONS') return res.status(204).end()
@@ -341,8 +341,8 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'GET or POST only' })
   }
 
-  const secret = req.query?.secret ||
-    req.headers['x-cron-secret'] ||
+  // Security: accept secret via header only, never query param (would appear in logs)
+  const secret = req.headers['x-cron-secret'] ||
     (req.headers['authorization'] || '').replace('Bearer ', '').trim()
   if (secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' })

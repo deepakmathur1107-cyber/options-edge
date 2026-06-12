@@ -7,23 +7,13 @@
 const { createClient } = require('@supabase/supabase-js')
 const { getSRLevels }    = require('./_lib/srLevels')
 const { getTickerBrief } = require('./_lib/tickerBrief')
+const { getAuth }        = require('./_lib/auth')
+const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
-
-function decodeJwt(token) {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    return JSON.parse(
-      Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
-    )
-  } catch { return null }
-}
-
-const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
 
 
 async function fetchMarketSnapshot() {
@@ -31,7 +21,7 @@ async function fetchMarketSnapshot() {
   try {
     const symbols = encodeURIComponent('^SP500,^NDX,^DJI,^VIX,DX-Y.NYB,CL=F,BTCUSD')
     const r = await fetch(
-      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=demo`,
+      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=${process.env.FMP_API_KEY || "demo"}`,
       { signal: AbortSignal.timeout(5000) }
     )
     if (r.ok) {
@@ -101,7 +91,9 @@ async function generateAndStore(now) {
   }
 
   // Store — delete old row first, insert fresh one
-  await supabase.from('morning_brief').delete().neq('id', 0)
+  // Prune briefs older than 7 days
+  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
   const { error } = await supabase.from('morning_brief').insert({
     generated_at: now.toISOString(),
     tone:         brief.tone,
@@ -117,15 +109,15 @@ async function generateAndStore(now) {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
 
   // ── TICKER ANALYSIS MODE — GET /api/brief?ticker=AMZN&... ────────────────
   if (req.method === 'GET' && req.query.ticker) {
-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
+    const { clerkId } = await getAuth(req)
+    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
     const ticker    = (req.query.ticker || '').toUpperCase().trim()
     const price     = parseFloat(req.query.price    || 0)
     const chgPct    = parseFloat(req.query.chgPct   || 0)
@@ -164,8 +156,8 @@ module.exports = async function handler(req, res) {
 
   // GET — serve cached brief; generate on-demand if none exists during market hours
   if (req.method === 'GET') {
-    const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim()
-    if (!token || !decodeJwt(token)?.sub) return res.status(401).json({ error: 'Unauthorized' })
+    const { clerkId } = await getAuth(req)
+    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
 
     const { data, error } = await supabase
       .from('morning_brief')
