@@ -1,21 +1,16 @@
 /**
  * api/user/prefs.js — Vercel Serverless Function
  *
- * GET  /api/user/prefs  → fetch alert preferences
- * POST /api/user/prefs  → upsert alert preferences
+ * GET  /api/user/prefs                  -> fetch alert preferences
+ * POST /api/user/prefs                  -> upsert alert preferences
+ * POST /api/user/prefs?action=feedback  -> submit user feedback
+ * GET  /api/user/prefs?action=feedback  -> fetch all feedback (admin only)
  *
- * Supabase table: alert_prefs
- * Confirmed columns: id, clerk_user_id, email_alerts (boolean),
- *   min_edge_score (integer), alert_timing (text), symbols (text),
- *   alert_email (text), alert_types (ARRAY), tg_token, tg_chat_id,
- *   sms_on (boolean), phone_number (text), updated_at, created_at
- *
- * Security fix: replaced decodeJwt (no signature check) with getAuth
- * from _lib/auth.js which fully verifies the Clerk RS256 JWT.
+ * Feedback merged here to stay within Vercel Hobby 12-function limit.
  */
 
 const { createClient } = require('@supabase/supabase-js')
-const { getAuth }      = require('../_lib/auth')
+const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -116,6 +111,32 @@ module.exports = async function handler(req, res) {
     }
 
     return res.status(200).json({ ok: true, prefs: data })
+  }
+
+  // ── FEEDBACK — POST submit, GET fetch (admin) ──────────────────────────────
+  if (req.query.action === 'feedback') {
+
+    if (req.method === 'POST') {
+      let body = req.body
+      if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
+      body = body || {}
+      const message = (body.message || '').trim()
+      const type    = ['suggestion','bug','praise','other'].includes(body.type) ? body.type : 'other'
+      const email   = (body.email   || '').trim() || null
+      if (!message || message.length < 5)    return res.status(400).json({ error: 'Message too short' })
+      if (message.length > 2000)             return res.status(400).json({ error: 'Message too long' })
+      const { error } = await supabase.from('feedback').insert({ clerk_user_id: clerkId, email, type, message })
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ ok: true })
+    }
+
+    if (req.method === 'GET') {
+      if (!ADMIN_IDS.includes(clerkId)) return res.status(403).json({ error: 'Admin only' })
+      const { data, error } = await supabase
+        .from('feedback').select('*').order('created_at', { ascending: false }).limit(200)
+      if (error) return res.status(500).json({ error: error.message })
+      return res.status(200).json({ feedback: data || [] })
+    }
   }
 
   return res.status(405).json({ error: 'Method not allowed' })

@@ -737,7 +737,7 @@ export default function App(props={}) {
     setFeedbackSending(true); setFeedbackErr('')
     try {
       const token = await getAuthToken()
-      const res = await fetch('/api/feedback',{
+      const res = await fetch('/api/user/prefs?action=feedback',{
         method:'POST',
         headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},
         body:JSON.stringify({type:feedbackType,message:feedbackText.trim(),email:userEmail})
@@ -752,7 +752,7 @@ export default function App(props={}) {
     setAdminFbLoading(true)
     try {
       const token = await getAuthToken()
-      const res = await fetch('/api/feedback',{headers:token?{Authorization:`Bearer ${token}`}:{}})
+      const res = await fetch('/api/user/prefs?action=feedback',{headers:token?{Authorization:`Bearer ${token}`}:{}})
       if(!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json()
       setAdminFeedback(d.feedback||[])
@@ -2976,7 +2976,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <textarea
                       value={feedbackText}
                       onChange={e=>setFeedbackText(e.target.value)}
-                      placeholder={feedbackType==='bug'?'Describe the bug — what happened and what you expected…':feedbackType==='praise'?'What are you loving about the app?':feedbackType==='suggestion'?'What feature or improvement would make this more useful?':'What's on your mind?'}
+                      placeholder={
+                        feedbackType==='bug'        ? 'Describe the bug - what happened and what you expected...' :
+                        feedbackType==='praise'     ? 'What are you loving about the app?' :
+                        feedbackType==='suggestion' ? 'What feature or improvement would help most?' :
+                                                      'What is on your mind?'
+                      }
                       rows={4}
                       style={{
                         width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,
