@@ -328,31 +328,119 @@ function AuthShell() {
     handleSignOut,
   }
 
-  const signInPage = (
+  // ── Shared auth page shell ──────────────────────────────────────────────────
+  const AuthShellStyle = {
+    minHeight: '100vh',
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    background: '#090e14',
+    fontFamily: "'Inter', sans-serif",
+  }
+
+  // Left panel — branding + value props
+  const AuthLeft = (
     <div style={{
-      minHeight: '100vh', display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      background: '#0d1117', padding: 24,
+      background: 'linear-gradient(160deg, #0a1a0f 0%, #090e14 60%)',
+      borderRight: '1px solid #1a2e3e',
+      padding: '48px 52px',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'space-between',
     }}>
-      <div style={{
-        fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
-        color: '#00ff88', letterSpacing: 3, marginBottom: 24,
-      }}>OPTIONS EDGE</div>
-      <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" fallbackRedirectUrl="/app" />
+      {/* Logo */}
+      <div>
+        <a href="/" style={{ textDecoration: 'none' }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#00ff88', letterSpacing: 4, marginBottom: 4 }}>OPTIONS EDGE</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', letterSpacing: 2 }}>OPTIONSEDGEFLOW.COM</div>
+        </a>
+      </div>
+
+      {/* Hero text */}
+      <div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00c8ff', letterSpacing: 2, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#00ff88', boxShadow: '0 0 8px #00ff88' }} />
+          LIVE OPTIONS SCANNER
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 52, color: '#c8d8e8', letterSpacing: 3, lineHeight: 1.0, marginBottom: 20 }}>
+          FIND THE<br />SETUP.<br />
+          <span style={{ color: '#00ff88' }}>SKIP THE<br />TRAP.</span>
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#4a7a8a', lineHeight: 1.9 }}>
+          GEX-weighted conviction scoring<br />
+          6 hard-block filters active<br />
+          Morning AI market brief daily<br />
+          Real Tradier bid/ask data
+        </div>
+      </div>
+
+      {/* Mini scanner mockup */}
+      <div style={{ background: '#060c14', border: '1px solid #1a2e3e', borderRadius: 8, overflow: 'hidden', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
+        <div style={{ background: '#0a1520', borderBottom: '1px solid #1a2e3e', padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#2a4a5a', letterSpacing: 1 }}>AUTO SCANNER</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00ff88', display: 'inline-block', boxShadow: '0 0 5px #00ff88' }} />
+            <span style={{ color: '#00ff88', fontSize: 9 }}>LIVE</span>
+          </span>
+        </div>
+        {[
+          { sym: 'SPY',  t: 'CALL 545', dte: '21D', score: 88, g: 'A', c: '#00ff88' },
+          { sym: 'NVDA', t: 'CALL 135', dte: '28D', score: 82, g: 'A', c: '#00ff88' },
+          { sym: 'QQQ',  t: 'PUT  455', dte: '14D', score: 76, g: 'B', c: '#00c8ff' },
+        ].map((r, i) => (
+          <div key={i} style={{ padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #0a1520', opacity: i === 0 ? 1 : 0.5 }}>
+            <span style={{ color: r.c, width: 32, fontWeight: 700 }}>{r.sym}</span>
+            <span style={{ color: '#c8d8e8', width: 64 }}>{r.t}</span>
+            <span style={{ color: '#2a4a5a', width: 28 }}>{r.dte}</span>
+            <div style={{ flex: 1, height: 2, background: '#0d1e2a', borderRadius: 1 }}>
+              <div style={{ height: '100%', width: `${r.score}%`, background: r.c, borderRadius: 1, opacity: 0.7 }} />
+            </div>
+            <span style={{ color: r.c, fontWeight: 700, width: 18 }}>{r.score}</span>
+            <span style={{ color: r.c, background: `${r.c}15`, border: `1px solid ${r.c}40`, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>{r.g}</span>
+          </div>
+        ))}
+        <div style={{ padding: '6px 12px', color: '#1a3040', fontSize: 9, letterSpacing: 1 }}>GEX + OI + VOLUME SCORING · NOT FINANCIAL ADVICE</div>
+      </div>
+
+      {/* Social proof line */}
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#1a3040', lineHeight: 2 }}>
+        7-day free trial · $29/month · Cancel anytime
+      </div>
+    </div>
+  )
+
+  const signInPage = (
+    <div style={AuthShellStyle}>
+      {AuthLeft}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
+        <div style={{ width: '100%', maxWidth: 400 }}>
+          <div style={{ marginBottom: 28, textAlign: 'center' }}>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: '#4a7a8a', letterSpacing: 3, marginBottom: 6 }}>WELCOME BACK</div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>SIGN IN TO CONTINUE</div>
+          </div>
+          <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" fallbackRedirectUrl="/app" />
+          <div style={{ textAlign: 'center', marginTop: 20 }}>
+            <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
+          </div>
+        </div>
+      </div>
     </div>
   )
 
   const signUpPage = (
-    <div style={{
-      minHeight: '100vh', display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      background: '#0d1117', padding: 24,
-    }}>
-      <div style={{
-        fontFamily: "'Bebas Neue', sans-serif", fontSize: 22,
-        color: '#00ff88', letterSpacing: 3, marginBottom: 24,
-      }}>OPTIONS EDGE</div>
-      <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" fallbackRedirectUrl="/app" />
+    <div style={AuthShellStyle}>
+      {AuthLeft}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
+        <div style={{ width: '100%', maxWidth: 400 }}>
+          <div style={{ marginBottom: 28, textAlign: 'center' }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 6 }}>7-DAY FREE TRIAL</div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>CREATE YOUR ACCOUNT</div>
+          </div>
+          <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" fallbackRedirectUrl="/app" />
+          <div style={{ textAlign: 'center', marginTop: 20 }}>
+            <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
+          </div>
+        </div>
+      </div>
     </div>
   )
 
