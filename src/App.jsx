@@ -662,6 +662,7 @@ export default function App(props={}) {
   const [feedbackErr,     setFeedbackErr]     = useState('')
   const [adminFeedback,   setAdminFeedback]   = useState([])
   const [adminFbLoading,  setAdminFbLoading]  = useState(false)
+  const [adminFbErr,      setAdminFbErr]      = useState('')
 
   // ── settings ──
   const [tradierToken, setTradierToken] = useState(()=>ls('tradierToken'))
@@ -749,14 +750,14 @@ export default function App(props={}) {
   }
 
   const loadAdminFeedback = async()=>{
-    setAdminFbLoading(true)
+    setAdminFbLoading(true); setAdminFbErr('')
     try {
       const token = await getAuthToken()
       const res = await fetch('/api/user/prefs?action=feedback',{headers:token?{Authorization:`Bearer ${token}`}:{}})
-      if(!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json()
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
       setAdminFeedback(d.feedback||[])
-    } catch(e){ console.error('Admin feedback load:',e.message) }
+    } catch(e){ setAdminFbErr(e.message); console.error('Admin feedback load:',e.message) }
     finally { setAdminFbLoading(false) }
   }
 
@@ -2791,8 +2792,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5
                         }}>{adminFbLoading?'Loading…':'↺ LOAD'}</button>
                       </div>
-                      {adminFeedback.length===0&&!adminFbLoading&&(
+                      {adminFbErr&&(
+                        <div style={{fontSize:11,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}30`,borderRadius:4,padding:'8px 10px',marginBottom:8}}>
+                          Error: {adminFbErr}
+                        </div>
+                      )}
+                      {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&(
                         <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click LOAD to fetch feedback</div>
+                      )}
+                      {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&adminFeedback!==null&&(
+                        <div style={{display:'none'}}/>
                       )}
                       {adminFeedback.map((fb,i)=>(
                         <div key={i} style={{
