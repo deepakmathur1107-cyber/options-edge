@@ -655,6 +655,13 @@ export default function App(props={}) {
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
   const [showTools,  setShowTools]  = useState(false)
   const [toolsTab,   setToolsTab]   = useState('settings')
+  const [feedbackText,    setFeedbackText]    = useState('')
+  const [feedbackType,    setFeedbackType]    = useState('suggestion')
+  const [feedbackSending, setFeedbackSending] = useState(false)
+  const [feedbackSent,    setFeedbackSent]    = useState(false)
+  const [feedbackErr,     setFeedbackErr]     = useState('')
+  const [adminFeedback,   setAdminFeedback]   = useState([])
+  const [adminFbLoading,  setAdminFbLoading]  = useState(false)
 
   // ── settings ──
   const [tradierToken, setTradierToken] = useState(()=>ls('tradierToken'))
@@ -725,6 +732,34 @@ export default function App(props={}) {
     }).catch(()=>setAlertPrefsLoaded(true))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[])
+  const submitFeedback = async()=>{
+    if(!feedbackText.trim()) return
+    setFeedbackSending(true); setFeedbackErr('')
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/feedback',{
+        method:'POST',
+        headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},
+        body:JSON.stringify({type:feedbackType,message:feedbackText.trim(),email:userEmail})
+      })
+      if(!res.ok) throw new Error(`HTTP ${res.status}`)
+      setFeedbackSent(true); setFeedbackText(''); setTimeout(()=>setFeedbackSent(false),4000)
+    } catch(e){ setFeedbackErr(e.message) }
+    finally { setFeedbackSending(false) }
+  }
+
+  const loadAdminFeedback = async()=>{
+    setAdminFbLoading(true)
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/feedback',{headers:token?{Authorization:`Bearer ${token}`}:{}})
+      if(!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json()
+      setAdminFeedback(d.feedback||[])
+    } catch(e){ console.error('Admin feedback load:',e.message) }
+    finally { setAdminFbLoading(false) }
+  }
+
   const saveAlertPrefs = async()=>{
     setAlertPrefsSaving(true); setAlertPrefsErr('')
     // Keep minScore in sync when saving
@@ -2742,13 +2777,44 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {toolsTab==='settings'&&(
                 <div className="si">
 
-                  {/* ── Morning Readout (everyone) ── */}
-                  <MorningBrief getToken={getAuthToken} theme={C} />
-
                   {/* ═══════════════════════════════════════════════
                       ADMIN-ONLY SECTION
                   ═══════════════════════════════════════════════ */}
                   {isAdmin&&(<>
+
+                    {/* Feedback Viewer */}
+                    <Card style={{marginBottom:12}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                        <Lbl C={C} color={C.purple}>💬 USER FEEDBACK</Lbl>
+                        <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{
+                          background:`${C.purple}18`,border:`1px solid ${C.purple}40`,color:C.purple,
+                          padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5
+                        }}>{adminFbLoading?'Loading…':'↺ LOAD'}</button>
+                      </div>
+                      {adminFeedback.length===0&&!adminFbLoading&&(
+                        <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click LOAD to fetch feedback</div>
+                      )}
+                      {adminFeedback.map((fb,i)=>(
+                        <div key={i} style={{
+                          background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:'10px 12px',marginBottom:8
+                        }}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:4}}>
+                            <span style={{
+                              fontSize:10,fontWeight:700,letterSpacing:.5,
+                              color:fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple,
+                              background:fb.type==='bug'?`${C.red}15`:fb.type==='praise'?`${C.green}15`:`${C.purple}15`,
+                              border:`1px solid ${fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple}40`,
+                              padding:'2px 7px',borderRadius:3,fontFamily:"'IBM Plex Mono',monospace"
+                            }}>{fb.type?.toUpperCase()}</span>
+                            <span style={{fontSize:10,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>
+                              {fb.email||'anonymous'} · {fb.created_at?new Date(fb.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}
+                            </span>
+                          </div>
+                          <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
+                        </div>
+                      ))}
+                    </Card>
 
                     {/* Telegram Bot */}
                     <Card style={{marginBottom:12}}>
@@ -2888,6 +2954,47 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       }}>
                         <span style={{position:'absolute',top:2,left:isDark?20:2,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left .2s'}}/>
                       </button>
+                    </div>
+                  </Card>
+
+                  {/* Feedback */}
+                  <Card style={{marginBottom:12}}>
+                    <Lbl C={C} color={C.purple}>💬 SHARE FEEDBACK</Lbl>
+                    <div style={{fontSize:12,color:C.dim,marginBottom:12,lineHeight:1.5}}>
+                      Help us improve OptionsEdgeFlow. Bug reports, feature ideas, or just tell us what you love.
+                    </div>
+                    <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+                      {[['suggestion','💡 Suggestion'],['bug','🐛 Bug Report'],['praise','⭐ Praise'],['other','💬 Other']].map(([v,l])=>(
+                        <button key={v} className="hv" onClick={()=>setFeedbackType(v)} style={{
+                          padding:'5px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:600,
+                          background:feedbackType===v?`${C.purple}20`:'transparent',
+                          border:`1px solid ${feedbackType===v?C.purple:C.border}`,
+                          color:feedbackType===v?C.purple:C.dim,
+                        }}>{l}</button>
+                      ))}
+                    </div>
+                    <textarea
+                      value={feedbackText}
+                      onChange={e=>setFeedbackText(e.target.value)}
+                      placeholder={feedbackType==='bug'?'Describe the bug — what happened and what you expected…':feedbackType==='praise'?'What are you loving about the app?':feedbackType==='suggestion'?'What feature or improvement would make this more useful?':'What's on your mind?'}
+                      rows={4}
+                      style={{
+                        width:'100%',background:C.bgDeep,border:`1px solid ${C.border}`,
+                        borderRadius:6,color:C.text,fontSize:12,padding:'9px 12px',
+                        fontFamily:"'Inter',sans-serif",resize:'vertical',outline:'none',
+                        lineHeight:1.5,marginBottom:10,boxSizing:'border-box'
+                      }}
+                    />
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <button className="hv" onClick={submitFeedback} disabled={feedbackSending||!feedbackText.trim()} style={{
+                        background:feedbackText.trim()&&!feedbackSending?C.purple:'transparent',
+                        border:`1px solid ${feedbackText.trim()&&!feedbackSending?C.purple:C.border}`,
+                        color:feedbackText.trim()&&!feedbackSending?'#fff':C.dim,
+                        fontWeight:700,padding:'7px 18px',borderRadius:4,fontSize:12,
+                        letterSpacing:.8,cursor:feedbackText.trim()&&!feedbackSending?'pointer':'not-allowed'
+                      }}>{feedbackSending?'SENDING…':'SEND FEEDBACK'}</button>
+                      {feedbackSent&&<span style={{fontSize:11,color:C.green}}>✓ Thanks — feedback received!</span>}
+                      {feedbackErr&&<span style={{fontSize:11,color:C.red}}>{feedbackErr}</span>}
                     </div>
                   </Card>
 
