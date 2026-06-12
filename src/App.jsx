@@ -1535,7 +1535,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         setLastAlert(r)
         setAlertHistory(p=>[{...r, alertedAt: ts2}, ...p.slice(0,9)])
         if (tgToken&&tgChatId) {
-          const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId)
+          const authTok=await getAuthToken().catch(()=>null);const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId,authTok)
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.tradeType} ${r.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
         } else {
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% hits threshold`,...p.slice(0,99)])
@@ -1907,7 +1907,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                       <span style={{fontSize:11,color:C.subtext}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv} {'·'} Delta: {al.delta}</span>
                       {tgToken&&tgChatId&&(
-                        <button className="hv" onClick={async()=>{await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:11,cursor:'pointer'}}>TG</button>
+                        <button className="hv" onClick={async()=>{const aTok=await getAuthToken().catch(()=>null);await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId,aTok);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:11,cursor:'pointer'}}>TG</button>
                       )}
                     </div>
                     {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:11,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
@@ -2054,7 +2054,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
                     <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
-                      <button className="hv" onClick={async()=>{const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
+                      <button className="hv" onClick={async()=>{const aTok2=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId,aTok2);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
                     )}
                     {tgStatus&&<span style={{fontSize:12,color:C.green}}>{tgStatus}</span>}
                   </div>
@@ -3060,7 +3060,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           {copied?'✅ COPIED':'📋 COPY'}
                         </button>
                         {tgToken&&tgChatId&&(
-                          <button className="hv" onClick={async()=>{const r=await sendTelegram(buildTgAlert(alert),tgToken,tgChatId);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>📤 SEND</button>
+                          <button className="hv" onClick={async()=>{const aTok3=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildTgAlert(alert),tgToken,tgChatId,aTok3);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>📤 SEND</button>
                         )}
                       </div>
                     </div>
