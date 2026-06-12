@@ -23,26 +23,8 @@ function decodeJwt(token) {
   } catch { return null }
 }
 
-// Is it currently a US trading day between 9 AM – 5 PM ET?
-function isMarketHours(now) {
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  const day = et.getDay()          // 0=Sun, 6=Sat
-  const hour = et.getHours()
-  const min  = et.getMinutes()
-  if (day === 0 || day === 6) return false
-  const mins = hour * 60 + min
-  return mins >= 9 * 60 && mins < 17 * 60
-}
+const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
 
-// End-of-trading-day ET (5 PM today)
-function endOfTradingDay(now) {
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  et.setHours(17, 0, 0, 0)
-  // Convert back: difference between now and ET-5pm, then apply to UTC now
-  const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  const diffMs = et.getTime() - etNow.getTime()
-  return new Date(now.getTime() + diffMs)
-}
 
 async function fetchMarketSnapshot() {
   const snap = { sp500: null, nasdaq: null, dow: null, vix: null, dxy: null, crude: null, btc: null }
@@ -118,13 +100,10 @@ async function generateAndStore(now) {
     if (!brief[f]) throw new Error(`Missing field: ${f}`)
   }
 
-  // Expires at end of trading day so it never goes STALE mid-session
-  const expiresAt = endOfTradingDay(now)
-
+  // Store — delete old row first, insert fresh one
   await supabase.from('morning_brief').delete().neq('id', 0)
   const { error } = await supabase.from('morning_brief').insert({
     generated_at: now.toISOString(),
-    expires_at:   expiresAt.toISOString(),
     tone:         brief.tone,
     why:          brief.why,
     events:       brief.events,
@@ -134,7 +113,7 @@ async function generateAndStore(now) {
     raw_json:     brief,
   })
   if (error) throw new Error(`Supabase: ${error.message}`)
-  return { brief, generatedAt: now.toISOString(), expiresAt: expiresAt.toISOString() }
+  return { brief, generatedAt: now.toISOString() }
 }
 
 module.exports = async function handler(req, res) {
