@@ -332,12 +332,12 @@ function AuthShell() {
   const AuthShellStyle = {
     minHeight: '100vh',
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'clamp(0px, 45vw, 520px) 1fr',
     background: '#090e14',
     fontFamily: "'Inter', sans-serif",
   }
 
-  // Left panel — branding + value props
+  // Left panel — branding + value props (hidden on mobile via CSS)
   const AuthLeft = (
     <div style={{
       background: 'linear-gradient(160deg, #0a1a0f 0%, #090e14 60%)',
@@ -346,7 +346,8 @@ function AuthShell() {
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'space-between',
-    }}>
+      overflow: 'hidden',
+    }} className="auth-left">
       {/* Logo */}
       <div>
         <a href="/" style={{ textDecoration: 'none' }}>
@@ -411,7 +412,7 @@ function AuthShell() {
   const signInPage = (
     <div style={AuthShellStyle}>
       {AuthLeft}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
+      <div className="auth-right" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
         <div style={{ width: '100%', maxWidth: 400 }}>
           <div style={{ marginBottom: 28, textAlign: 'center' }}>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: '#4a7a8a', letterSpacing: 3, marginBottom: 6 }}>WELCOME BACK</div>
@@ -429,7 +430,7 @@ function AuthShell() {
   const signUpPage = (
     <div style={AuthShellStyle}>
       {AuthLeft}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
+      <div className="auth-right" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 32px' }}>
         <div style={{ width: '100%', maxWidth: 400 }}>
           <div style={{ marginBottom: 28, textAlign: 'center' }}>
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 6 }}>7-DAY FREE TRIAL</div>
@@ -445,6 +446,13 @@ function AuthShell() {
   )
 
   return (
+    <>
+    <style>{`
+      @media (max-width: 640px) {
+        .auth-left { display: none !important; }
+        .auth-right { padding: 32px 20px !important; }
+      }
+    `}</style>
     <Routes>
       <Route path="/app/settings/alerts" element={<Navigate to="/app" replace />} />
       <Route path="/app/trades" element={
@@ -462,6 +470,8 @@ function AuthShell() {
         isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
       } />
     </Routes>
+  )
+    </>
   )
 }
 
