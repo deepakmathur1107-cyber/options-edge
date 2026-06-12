@@ -9,35 +9,95 @@ const BIAS_COLOR   = { Bullish: '#00ff88', Neutral: '#ff9500', Bearish: '#ff4466
 const BIAS_BG      = { Bullish: '#00ff8815', Neutral: '#ff950015', Bearish: '#ff446615' }
 const BIAS_ICON    = { Bullish: '▲', Neutral: '◆', Bearish: '▼' }
 
-export default function MorningBrief({ getToken }) {
-  const [brief,       setBrief]       = useState(null)
-  const [loading,     setLoading]     = useState(true)
-  const [error,       setError]       = useState(null)
-  const [expanded,    setExpanded]    = useState(false)
-  const [generatedAt, setGeneratedAt] = useState(null)
-  const [isStale,     setIsStale]     = useState(false)
+// Returns true if current time is within auto-refresh window (7am–3pm CST, weekdays)
+function inMarketWindow() {
+  const now = new Date()
+  const cst = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }))
+  const day = cst.getDay()           // 0=Sun, 6=Sat
+  const h   = cst.getHours()
+  const m   = cst.getMinutes()
+  if (day === 0 || day === 6) return false
+  const mins = h * 60 + m
+  return mins >= 7 * 60 && mins < 15 * 60   // 7:00am–3:00pm CST
+}
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const token = await getToken()
-        const res = await fetch('/api/brief', {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        })
-        if (res.status === 404) { setError('notGenerated'); return }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        setBrief(data.brief)
-        setGeneratedAt(data.generatedAt)
-        setIsStale(data.isStale)
-      } catch (e) {
-        setError(e.message)
-      } finally {
-        setLoading(false)
-      }
+// Returns a Date object for the next top-of-hour in CST within market window
+function nextTopOfHour() {
+  const now  = new Date()
+  const next = new Date(now)
+  next.setMinutes(0, 0, 0)
+  next.setHours(next.getHours() + 1)
+  return next
+}
+
+// Format a Date as "7:00 AM" in CST
+function fmtCST(d) {
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) + ' CT'
+}
+
+export default function MorningBrief({ getToken }) {
+  const [brief,          setBrief]          = useState(null)
+  const [loading,        setLoading]        = useState(true)
+  const [error,          setError]          = useState(null)
+  const [expanded,       setExpanded]       = useState(false)
+  const [generatedAt,    setGeneratedAt]    = useState(null)
+  const [isStale,        setIsStale]        = useState(false)
+  const [nextRefreshStr, setNextRefreshStr] = useState(null)
+
+  async function load() {
+    try {
+      const token = await getToken()
+      const res = await fetch('/api/brief', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (res.status === 404) { setError('notGenerated'); return }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setBrief(data.brief)
+      setGeneratedAt(data.generatedAt)
+      setIsStale(data.isStale)
+      setError(null)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
     }
-    load()
-  }, [getToken])
+  }
+
+  // Initial load
+  useEffect(() => { load() }, [getToken])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh: fire at the next top-of-hour within 7am–3pm CST on weekdays
+  useEffect(() => {
+    if (!inMarketWindow()) {
+      setNextRefreshStr(null)
+      return
+    }
+
+    // Schedule first fire at next top-of-hour
+    const fireAt  = nextTopOfHour()
+    setNextRefreshStr(fmtCST(fireAt))
+    const delay   = fireAt.getTime() - Date.now()
+
+    const timer = setTimeout(() => {
+      if (!inMarketWindow()) return
+      load()
+      // After first fire, set up hourly interval for the rest of the window
+      const interval = setInterval(() => {
+        if (!inMarketWindow()) { clearInterval(interval); setNextRefreshStr(null); return }
+        load()
+        const next = nextTopOfHour()
+        setNextRefreshStr(fmtCST(next))
+      }, 60 * 60 * 1000)
+      // cleanup handled by the outer return below won't reach here — store in ref-like pattern
+      window.__briefInterval = interval
+    }, delay)
+
+    return () => {
+      clearTimeout(timer)
+      if (window.__briefInterval) { clearInterval(window.__briefInterval); delete window.__briefInterval }
+    }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const biasColor = brief ? (BIAS_COLOR[brief.bias] || '#c8d8e8') : '#c8d8e8'
   const biasBg    = brief ? (BIAS_BG[brief.bias]    || '#c8d8e820') : '#c8d8e820'
@@ -125,7 +185,11 @@ export default function MorningBrief({ getToken }) {
         </div>
       )}
 
-      <div style={S.footer}>Not financial advice · Refreshes hourly</div>
+      <div style={S.footer}>
+        {nextRefreshStr
+          ? `Not financial advice · Auto-refreshes at ${nextRefreshStr}`
+          : 'Not financial advice · Market closed · use GENERATE to refresh manually'}
+      </div>
     </div>
   )
 }
