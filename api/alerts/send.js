@@ -290,37 +290,6 @@ function buildSmsText(alerts, marketCtx) {
   return `OptionsEdge${bias}\n${lines.join('\n')}\nStop -50% / Target +80%\noptionsedgeflow.com/app`
 }
 
-// ── Telegram ─────────────────────────────────────────────────────────────────
-
-function buildTgText(alerts, marketCtx) {
-  const bias  = marketCtx ? ` · ${marketCtx.bias}` : ''
-  const lines = alerts.slice(0, 5).map(a => {
-    const grade = gradeFromScore(a.score)
-    const dir   = a.type === 'CALL' ? '📈' : '📉'
-    return `${dir} *${a.symbol}* ${a.type} $${a.strike} · ${a.score}% · $${a.mid.toFixed(2)} · ${a.dte}DTE`
-  })
-  return `*OptionsEdge Alerts*${bias}\n\n${lines.join('\n')}\n\nStop -50% / Target +80%\noptionsedgeflow.com/app`
-}
-
-async function sendTg(botToken, chatId, text) {
-  if (!botToken || !chatId) { console.warn('TG skipped: missing token or chat_id'); return false }
-  try {
-    const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id:                  chatId,
-        text,
-        parse_mode:               'Markdown',
-        disable_web_page_preview: true,
-      }),
-    })
-    const d = await r.json()
-    if (!r.ok) { console.error('TG error:', JSON.stringify(d)); return false }
-    return true
-  } catch (e) { console.error('TG fetch error:', e.message); return false }
-}
-
 // ── Twilio SMS ────────────────────────────────────────────────────────────────
 
 async function sendSms(to, body) {
@@ -383,15 +352,30 @@ module.exports = async function handler(req, res) {
 
   try {
     // 1. Fetch users with alerts enabled AND active subscription
-    // Join with subscriptions so free/inactive users never receive alerts
-    const { data: users, error: usersErr } = await supabase
+    // Two-step query — no FK join (avoids schema cache relationship error)
+    const { data: allPrefs, error: prefsErr } = await supabase
       .from('alert_prefs')
-      .select('*, subscriptions!inner(status)')
+      .select('*')
       .or('email_alerts.eq.true,sms_on.eq.true,tg_token.not.is.null')
-      .in('subscriptions.status', ['active', 'trialing'])
 
-    if (usersErr) return res.status(500).json({ error: usersErr.message })
-    if (!users?.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
+    if (prefsErr) return res.status(500).json({ error: prefsErr.message })
+    if (!allPrefs?.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No users with alerts enabled' })
+
+    // Fetch active subscriptions separately and filter
+    const clerkIds = allPrefs.map(p => p.clerk_user_id).filter(Boolean)
+    const { data: activeSubs } = await supabase
+      .from('subscriptions')
+      .select('clerk_id, status')
+      .in('clerk_id', clerkIds)
+      .in('status', ['active', 'trialing'])
+
+    const activeSet  = new Set((activeSubs || []).map(s => s.clerk_id))
+    const ADMIN_IDS  = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+    const users      = allPrefs.filter(p =>
+      activeSet.has(p.clerk_user_id) || ADMIN_IDS.includes(p.clerk_user_id)
+    )
+
+    if (!users.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No active subscribers with alerts enabled' })
 
     console.log(`Users: ${users.length}`)
 
@@ -484,11 +468,6 @@ module.exports = async function handler(req, res) {
       if (user.sms_on && user.phone_number) {
         const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx))
         if (ok) { notified = true; console.log(`SMS → ${user.phone_number}`) }
-      }
-      if (user.tg_token && user.tg_chat_id) {
-        const ok = await sendTg(user.tg_token, user.tg_chat_id, buildTgText(userAlerts, marketCtx))
-        if (ok) { notified = true; console.log(`TG → ${user.tg_chat_id}`) }
-        else    { console.error(`TG FAILED → ${user.tg_chat_id}`) }
       }
       if (notified) sent++
     }
