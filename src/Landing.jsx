@@ -166,30 +166,6 @@ const FAQS = [
   { q: 'What makes this different from a screener?', a: 'Screeners show you what moved. Options Edge scores why a specific contract makes sense right now — accounting for structure, IV, liquidity, direction, and risk — then blocks the trades that look good but historically lose.' },
 ]
 
-// ── Animated scanner ticker ───────────────────────────────────────────────────
-function ScannerMockup() {
-  const [active, setActive] = useState(0)
-  const [scanning, setScanning] = useState(false)
-  const [progress, setProgress] = useState(0)
-
-  useEffect(() => {
-    const cycle = setInterval(() => {
-      setScanning(true)
-      setProgress(0)
-      let p = 0
-      const prog = setInterval(() => {
-        p += 12
-        setProgress(Math.min(p, 100))
-        if (p >= 100) {
-          clearInterval(prog)
-          setScanning(false)
-          setActive(a => (a + 1) % MOCK_ALERTS.length)
-        }
-      }, 80)
-    }, 3200)
-    return () => clearInterval(cycle)
-  }, [])
-
   const alert = MOCK_ALERTS[active]
 
   return (
