@@ -199,10 +199,17 @@ module.exports = async function handler(req, res) {
 
     const now = new Date()
 
-    // No brief yet — generate on-demand if market is open
+    // Calendar date in CT (e.g. "06/13/2026") for same-day comparison
+    function dateCT(d) {
+      return new Date(d).toLocaleDateString('en-US', {
+        timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit'
+      })
+    }
+    const todayCT = dateCT(now)
+
+    // No brief at all — generate on-demand if market is open, else 404
     if (!data) {
       if (!isMarketHours(now)) {
-        // Outside market hours — tell user when it will be ready
         return res.status(404).json({ error: 'No brief available yet', notGenerated: true })
       }
       try {
@@ -211,12 +218,30 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({
           brief:       result.brief,
           generatedAt: result.generatedAt,
-          expiresAt:   result.expiresAt,
-          isStale:     false,
+          isOldBrief:  false,
         })
       } catch (e) {
         console.error('On-demand generation failed:', e.message)
         return res.status(500).json({ error: 'Brief generation failed: ' + e.message })
+      }
+    }
+
+    const briefDay   = dateCT(data.generated_at)
+    const isOldBrief = briefDay !== todayCT  // brief is from a previous calendar day
+
+    // Brief is from a previous day and market is open — regenerate on-demand
+    if (isOldBrief && isMarketHours(now)) {
+      try {
+        console.log(`Brief is from ${briefDay}, today is ${todayCT} — regenerating`)
+        const result = await generateAndStore(now)
+        return res.status(200).json({
+          brief:       result.brief,
+          generatedAt: result.generatedAt,
+          isOldBrief:  false,
+        })
+      } catch (e) {
+        console.error('Regen failed, serving previous day brief:', e.message)
+        // Fall through — serve what we have rather than error
       }
     }
 
@@ -230,8 +255,7 @@ module.exports = async function handler(req, res) {
         risk_trigger: data.risk_trigger,
       },
       generatedAt: data.generated_at,
-      expiresAt:   data.expires_at,
-      isStale:     new Date(data.expires_at) < now,
+      isOldBrief,
     })
   }
 
