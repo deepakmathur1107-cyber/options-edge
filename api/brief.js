@@ -21,7 +21,7 @@ async function fetchMarketSnapshot() {
   const snap = { spy: null, qqq: null, vix: null, uso: null }
   try {
     const r = await fetch(
-      'https://api.tradier.com/v1/markets/quotes?symbols=SPY,QQQ,VIX,USO',
+      'https://api.tradier.com/v1/markets/quotes?symbols=SPY,QQQ,VIXY,USO',
       {
         headers: {
           Authorization: `Bearer ${process.env.TRADIER_TOKEN}`,
@@ -37,7 +37,7 @@ async function fetchMarketSnapshot() {
       const get    = (sym) => arr.find(q => q.symbol === sym)?.last ?? null
       snap.spy = get('SPY')
       snap.qqq = get('QQQ')
-      snap.vix = get('VIX')
+      snap.vix = get('VIXY')  // VIXY = VIX short-term futures ETF, good VIX proxy via Tradier
       snap.uso = get('USO')
     }
   } catch (e) { console.warn('Tradier price fetch failed:', e.message) }
@@ -71,30 +71,68 @@ STEP 2 — Return ONLY valid JSON (no markdown, no backticks):
 
 async function generateAndStore(now) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
-  const snap  = await fetchMarketSnapshot()
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{ role: 'user', content: buildPrompt(snap, now) }],
-    }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(`Claude error: ${err?.error?.message || res.status}`)
+  const snap = await fetchMarketSnapshot()
+  console.log('[brief] snap:', JSON.stringify(snap))
+
+  const ANTHROPIC_HEADERS = {
+    'Content-Type': 'application/json',
+    'x-api-key': process.env.ANTHROPIC_API_KEY,
+    'anthropic-version': '2023-06-01',
   }
-  const data = await res.json()
-  // Claude may return tool_use blocks (web search) before the final text block
-  const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-  const text = (textBlock?.text || '').replace(/```json|```/g, '').trim()
-  const brief = JSON.parse(text)
+
+  // Multi-turn loop: Claude may use web_search tool before returning final JSON
+  const messages = [{ role: 'user', content: buildPrompt(snap, now) }]
+  let finalText = null
+
+  for (let turn = 0; turn < 6; turn++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: ANTHROPIC_HEADERS,
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        messages,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(`Claude error: ${err?.error?.message || res.status}`)
+    }
+    const data = await res.json()
+    console.log(`[brief] turn ${turn} stop_reason:`, data.stop_reason, 'blocks:', (data.content||[]).map(b=>b.type))
+
+    // Add assistant response to message history
+    messages.push({ role: 'assistant', content: data.content })
+
+    if (data.stop_reason === 'end_turn') {
+      // Final response — extract last text block
+      const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
+      finalText = (textBlock?.text || '').replace(/```json|```/g, '').trim()
+      break
+    }
+
+    if (data.stop_reason === 'tool_use') {
+      // Claude wants to search — collect all tool_use blocks and return results
+      const toolUseBlocks = (data.content || []).filter(b => b.type === 'tool_use')
+      const toolResults = toolUseBlocks.map(block => ({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        // Web search results are embedded in the block itself by Anthropic's API
+        content: block.input?.query ? `Searching for: ${block.input.query}` : 'Search executed',
+      }))
+      messages.push({ role: 'user', content: toolResults })
+      continue
+    }
+
+    // Unexpected stop reason — extract any text and break
+    const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
+    if (textBlock?.text) { finalText = textBlock.text.replace(/```json|```/g, '').trim(); break }
+  }
+
+  if (!finalText) throw new Error('No text response from Claude after tool loop')
+
+  const brief = JSON.parse(finalText)
 
   for (const f of ['tone', 'why', 'events', 'levels', 'bias', 'risk_trigger']) {
     if (!brief[f]) throw new Error(`Missing field: ${f}`)
