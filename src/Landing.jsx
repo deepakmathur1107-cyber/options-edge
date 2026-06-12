@@ -1,18 +1,116 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 const BB = "'Bebas Neue', Impact, sans-serif"
 const MONO = "'IBM Plex Mono', 'Courier New', monospace"
 const SANS = "'Inter', system-ui, sans-serif"
 
-// ── Mock scanner data — realistic setups ──────────────────────────────────────
-const MOCK_ALERTS = [
-  { symbol:'SPY',  type:'CALL', strike:545, dte:21, score:88, mid:3.42, grade:'A', chg:'+1.2%', iv:'18%', color:'#00ff88' },
-  { symbol:'NVDA', type:'CALL', strike:135, dte:28, score:82, mid:4.15, grade:'A', chg:'+0.8%', iv:'42%', color:'#00ff88' },
-  { symbol:'QQQ',  type:'PUT',  strike:455, dte:14, score:76, mid:2.88, grade:'B', chg:'-0.6%', iv:'22%', color:'#00c8ff' },
-  { symbol:'TSLA', type:'CALL', strike:265, dte:35, score:71, mid:5.60, grade:'B', chg:'+1.9%', iv:'55%', color:'#00c8ff' },
-  { symbol:'AAPL', type:'CALL', strike:215, dte:21, score:68, mid:2.10, grade:'B', chg:'+0.4%', iv:'24%', color:'#00c8ff' },
+// ── Mock scan log — matches real app terminal style ──────────────────────────
+const SCAN_LOG = [
+  { time:'09:47:12 AM', sym:'$NVDA', score:86, type:'Long Call', strike:'$135C', mid:'$4.15', grade:'A', color:'#00ff88' },
+  { time:'09:47:09 AM', sym:'$SPY',  score:88, type:'Long Call', strike:'$545C', mid:'$3.42', grade:'A', color:'#00ff88' },
+  { time:'09:47:05 AM', sym:'$QQQ',  score:76, type:'Long Put',  strike:'$455P', mid:'$2.88', grade:'B', color:'#00c8ff' },
+  { time:'09:47:01 AM', sym:'$TSLA', score:71, type:'Long Call', strike:'$265C', mid:'$5.60', grade:'B', color:'#00c8ff' },
+  { time:'09:46:58 AM', sym:'$AAPL', score:68, type:'Long Call', strike:'$215C', mid:'$2.10', grade:'B', color:'#00c8ff' },
+  { time:'09:46:54 AM', sym:'$META', score:52, type:'Long Call', strike:'$590C', mid:'$6.80', grade:'C', color:'#ff9500' },
 ]
+const STATUS_LINES = [
+  { time:'09:47:00 AM', text:'▶ Scanning 342 tickers · Swing Trade (21–45 DTE)', blue:true },
+  { time:'09:47:00 AM', text:'▶ Started · Swing Trade', blue:true },
+  { time:'09:47:00 AM', text:'DTE window: Swing (21-45 DTE) · every 15 min · 90%+ threshold', blue:false },
+]
+
+// ── Scanner mockup — terminal style matching real app ─────────────────────────
+function ScannerMockup() {
+  const [logs, setLogs] = useState([SCAN_LOG[0]])
+  const [scanning, setScanning] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const idxRef = useRef(1)
+
+  useEffect(() => {
+    const cycle = setInterval(() => {
+      setScanning(true)
+      setProgress(0)
+      let p = 0
+      const prog = setInterval(() => {
+        p += 14
+        setProgress(Math.min(p, 100))
+        if (p >= 100) {
+          clearInterval(prog)
+          setScanning(false)
+          const next = SCAN_LOG[idxRef.current % SCAN_LOG.length]
+          setLogs(prev => [next, ...prev].slice(0, 6))
+          idxRef.current++
+        }
+      }, 60)
+    }, 2800)
+    return () => clearInterval(cycle)
+  }, [])
+
+  return (
+    <div style={{ background:'#0a0f14', border:'1px solid #1a2e3e', borderRadius:10, overflow:'hidden', fontFamily:MONO, fontSize:11, boxShadow:'0 24px 64px rgba(0,255,136,0.06), 0 8px 24px rgba(0,0,0,0.6)' }}>
+
+      {/* Title bar */}
+      <div style={{ background:'#060c12', borderBottom:'1px solid #1a2e3e', padding:'10px 14px', display:'flex', alignItems:'center', gap:8 }}>
+        <div style={{ width:10, height:10, borderRadius:'50%', background:'#ff5f57' }} />
+        <div style={{ width:10, height:10, borderRadius:'50%', background:'#febc2e' }} />
+        <div style={{ width:10, height:10, borderRadius:'50%', background:'#28c840' }} />
+        <span style={{ marginLeft:8, color:'#2a4a5a', fontSize:10, letterSpacing:1 }}>OPTIONS EDGE — AUTO SCANNER</span>
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6 }}>
+          <div style={{ width:6, height:6, borderRadius:'50%', background: scanning ? '#ff9500' : '#00ff88', boxShadow: scanning ? '0 0 6px #ff9500' : '0 0 6px #00ff88' }} />
+          <span style={{ color: scanning ? '#ff9500' : '#00ff88', fontSize:9, letterSpacing:1 }}>{scanning ? 'SCANNING...' : '● ACTIVE'}</span>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height:2, background:'#060c12' }}>
+        <div style={{ height:'100%', background:'linear-gradient(90deg,#00ff88,#00c8ff)', width: scanning ? progress+'%' : '100%', transition:'width 0.06s linear', opacity: scanning ? 1 : 0.15 }} />
+      </div>
+
+      {/* Controls */}
+      <div style={{ padding:'10px 14px', borderBottom:'1px solid #0d1a24', display:'flex', alignItems:'center', gap:12 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:9, color:'#2a4a5a', marginBottom:5, letterSpacing:1 }}>MIN EDGE SCORE</div>
+          <div style={{ position:'relative', height:4, background:'#0d1a24', borderRadius:2 }}>
+            <div style={{ position:'absolute', left:0, top:0, height:'100%', width:'90%', background:'linear-gradient(90deg,#1a6a3a,#00ff88)', borderRadius:2 }} />
+            <div style={{ position:'absolute', top:'50%', left:'90%', transform:'translate(-50%,-50%)', width:12, height:12, borderRadius:'50%', background:'#00ff88', boxShadow:'0 0 6px #00ff88' }} />
+          </div>
+        </div>
+        <div style={{ fontFamily:MONO, fontSize:11, color:'#00ff88', fontWeight:700 }}>90%+</div>
+        <div style={{ background:'#ff446620', border:'1px solid #ff446660', borderRadius:4, padding:'4px 10px', fontSize:9, color:'#ff4466', letterSpacing:1 }}>■ STOP</div>
+      </div>
+
+      {/* Scan log */}
+      <div style={{ minHeight:180 }}>
+        <div style={{ padding:'6px 14px', fontSize:9, color:'#2a4a5a', letterSpacing:1, borderBottom:'1px solid #0d1a24' }}>SCAN LOG</div>
+        {logs.map((entry, i) => (
+          <div key={i} style={{ padding:'5px 14px', display:'flex', alignItems:'center', gap:8, background: i===0 ? '#0a1e14' : 'transparent', borderLeft:'2px solid '+(i===0 ? entry.color : 'transparent'), transition:'all 0.3s', opacity: Math.max(0.2, 1 - i*0.18) }}>
+            <span style={{ color:'#2a4a5a', fontSize:9, flexShrink:0 }}>[{entry.time}]</span>
+            <span style={{ color:entry.color, fontWeight:700, width:40 }}>{entry.sym}</span>
+            <span style={{ color:'#c8d8e8' }}>{entry.score}%</span>
+            <span style={{ color:'#4a7a8a' }}>{entry.type}</span>
+            <span style={{ color:'#c8d8e8' }}>{entry.strike}</span>
+            <span style={{ color:'#4a7a8a', fontSize:9 }}>mid</span>
+            <span style={{ color:'#c8d8e8' }}>{entry.mid}</span>
+            <div style={{ marginLeft:'auto', background:entry.color+'20', border:'1px solid '+entry.color+'50', borderRadius:3, padding:'1px 6px', color:entry.color, fontWeight:700, fontSize:10 }}>{entry.grade}</div>
+          </div>
+        ))}
+        <div style={{ borderTop:'1px solid #0d1a24', marginTop:4 }}>
+          {STATUS_LINES.map((s,i) => (
+            <div key={i} style={{ padding:'3px 14px', fontSize:9, color: s.blue ? '#00c8ff' : '#2a4a5a', opacity:0.7 }}>[{s.time}] {s.text}</div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop:'1px solid #0d1a24', padding:'7px 14px', display:'flex', justifyContent:'space-between', color:'#1a3040', fontSize:9, letterSpacing:1 }}>
+        <span>TRADIER LIVE DATA · REAL BID/ASK</span>
+        <span>GEX + OI + VOLUME SCORING</span>
+        <span>NOT FINANCIAL ADVICE</span>
+      </div>
+    </div>
+  )
+}
 
 const FEATURES = [
   {
