@@ -65,13 +65,20 @@ function buildJsonPrompt(snap, now, research) {
   const dayStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
   return `You are a senior options trader. Today is ${dayStr}.
 
-LIVE PRICES: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
+LIVE PRICES: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
 
 TODAY'S MARKET RESEARCH:
 ${research || 'No research available — use prices only.'}
 
-Based on the above, write a market readout for options traders.
-Respond with ONLY a JSON object. No text before or after. No markdown. No backticks.
+Write a market readout JSON for options traders. Strict field limits — do not exceed:
+- tone: exactly 2-3 short words/phrases joined by " / " (e.g. "Risk-off / Defensive")
+- why: ONE sentence, maximum 20 words, biggest single market driver
+- events: array of 2-4 strings, each maximum 10 words, real events from research
+- levels: array of 2-3 strings with price and brief context, use actual prices above
+- bias: exactly one of: Bullish, Neutral, Bearish
+- risk_trigger: ONE catalyst phrase, maximum 12 words
+
+Respond with ONLY a JSON object. Nothing before {. Nothing after }. No markdown.
 
 {"tone":"...","why":"...","events":[...],"levels":[...],"bias":"Bullish OR Neutral OR Bearish","risk_trigger":"..."}`
 }
