@@ -44,29 +44,36 @@ async function fetchMarketSnapshot() {
   return snap
 }
 
-function buildPrompt(snap, now) {
-  const fmt     = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
-  const dayStr  = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
-  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' })
-  return `You are a senior options trader writing a market readout for OptionsEdgeFlow. Today is ${dayStr}, ${timeStr} ET.
+// Phase 1 prompt: just research, no JSON
+function buildSearchPrompt(snap, now) {
+  const fmt    = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
+  const dayStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+  return `You are a market research assistant. Today is ${dayStr}.
 
-LIVE PRICE DATA (Tradier):
-SPY: ${fmt(snap.spy)} | QQQ: ${fmt(snap.qqq)} | VIX: ${fmt(snap.vix)} | USO (crude proxy): ${fmt(snap.uso)}
+Current prices: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
 
-STEP 1 — Search the web for today's market news before writing anything:
-- Search: "stock market news ${dayStr}"
-- Search: "economic calendar events ${dayStr}"
-Use what you find to write accurate, current analysis. Do NOT invent events.
+Search the web for:
+1. Top market-moving news headlines today (geopolitics, Fed, earnings, macro)
+2. Any high-impact economic data released today
 
-After searching, output ONLY a raw JSON object — no prose, no explanation, no markdown, no backticks. Start your response with { and end with }:
-{
-  "tone": "2-3 descriptors e.g. Risk-off / Geopolitical tension / Defensive",
-  "why": "One sentence max 20 words on the biggest market driver right now",
-  "events": ["2-4 real events from today's news, max 12 words each"],
-  "levels": ["2-3 key price levels with context based on current SPY/QQQ prices"],
-  "bias": "Bullish OR Neutral OR Bearish",
-  "risk_trigger": "One catalyst that would flip the bias max 15 words"
-}`
+Summarize what you find in 5-8 bullet points. Be factual and specific.`
+}
+
+// Phase 2 prompt: JSON generation using research summary
+function buildJsonPrompt(snap, now, research) {
+  const fmt    = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
+  const dayStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+  return `You are a senior options trader. Today is ${dayStr}.
+
+LIVE PRICES: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
+
+TODAY'S MARKET RESEARCH:
+${research || 'No research available — use prices only.'}
+
+Based on the above, write a market readout for options traders.
+Respond with ONLY a JSON object. No text before or after. No markdown. No backticks.
+
+{"tone":"...","why":"...","events":[...],"levels":[...],"bias":"Bullish OR Neutral OR Bearish","risk_trigger":"..."}`
 }
 
 async function generateAndStore(now) {
@@ -80,77 +87,80 @@ async function generateAndStore(now) {
     'anthropic-version': '2023-06-01',
   }
 
-  // Multi-turn loop: Claude may use web_search tool before returning final JSON
-  const messages = [{ role: 'user', content: buildPrompt(snap, now) }]
-  let finalText = null
+  // ── Phase 1: Research — let Claude search the web for today's news ──────────
+  const searchPrompt = buildSearchPrompt(snap, now)
+  const searchMessages = [{ role: 'user', content: searchPrompt }]
+  let researchSummary = ''
 
-  for (let turn = 0; turn < 6; turn++) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+  for (let turn = 0; turn < 5; turn++) {
+    const r1 = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: ANTHROPIC_HEADERS,
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1500,
+        max_tokens: 1000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages,
+        messages: searchMessages,
       }),
     })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(`Claude error: ${err?.error?.message || res.status}`)
+    if (!r1.ok) {
+      const err = await r1.json().catch(() => ({}))
+      throw new Error(`Claude search error: ${err?.error?.message || r1.status}`)
     }
-    const data = await res.json()
-    console.log(`[brief] turn ${turn} stop_reason:`, data.stop_reason, 'blocks:', (data.content||[]).map(b=>b.type))
+    const d1 = await r1.json()
+    console.log(`[brief] search turn ${turn}:`, d1.stop_reason, (d1.content||[]).map(b=>b.type))
+    searchMessages.push({ role: 'assistant', content: d1.content })
 
-    // Add assistant response to message history
-    messages.push({ role: 'assistant', content: data.content })
-
-    if (data.stop_reason === 'end_turn') {
-      const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-      finalText = (textBlock?.text || '').replace(/```json[\s\S]*?```|```/g, '').trim()
+    if (d1.stop_reason === 'end_turn') {
+      // Claude finished researching — collect its summary text
+      const tb = (d1.content || []).filter(b => b.type === 'text').pop()
+      researchSummary = tb?.text || ''
       break
     }
-
-    if (data.stop_reason === 'tool_use') {
-      // Claude used web_search — the API handles search execution internally.
-      // We just need to continue the loop; search results come back in next turn.
-      const toolUseBlocks = (data.content || []).filter(b => b.type === 'tool_use')
-      const toolResults = toolUseBlocks.map(block => ({
-        type: 'tool_result',
-        tool_use_id: block.id,
-        content: 'Search completed.',
-      }))
-      // After last tool result, remind Claude to output ONLY JSON
-      messages.push({ role: 'user', content: [
-        ...toolResults,
-      ]})
-      // On next turn, if this was the last search, Claude should write JSON
-      // Add a nudge if we are about to finish
-      if (turn >= 3) {
-        messages.push({ role: 'user', content: 'Now output ONLY the JSON object as instructed. No prose, no explanation.' })
-      }
-      continue
+    if (d1.stop_reason === 'tool_use') {
+      // Feed tool results back so search can complete
+      const toolResults = (d1.content || [])
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({ type: 'tool_result', tool_use_id: b.id, content: 'Search executed.' }))
+      searchMessages.push({ role: 'user', content: toolResults })
     }
-
-    // Unexpected — grab any text
-    const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-    if (textBlock?.text) { finalText = textBlock.text.replace(/```json[\s\S]*?```|```/g, '').trim(); break }
   }
 
-  if (!finalText) throw new Error('No text response from Claude after tool loop')
+  console.log('[brief] research summary length:', researchSummary.length)
 
-  // Extract JSON — handle case where Claude wraps it in prose
-  let jsonText = finalText
-  const jsonMatch = finalText.match(/\{[\s\S]*\}/)
-  if (jsonMatch) jsonText = jsonMatch[0]
+  // ── Phase 2: Generate JSON — separate call, no tools, strict JSON only ──────
+  const jsonMessages = [{
+    role: 'user',
+    content: buildJsonPrompt(snap, now, researchSummary),
+  }]
 
-  console.log('[brief] final text preview:', jsonText.slice(0, 200))
+  const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: ANTHROPIC_HEADERS,
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 600,
+      messages: jsonMessages,
+    }),
+  })
+  if (!r2.ok) {
+    const err = await r2.json().catch(() => ({}))
+    throw new Error(`Claude JSON error: ${err?.error?.message || r2.status}`)
+  }
+  const d2 = await r2.json()
+  const tb2 = (d2.content || []).filter(b => b.type === 'text').pop()
+  const rawText = (tb2?.text || '').trim()
+  console.log('[brief] json response preview:', rawText.slice(0, 200))
+
+  // Extract JSON object — strip any surrounding prose
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error(`No JSON in response: ${rawText.slice(0, 300)}`)
 
   let brief
   try {
-    brief = JSON.parse(jsonText)
+    brief = JSON.parse(jsonMatch[0])
   } catch (e) {
-    throw new Error(`JSON parse failed. Claude returned: ${finalText.slice(0, 300)}`)
+    throw new Error(`JSON parse failed: ${rawText.slice(0, 300)}`)
   }
 
   for (const f of ['tone', 'why', 'events', 'levels', 'bias', 'risk_trigger']) {
