@@ -17,11 +17,14 @@ const supabase = createClient(
 
 
 async function fetchMarketSnapshot() {
-  const snap = { sp500: null, nasdaq: null, dow: null, vix: null, dxy: null, crude: null, btc: null }
+  const snap = { sp500: null, nasdaq: null, dow: null, vix: null, dxy: null, crude: null, btc: null, news: [], calendar: [] }
+  const apiKey = process.env.FMP_API_KEY || 'demo'
+
+  // Prices
   try {
     const symbols = encodeURIComponent('^SP500,^NDX,^DJI,^VIX,DX-Y.NYB,CL=F,BTCUSD')
     const r = await fetch(
-      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=${process.env.FMP_API_KEY || "demo"}`,
+      `https://financialmodelingprep.com/api/v3/quote-short/${symbols}?apikey=${apiKey}`,
       { signal: AbortSignal.timeout(5000) }
     )
     if (r.ok) {
@@ -35,7 +38,40 @@ async function fetchMarketSnapshot() {
       snap.crude  = get('CL=F')
       snap.btc    = get('BTCUSD')
     }
-  } catch (e) { console.warn('Snapshot failed:', e.message) }
+  } catch (e) { console.warn('Price snapshot failed:', e.message) }
+
+  // Latest market news (last 6 hours)
+  try {
+    const r = await fetch(
+      `https://financialmodelingprep.com/api/v3/stock_news?limit=10&apikey=${apiKey}`,
+      { signal: AbortSignal.timeout(5000) }
+    )
+    if (r.ok) {
+      const data = await r.json()
+      const cutoff = Date.now() - 6 * 60 * 60 * 1000
+      snap.news = (Array.isArray(data) ? data : [])
+        .filter(n => new Date(n.publishedDate).getTime() > cutoff)
+        .slice(0, 6)
+        .map(n => n.title)
+    }
+  } catch (e) { console.warn('News fetch failed:', e.message) }
+
+  // Today's economic calendar (high/medium impact events)
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const r = await fetch(
+      `https://financialmodelingprep.com/api/v3/economic_calendar?from=${today}&to=${today}&apikey=${apiKey}`,
+      { signal: AbortSignal.timeout(5000) }
+    )
+    if (r.ok) {
+      const data = await r.json()
+      snap.calendar = (Array.isArray(data) ? data : [])
+        .filter(e => e.impact === 'High' || e.impact === 'Medium')
+        .slice(0, 5)
+        .map(e => `${e.event}${e.actual != null ? ` (actual: ${e.actual}, est: ${e.estimate})` : ''}`)
+    }
+  } catch (e) { console.warn('Calendar fetch failed:', e.message) }
+
   return snap
 }
 
@@ -43,20 +79,31 @@ function buildPrompt(snap, now) {
   const fmt = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
   const dayStr  = now.toLocaleDateString('en-US',  { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
   const timeStr = now.toLocaleTimeString('en-US',  { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' })
-  return `You are a senior options trader writing the morning market brief for OptionsEdgeFlow. Today is ${dayStr}, ${timeStr} ET.
+
+  const newsSection = snap.news && snap.news.length > 0
+    ? `\nBREAKING / RECENT NEWS (last 6 hours):\n${snap.news.map((h, i) => `${i+1}. ${h}`).join('\n')}`
+    : '\nNEWS: No recent headlines available.'
+
+  const calSection = snap.calendar && snap.calendar.length > 0
+    ? `\nTODAY\'S ECONOMIC EVENTS (high/medium impact):\n${snap.calendar.map((e, i) => `${i+1}. ${e}`).join('\n')}`
+    : '\nECONOMIC CALENDAR: No high-impact events scheduled today.'
+
+  return `You are a senior options trader writing a market readout for OptionsEdgeFlow. Today is ${dayStr}, ${timeStr} ET.
 
 LIVE MARKET DATA:
 S&P 500: ${fmt(snap.sp500)} | Nasdaq: ${fmt(snap.nasdaq)} | Dow: ${fmt(snap.dow)}
 VIX: ${fmt(snap.vix)} | DXY: ${fmt(snap.dxy)} | Crude: ${fmt(snap.crude)} | BTC: ${fmt(snap.btc)}
+${newsSection}
+${calSection}
 
-Write a market readout for options traders. Be direct and action-oriented. Help the trader decide: lean long, reduce risk, or stay defensive.
+Using the live data and news above, write an accurate market readout for options traders. Base your events and analysis on what is ACTUALLY happening today per the headlines — do not invent events. Be direct and action-oriented. Help the trader decide: lean long, reduce risk, or stay defensive.
 
 Return ONLY valid JSON with no markdown, no backticks:
 {
-  "tone": "2-3 descriptors e.g. Risk-off / Yield-driven / Defensive",
-  "why": "One sentence max 20 words on the biggest market driver",
-  "events": ["2-4 key events today max 12 words each"],
-  "levels": ["2-3 key price levels with context"],
+  "tone": "2-3 descriptors e.g. Risk-off / Geopolitical tension / Defensive",
+  "why": "One sentence max 20 words on the biggest market driver right now",
+  "events": ["2-4 actual events/catalysts from today's news, max 12 words each"],
+  "levels": ["2-3 key price levels with context based on current prices"],
   "bias": "Bullish OR Neutral OR Bearish",
   "risk_trigger": "One catalyst that would flip the bias max 15 words"
 }`
