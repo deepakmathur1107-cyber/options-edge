@@ -2784,7 +2784,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {isAdmin&&(<>
 
                     {/* Feedback Viewer */}
-                    <Card style={{marginBottom:12}}>
+                    <Card C={C} style={{marginBottom:12}}>
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                         <Lbl C={C} color={C.purple}>💬 USER FEEDBACK</Lbl>
                         <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{
@@ -2826,7 +2826,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </Card>
 
                     {/* Telegram Bot */}
-                    <Card style={{marginBottom:12}}>
+                    <Card C={C} style={{marginBottom:12}}>
                       <Lbl C={C} color={C.blue}>📱 TELEGRAM BOT</Lbl>
                       <div style={{display:'grid',gap:8,marginBottom:10}}>
                         <Field C={C} label="Bot Token" value={tgToken} onChange={setTgToken} placeholder="7123456789:AAFxxx" type="password"/>
@@ -2856,7 +2856,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   ═══════════════════════════════════════════════ */}
 
                   {/* Alert Preferences */}
-                  <Card style={{marginBottom:12}}>
+                  <Card C={C} style={{marginBottom:12}}>
                     <Lbl C={C} color={C.green}>🔔 ALERT PREFERENCES</Lbl>
 
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:alertPrefs.email_alerts?10:14}}>
@@ -2950,7 +2950,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
 
                                     {/* Display */}
-                  <Card style={{marginBottom:12}}>
+                  <Card C={C} style={{marginBottom:12}}>
                     <Lbl C={C} color={C.dim}>🎨 DISPLAY</Lbl>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                       <div>
@@ -2967,7 +2967,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
 
                   {/* Feedback */}
-                  <Card style={{marginBottom:12}}>
+                  <Card C={C} style={{marginBottom:12}}>
                     <Lbl C={C} color={C.purple}>💬 SHARE FEEDBACK</Lbl>
                     <div style={{fontSize:12,color:C.dim,marginBottom:12,lineHeight:1.5}}>
                       Help us improve OptionsEdgeFlow. Bug reports, feature ideas, or just tell us what you love.
@@ -3013,7 +3013,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   </Card>
 
                   {/* Account */}
-                  <Card style={{marginBottom:12}}>
+                  <Card C={C} style={{marginBottom:12}}>
                     <Lbl C={C} color={C.dim}>👤 ACCOUNT</Lbl>
                     {userEmail&&<div style={{fontSize:11,color:C.subtext,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{userEmail}</div>}
                     <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
