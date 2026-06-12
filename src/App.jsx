@@ -2296,56 +2296,81 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
                 <div style={{marginBottom:10}}>
-                  <div style={{fontSize:9,letterSpacing:1.5,color:C.dim,marginBottom:6,fontWeight:600}}>ALERTS THIS SESSION</div>
+                  {/* Table header */}
+                  <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28}}>DTE</span>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:90}}>CONVICTION</span>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28,textAlign:'center'}}>GRADE</span>
+                    <span style={{fontSize:8,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
+                    <span style={{width:14}}/>
+                  </div>
                   {alertHistory.map((al,i)=>{
                     const isSelected = selectedAlert===i
                     const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
+                    const grade = al.score>=80?'A':al.score>=65?'B':'C'
                     return (
                       <div key={i}>
+                        {/* Row */}
                         <div className="hv" onClick={()=>setSelectedAlert(isSelected?null:i)} style={{
                           display:'flex',alignItems:'center',gap:8,
-                          padding:'8px 10px',borderRadius:6,marginBottom:2,cursor:'pointer',
+                          padding:'8px 10px',
+                          borderRadius:isSelected?'6px 6px 0 0':6,
+                          marginBottom:isSelected?0:2,
+                          cursor:'pointer',
                           background:isSelected?`${scoreCol}12`:C.bgDeep,
                           border:`1px solid ${isSelected?scoreCol:C.border}`,
+                          borderLeft:`3px solid ${scoreCol}`,
                           transition:'all .15s',
                         }}>
-                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scoreCol,letterSpacing:1.5,minWidth:52}}>${al.ticker}</span>
-                          <span style={{fontSize:10,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:scoreCol,fontWeight:700}}>{al.score}%</span>
-                          <span style={{fontSize:9,color:C.dim}}>{al.alertedAt}</span>
-                          <span style={{fontSize:9,color:C.dim,marginLeft:2}}>{isSelected?'▲':'▼'}</span>
+                          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:scoreCol,letterSpacing:1.5,width:52}}>${al.ticker}</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:C.dim,width:28}}>{al.dte||'—'}D</span>
+                          <div style={{width:90,display:'flex',alignItems:'center',gap:4}}>
+                            <div style={{flex:1,height:3,background:C.border,borderRadius:2,overflow:'hidden'}}>
+                              <div style={{height:'100%',width:`${al.score||0}%`,background:`linear-gradient(90deg,${scoreCol}80,${scoreCol})`,borderRadius:2}}/>
+                            </div>
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:scoreCol,fontWeight:700,width:22,textAlign:'right'}}>{al.score}</span>
+                          </div>
+                          <div style={{width:28,textAlign:'center'}}>
+                            <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:3,padding:'1px 5px',color:scoreCol,fontWeight:700,fontSize:10}}>{grade}</span>
+                          </div>
+                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
+                          <span style={{fontSize:9,color:C.dim,width:14,textAlign:'center'}}>{isSelected?'▲':'▼'}</span>
                         </div>
+                        {/* Expanded detail */}
                         {isSelected&&(
-                          <div style={{background:C.bgDeep,border:`1px solid ${scoreCol}40`,borderRadius:6,padding:'12px 14px',marginBottom:6,borderTopLeftRadius:0,borderTopRightRadius:0}}>
-                            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
+                          <div style={{background:C.bgDeep,border:`1px solid ${scoreCol}40`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'12px 14px',marginBottom:4}}>
+                            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:10}}>
                               {[
                                 {l:'ENTRY',  v:al.entry},
                                 {l:'TARGET', v:al.target},
                                 {l:'STOP',   v:al.stop},
                                 {l:'STRIKE', v:al.strikeStr},
                                 {l:'EXPIRY', v:al.expiryDisplay||al.expiry||'—'},
-                                {l:'MID',    v:al.mid||'—'},
+                                {l:'IV',     v:al.iv?`${(al.iv*100).toFixed(0)}%`:'—'},
                               ].map(({l,v})=>(
                                 <div key={l}>
-                                  <div style={{fontSize:8,color:C.dim,letterSpacing:1,marginBottom:2}}>{l}</div>
+                                  <div style={{fontSize:8,color:C.dim,letterSpacing:1,marginBottom:3}}>{l}</div>
                                   <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.text,fontWeight:600}}>{v||'—'}</div>
                                 </div>
                               ))}
                             </div>
-                            {al.dte&&<div style={{fontSize:9,color:C.dim,marginBottom:8}}>{al.dte} DTE · {al.tfLabel||''}</div>}
+                            {al.tfLabel&&<div style={{fontSize:9,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
                             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                               <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
                                 background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
-                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
+                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>{alertCopied?'✅ COPIED':'📋 COPY'}</button>
                               <button className="hv" onClick={()=>pushToJournal(al)} style={{
                                 background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
-                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
+                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>📋 PAPER TRADE</button>
                               <button className="hv" onClick={()=>pushToAlert(al)} style={{
                                 background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
-                                padding:'5px 10px',borderRadius:3,fontSize:9,cursor:'pointer',fontWeight:700
-                              }}>→ ALERT</button>
+                                padding:'6px 12px',borderRadius:4,fontSize:9,cursor:'pointer',fontWeight:700,letterSpacing:0.5
+                              }}>⚡ SET ALERT</button>
                             </div>
                           </div>
                         )}
