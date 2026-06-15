@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import AppNav from './components/AppNav'
 import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
+import TweetShare from './components/TweetShare'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {

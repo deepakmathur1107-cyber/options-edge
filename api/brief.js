@@ -1,25 +1,26 @@
 /**
  * api/brief.js
- * GET  /api/brief              — serve cached morning brief
- * GET  /api/brief?news=1       — return latest Finnhub headlines
- * GET  /api/brief?ticker=NFLX  — S&R levels + AI ticker brief (scan detail)
- * POST /api/brief              — generate fresh brief (cron or admin trigger)
+ * GET  /api/brief          — serve cached brief (auto-regenerates if ≥2hrs old, 7am-4pm CT)
+ * GET  /api/brief?news=1   — return latest Finnhub headlines (for ticker strip, no auth)
+ * POST /api/brief          — generate fresh brief (cron or admin trigger via x-cron-secret)
+ * POST /api/brief?action=tweet — generate X tweet for a setup (admin only)
  *
- * Generation: Tradier prices + Finnhub news → single Claude call
+ * Generation: Tradier prices + Finnhub news → single Claude call, no tool loop
  * Cron: "0 13 * * 1-5" (8 AM ET / 7 AM CT daily)
+ * Auto-refresh: server regenerates on GET if brief is ≥2hrs old between 7am–4pm CT
  */
 
-const { createClient }          = require('@supabase/supabase-js')
-const { getAuth }               = require('./_lib/auth')
+const { createClient }    = require('@supabase/supabase-js')
+const { getAuth }         = require('./_lib/auth')
 const { isTradingDay, tzParts } = require('./_lib/marketCalendar')
 const { fetchMarketData, fetchNews } = require('./_lib/newsData')
-const { getSRLevels }           = require('./_lib/srLevels')
-const { getTickerBrief }        = require('./_lib/tickerBrief')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
+
+const ADMIN_CLERK_ID = 'user_3EYMA65Nxj9g1WnfYXQ01xMk9hF'
 
 // ── Is it within the active brief window? (7am–4pm CT, trading days) ────────
 function inBriefWindow(now) {
@@ -41,8 +42,8 @@ function buildPrompt(prices, news, calendar, now) {
 
   const spyDir   = prices.spyChange > 0 ? `+${prices.spyChange?.toFixed(2)}%` : `${prices.spyChange?.toFixed(2)}%`
   const qqqDir   = prices.qqqChange > 0 ? `+${prices.qqqChange?.toFixed(2)}%` : `${prices.qqqChange?.toFixed(2)}%`
-  const sessionLabel = prices.session === 'pre'    ? ' [PREMARKET]'
-                     : prices.session === 'after'   ? ' [AFTER HOURS]'
+  const sessionLabel = prices.session === 'pre'   ? ' [PREMARKET]'
+                     : prices.session === 'after'  ? ' [AFTER HOURS]'
                      : prices.session === 'regular' ? ' [MARKET OPEN]'
                      : ' [MARKET CLOSED]'
 
@@ -79,10 +80,12 @@ Respond with ONLY a JSON object. Nothing before {. Nothing after }. No markdown.
 async function generateAndStore(now) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
 
+  // Fetch prices + news in parallel
   const { prices, news, calendar } = await fetchMarketData()
   console.log(`[brief] prices: SPY=${prices.spy} QQQ=${prices.qqq} VIXY=${prices.vixy}`)
   console.log(`[brief] news items: ${news.length}, calendar items: ${calendar.length}`)
 
+  // Single Claude call — no tool loop, no multi-turn, no whitespace issues
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -107,6 +110,7 @@ async function generateAndStore(now) {
   const rawText   = (textBlock?.text || '').trim()
   console.log('[brief] Claude response preview:', rawText.slice(0, 150))
 
+  // Extract JSON — handle any surrounding prose
   const jsonMatch = rawText.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error(`No JSON in response: ${rawText.slice(0, 200)}`)
 
@@ -118,6 +122,7 @@ async function generateAndStore(now) {
     if (!brief[f]) throw new Error(`Missing field: ${f}`)
   }
 
+  // Store in Supabase — delete old, insert fresh
   const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
   await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
   const { error } = await supabase.from('morning_brief').insert({
@@ -144,6 +149,57 @@ function sameDay(isoA, isoB) {
   return fmt(isoA) === fmt(isoB)
 }
 
+// ── Tweet generation (admin only) ───────────────────────────────────────────
+async function generateTweet(setup) {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
+
+  const prompt = `You are a copywriter for OptionsEdgeFlow, a premium options trading scanner at optionsedgeflow.com.
+
+Write a single tweet (max 260 chars including the URL) about this options setup that:
+1. Opens with a punchy hook — make it feel like a real trader spotted something
+2. Shows 2-3 key stats inline (ticker, setup type, edge score, DTE, or IV rank — pick the most compelling)
+3. Ends with a subtle tease that makes people want to see more, with the URL: optionsedgeflow.com
+4. Includes 4-6 relevant hashtags on a new line at the end
+
+Trade details:
+- Ticker: ${setup.ticker}
+- Setup: ${setup.setup || setup.strategy || 'Options Spread'}
+- Edge Score: ${setup.edgeScore || setup.edge_score}%
+- DTE: ${setup.dte} days
+- IV Rank: ${setup.ivRank || setup.iv_rank || 'N/A'}
+- Direction: ${setup.direction || 'Neutral'}
+- Profit Target: ${setup.profitTarget || setup.profit_target || '80'}%
+
+Rules:
+- Max 2 emojis
+- Sound like a sharp trader, not a bot
+- Never say "I" or "we" — write in 3rd person or impersonally
+- Return ONLY the tweet text, nothing else`
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages:   [{ role: 'user', content: prompt }],
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Claude error: ${err?.error?.message || res.status}`)
+  }
+
+  const data      = await res.json()
+  const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
+  return (textBlock?.text || '').trim()
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin',  '*')
@@ -157,42 +213,25 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ news: headlines })
   }
 
-  // ── GET ?ticker=NFLX — S&R levels + AI ticker brief for scan detail ────────
-  if (req.method === 'GET' && req.query.ticker) {
+  // ── POST ?action=tweet — generate X tweet for a setup (admin only) ─────────
+  if (req.method === 'POST' && req.query.action === 'tweet') {
     const { clerkId } = await getAuth(req)
-    if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
-
-    const ticker    = (req.query.ticker || '').toUpperCase().trim()
-    const price     = parseFloat(req.query.price    || 0)
-    const chgPct    = parseFloat(req.query.chgPct   || 0)
-    const iv        = parseFloat(req.query.iv        || 0)
-    const dte       = parseInt(req.query.dte         || 30)
-    const score     = parseInt(req.query.score       || 50)
-    const tradeType = req.query.tradeType || 'Call'
-
-    if (!ticker) return res.status(400).json({ error: 'Missing ticker' })
-
-    const result = {}
-    try {
-      result.sr = await getSRLevels(ticker)
-    } catch (e) {
-      console.warn('[brief] SR failed:', e.message)
-      result.sr = null
+    if (!clerkId || clerkId !== ADMIN_CLERK_ID) {
+      return res.status(401).json({ error: 'Admin only' })
     }
-    try {
-      result.brief = await getTickerBrief({
-        ticker, price, chgPct, iv, dte, score, tradeType,
-        s1:       result.sr?.s1,
-        r1:       result.sr?.r1,
-        ma200:    result.sr?.ma200,
-        ma50:     result.sr?.ma50,
-        position: result.sr?.position,
-      })
-    } catch (e) {
-      console.warn('[brief] ticker brief failed:', e.message)
-      result.brief = null
+
+    const { setup } = req.body || {}
+    if (!setup || !setup.ticker) {
+      return res.status(400).json({ error: 'Missing setup' })
     }
-    return res.status(200).json(result)
+
+    try {
+      const tweet = await generateTweet(setup)
+      return res.status(200).json({ tweet })
+    } catch (e) {
+      console.error('[brief] Tweet generation failed:', e.message)
+      return res.status(500).json({ error: e.message })
+    }
   }
 
   // ── POST — cron or admin force-generate ───────────────────────────────────
@@ -234,9 +273,11 @@ module.exports = async function handler(req, res) {
     const now        = new Date()
     const isOldBrief = !data || !sameDay(data.generated_at, now.toISOString())
 
+    // No brief today — regenerate if in window, else 404
     if (!data || isOldBrief) {
       if (!inBriefWindow(now)) {
         if (!data) return res.status(404).json({ error: 'No brief yet', notGenerated: true })
+        // Serve yesterday's brief after hours rather than 404
         return res.status(200).json({
           brief:        { tone: data.tone, why: data.why, events: data.events, levels: data.levels, bias: data.bias, risk_trigger: data.risk_trigger },
           generatedAt:  data.generated_at,
@@ -251,9 +292,11 @@ module.exports = async function handler(req, res) {
       } catch (e) {
         console.error('[brief] On-demand generation failed:', e.message)
         if (!data) return res.status(500).json({ error: e.message })
+        // Fall through — serve yesterday's if generation fails
       }
     }
 
+    // Brief exists for today — check 2hr auto-refresh window
     if (inBriefWindow(now)) {
       const ageMs    = now.getTime() - new Date(data.generated_at).getTime()
       const twoHours = 2 * 60 * 60 * 1000
@@ -264,10 +307,12 @@ module.exports = async function handler(req, res) {
           return res.status(200).json({ brief: result.brief, generatedAt: result.generatedAt, isOldBrief: false, justRefreshed: true })
         } catch (e) {
           console.error('[brief] Auto-refresh failed, serving cached:', e.message)
+          // Fall through — serve cached rather than error
         }
       }
     }
 
+    // Serve cached brief
     return res.status(200).json({
       brief:        { tone: data.tone, why: data.why, events: data.events, levels: data.levels, bias: data.bias, risk_trigger: data.risk_trigger },
       generatedAt:  data.generated_at,
