@@ -1612,21 +1612,31 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
   // Push a scan result directly into the journal as a paper trade
   const pushToJournal = async r => {
-    const ticker = r.ticker||r.sym||''
+    const ticker = (r.ticker||r.sym||'').toUpperCase()
+    // Clean mid price — strip $ prefix, keep numeric string
+    const rawMid   = r.mid||r.entry||''
+    const cleanMid = String(rawMid).replace(/[^0-9.]/g,'')
+    // Clean strike — strip $ and option letter suffix e.g. "$290C" → "290"
+    const rawStrike   = r.strikeStr||r.strike||''
+    const cleanStrike = String(rawStrike).replace(/[^0-9.]/g,'')
+    // Option type — extract from tradeType e.g. "Long Call" → "Call", "Bull Call Spread" → "Call Spread"
+    const rawType  = r.tradeType||''
+    const optType  = rawType.replace(/^(Long|Short|Bull|Bear)\s*/i,'').trim() || 'Call'
+    const score    = r.score||r.edgeScore||''
     const t = {
       id:               Date.now()+'',
       ticker,
-      type:             r.tradeType||'Call',
+      type:             optType,
       status:           'Open',
-      entry:            r.mid||r.entry||'',
+      entry:            cleanMid,
       exitPrice:        '',
       pnl:              '',
       contracts:        '1',
       expiry:           r.expiryDisplay||'',
-      strike:           r.strikeStr||'',
+      strike:           cleanStrike,
       date:             new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
-      notes:            `Paper trade · ${r.score||r.edgeScore||''}% conviction · ${r.tfLabel||''}`,
-      conviction:       String(r.score||r.edgeScore||''),
+      notes:            `Paper trade · ${score}% conviction · ${r.tfLabel||''}`,
+      conviction:       String(score),
       iv:               r.ivPct ? String(r.ivPct)
                     : r.ivRaw ? String((r.ivRaw*100).toFixed(1))
                     : r.iv   ? String((parseFloat(r.iv)*100).toFixed(1))
@@ -1636,11 +1646,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
     }
-    // Optimistic UI update
-    setTrades(p=>[t,...p])
-    setTab('trades')
     setPaperToast(`⏳ Saving ${ticker}…`)
-    // Persist to Supabase via API
+    // Persist to Supabase first, then update UI
     try {
       const token = await getAuthToken().catch(()=>null)
       const res = await fetch('/api/user/trades', {
@@ -1648,16 +1655,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         headers: { 'Content-Type':'application/json', ...(token?{Authorization:`Bearer ${token}`}:{}) },
         body: JSON.stringify({
           ticker,
-          type:             t.type,
+          type:             optType,
           action:           'buy',
-          entry:            t.entry,
-          entry_price:      parseFloat(t.entry)||null,
+          entry:            cleanMid,
+          entry_price:      parseFloat(cleanMid)||null,
           expiry:           t.expiry,
-          strike:           t.strike,
+          strike:           cleanStrike,
           contracts:        '1',
           status:           'Open',
           notes:            t.notes,
-          conviction:       t.conviction,
+          conviction:       String(score),
           grade:            t.grade,
           chgPctAtEntry:    t.chgPctAtEntry,
           breakevenReqPct:  t.breakevenReqPct,
@@ -1666,9 +1673,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const data = await res.json()
       if (!res.ok) {
         setPaperToast(`❌ ${data.error || 'Save failed'}`)
-      } else {
-        setPaperToast(`✅ ${ticker} saved to Trade Log`)
+        setTimeout(()=>setPaperToast(''), 4000)
+        return
       }
+      // Only navigate after successful save — use saved record from API if available
+      setTrades(p=>[t,...p])
+      setTab('trades')
+      setPaperToast(`✅ ${ticker} saved to Trade Log`)
     } catch(e) {
       setPaperToast(`❌ Save failed — check connection`)
     }
