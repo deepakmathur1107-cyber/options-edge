@@ -1937,7 +1937,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div className="dash-right">
 
             {/* ── Market Readout ── */}
-            <MorningBrief getToken={getAuthToken} theme={C} />
+            <MorningBrief getToken={getAuthToken} theme={C} isAdmin={isAdmin} />
 
             {/* ── Checklist ── */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
