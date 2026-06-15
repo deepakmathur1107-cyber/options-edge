@@ -1,7 +1,5 @@
 import { useState } from "react";
 
-const ADMIN_CLERK_ID = "user_3EYMA65Nxj9g1WnfYXQ01xMk9hF";
-
 async function generateTweet(setup) {
   const res = await fetch("/api/brief?action=tweet", {
     method: "POST",
@@ -13,7 +11,7 @@ async function generateTweet(setup) {
   return data.tweet;
 }
 
-export default function TweetShare({ setup, userId }) {
+export default function TweetShare({ setup, isAdmin }) {
   const [open, setOpen]     = useState(false);
   const [tweet, setTweet]   = useState("");
   const [loading, setLoading] = useState(false);
@@ -21,7 +19,7 @@ export default function TweetShare({ setup, userId }) {
   const [copied, setCopied] = useState(false);
 
   // Guard: admin only + 90%+ edge score only
-  if (userId !== ADMIN_CLERK_ID) return null;
+  if (!isAdmin) return null;
   const edgeScore = setup.edgeScore || setup.edge_score || 0;
   if (edgeScore < 90) return null;
 
