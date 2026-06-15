@@ -18,7 +18,6 @@ const ls = (key, fallback = '') => {
   try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
 }
 
-// ── Clerk appearance ──────────────────────────────────────────────────────────
 const clerkAppearance = {
   variables: {
     colorBackground:      '#0d1117',
@@ -73,8 +72,6 @@ const clerkAppearance = {
     },
   },
 }
-
-// ── Pure UI components — defined OUTSIDE AuthShell so React never recreates them ──
 
 function LoadingScreen({ C, message }) {
   return (
@@ -183,8 +180,6 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
   )
 }
 
-// ── SubscriptionGate — defined OUTSIDE AuthShell ──────────────────────────────
-// Receives all state as props. Never redefined on re-render = no flicker.
 function SubscriptionGate({ children, isSignedIn, subStatus, isActive, C, startTrial, checkoutLoading, paywallErr, handleSignOut }) {
   if (!isSignedIn) return <Navigate to="/sign-in" replace />
   if (subStatus === null) return <LoadingScreen C={C} message="CHECKING SUBSCRIPTION..." />
@@ -200,7 +195,6 @@ function SubscriptionGate({ children, isSignedIn, subStatus, isActive, C, startT
   )
 }
 
-// ── Auth shell ────────────────────────────────────────────────────────────────
 function AuthShell() {
   const { getToken, isLoaded, isSignedIn, userId } = useAuth()
   const { user }    = useUser()
@@ -224,10 +218,8 @@ function AuthShell() {
     catch { return null }
   }, [getToken])
 
-  // Fetch subscription status — called on mount and on tab focus
   const fetchSubStatus = useCallback(() => {
     if (!isLoaded || !isSignedIn) { setSubStatus(null); return }
-    // Admin client-side bypass
     if (userId && ADMIN_IDS.includes(userId)) {
       setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
       return
@@ -243,10 +235,8 @@ function AuthShell() {
     })
   }, [isLoaded, isSignedIn, userId, stableGetToken])
 
-  // Check subscription on sign-in
   useEffect(() => { fetchSubStatus() }, [fetchSubStatus])
 
-  // Re-check when user returns to the tab (catches mid-session expiry)
   useEffect(() => {
     const onFocus = () => { if (isSignedIn) fetchSubStatus() }
     window.addEventListener('focus', onFocus)
@@ -316,7 +306,6 @@ function AuthShell() {
     C,
   }
 
-  // Gate props passed to the stable SubscriptionGate component
   const gateProps = {
     isSignedIn,
     subStatus,
@@ -328,7 +317,6 @@ function AuthShell() {
     handleSignOut,
   }
 
-  // ── Shared auth page shell ──────────────────────────────────────────────────
   const AuthShellStyle = {
     minHeight: '100vh',
     display: 'grid',
@@ -337,7 +325,6 @@ function AuthShell() {
     fontFamily: "'Inter', sans-serif",
   }
 
-  // Left panel — branding + value props (hidden on mobile via CSS)
   const AuthLeft = (
     <div style={{
       background: 'linear-gradient(160deg, #0a1a0f 0%, #090e14 60%)',
@@ -348,7 +335,6 @@ function AuthShell() {
       justifyContent: 'space-between',
       overflow: 'hidden',
     }} className="auth-left">
-      {/* Logo */}
       <div>
         <a href="/" style={{ textDecoration: 'none' }}>
           <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#00ff88', letterSpacing: 4, marginBottom: 4 }}>OPTIONS EDGE</div>
@@ -356,7 +342,6 @@ function AuthShell() {
         </a>
       </div>
 
-      {/* Hero text */}
       <div>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00c8ff', letterSpacing: 2, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#00ff88', boxShadow: '0 0 8px #00ff88' }} />
@@ -374,7 +359,6 @@ function AuthShell() {
         </div>
       </div>
 
-      {/* Mini scanner mockup */}
       <div style={{ background: '#060c14', border: '1px solid #1a2e3e', borderRadius: 8, overflow: 'hidden', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
         <div style={{ background: '#0a1520', borderBottom: '1px solid #1a2e3e', padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ color: '#2a4a5a', letterSpacing: 1 }}>AUTO SCANNER</span>
@@ -402,7 +386,6 @@ function AuthShell() {
         <div style={{ padding: '6px 12px', color: '#1a3040', fontSize: 9, letterSpacing: 1 }}>GEX + OI + VOLUME SCORING · NOT FINANCIAL ADVICE</div>
       </div>
 
-      {/* Social proof line */}
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#1a3040', lineHeight: 2 }}>
         7-day free trial · $19/month · Cancel anytime
       </div>
@@ -470,7 +453,6 @@ function AuthShell() {
         isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
       } />
     </Routes>
-  )
     </>
   )
 }
