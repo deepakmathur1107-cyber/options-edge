@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-async function generateTweet(setup, getToken) {
+async function generateTweets(setup, getToken) {
   const token = getToken ? await getToken().catch(() => null) : null;
   const res = await fetch("/api/brief?action=tweet", {
     method: "POST",
@@ -11,31 +11,33 @@ async function generateTweet(setup, getToken) {
     body: JSON.stringify({ setup }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Failed to generate tweet");
-  return data.tweet;
+  if (!res.ok) throw new Error(data.error || "Failed to generate tweets");
+  return data.tweets; // array of {angle, tweet}
 }
 
 export default function TweetShare({ setup, isAdmin, getToken }) {
-  const [open, setOpen]     = useState(false);
-  const [tweet, setTweet]   = useState("");
+  const [open, setOpen]       = useState(false);
+  const [variants, setVariants] = useState([]);
+  const [selected, setSelected] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState("");
-  const [copied, setCopied] = useState(false);
+  const [error, setError]     = useState("");
+  const [copied, setCopied]   = useState(false);
 
-  // Guard: admin only + 90%+ edge score only
   if (!isAdmin) return null;
-  const edgeScore = setup.edgeScore || setup.edge_score || 0;
+  const edgeScore = setup.edgeScore || setup.edge_score || setup.score || 0;
   if (edgeScore < 90) return null;
 
   async function handleOpen() {
     setOpen(true);
-    setTweet("");
+    setVariants([]);
+    setSelected(0);
     setError("");
     setLoading(true);
     try {
-      setTweet(await generateTweet(setup, getToken));
+      const v = await generateTweets(setup, getToken);
+      setVariants(v || []);
     } catch (e) {
-      setError(e.message || "Failed to generate tweet");
+      setError(e.message || "Failed to generate tweets");
     } finally {
       setLoading(false);
     }
@@ -43,31 +45,35 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
 
   function handleClose() {
     setOpen(false);
-    setTweet("");
+    setVariants([]);
     setError("");
     setCopied(false);
   }
 
   async function handleRegenerate() {
-    setTweet("");
+    setVariants([]);
     setError("");
+    setSelected(0);
     setLoading(true);
     try {
-      setTweet(await generateTweet(setup, getToken));
+      const v = await generateTweets(setup, getToken);
+      setVariants(v || []);
     } catch (e) {
-      setError(e.message || "Failed to generate tweet");
+      setError(e.message || "Failed to generate tweets");
     } finally {
       setLoading(false);
     }
   }
 
   async function handleCopy() {
+    const tweet = variants[selected]?.tweet || "";
     await navigator.clipboard.writeText(tweet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   function handlePostToX() {
+    const tweet = variants[selected]?.tweet || "";
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`,
       "_blank",
@@ -75,8 +81,9 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
     );
   }
 
-  const charCount = tweet.length;
-  const overLimit = charCount > 280;
+  const activeTweet = variants[selected]?.tweet || "";
+  const charCount   = activeTweet.length;
+  const overLimit   = charCount > 280;
 
   return (
     <>
@@ -95,6 +102,7 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
           fontWeight: 500,
           cursor: "pointer",
           transition: "background 0.15s",
+          whiteSpace: "nowrap",
         }}
         onMouseEnter={e => e.currentTarget.style.background = "#1d9bf015"}
         onMouseLeave={e => e.currentTarget.style.background = "transparent"}
@@ -108,7 +116,7 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
           onClick={handleClose}
           style={{
             position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.75)",
+            background: "rgba(0,0,0,0.8)",
             zIndex: 1000,
             display: "flex", alignItems: "center", justifyContent: "center",
             padding: "16px",
@@ -120,14 +128,16 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
               background: "#161b22",
               border: "1px solid #30363d",
               borderRadius: "12px",
-              padding: "28px",
-              width: "100%", maxWidth: "520px",
+              padding: "24px",
+              width: "100%", maxWidth: "620px",
+              maxHeight: "90vh",
+              overflowY: "auto",
               fontFamily: "Inter, sans-serif",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
             }}
           >
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 <XIcon size={18} color="#1d9bf0" />
                 <span style={{ color: "#e6edf3", fontSize: "15px", fontWeight: 600 }}>Share on X</span>
@@ -137,108 +147,135 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
                   borderRadius: "4px", fontWeight: 700, letterSpacing: "0.05em",
                 }}>ADMIN</span>
               </div>
-              <button onClick={handleClose} style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: "20px", padding: "2px 6px" }}>×</button>
+              <button onClick={handleClose} style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: "22px", lineHeight: 1, padding: "2px 8px" }}>×</button>
             </div>
 
             {/* Setup pill */}
             <div style={{
               display: "inline-flex", alignItems: "center", gap: "8px",
-              padding: "6px 12px",
+              padding: "5px 12px",
               background: "#0d1117", border: "1px solid #30363d", borderRadius: "6px",
-              marginBottom: "16px",
+              marginBottom: "20px", flexWrap: "wrap",
             }}>
               <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px", fontWeight: 600 }}>{setup.ticker}</span>
               <span style={{ color: "#8b949e" }}>·</span>
-              <span style={{ color: "#e6edf3", fontSize: "12px" }}>{setup.setup || setup.strategy || "Options Spread"}</span>
+              <span style={{ color: "#e6edf3", fontSize: "12px" }}>{setup.setup || setup.strategy || setup.tradeType || "Options Spread"}</span>
               <span style={{ color: "#8b949e" }}>·</span>
               <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "12px" }}>{edgeScore}% edge</span>
             </div>
 
-            {/* Tweet textarea / loading / error */}
-            <div style={{ marginBottom: "12px" }}>
-              {loading ? (
-                <div style={{
-                  minHeight: "140px", display: "flex", flexDirection: "column",
-                  alignItems: "center", justifyContent: "center", gap: "12px",
-                  background: "#0d1117", border: "1px solid #30363d", borderRadius: "8px",
-                }}>
-                  <Spinner />
-                  <span style={{ color: "#8b949e", fontSize: "13px" }}>Generating tweet…</span>
-                </div>
-              ) : error ? (
-                <div style={{
-                  minHeight: "80px", display: "flex", alignItems: "center", justifyContent: "center",
-                  background: "#ff000010", border: "1px solid #ff000040", borderRadius: "8px",
-                  color: "#ff7b7b", fontSize: "13px", padding: "16px", textAlign: "center",
-                }}>
-                  {error}
-                </div>
-              ) : (
-                <textarea
-                  value={tweet}
-                  onChange={e => setTweet(e.target.value)}
-                  style={{
-                    width: "100%", minHeight: "140px",
-                    background: "#0d1117",
-                    border: `1px solid ${overLimit ? "#ff000060" : "#30363d"}`,
-                    borderRadius: "8px",
-                    color: "#e6edf3", fontSize: "14px", lineHeight: "1.6",
-                    padding: "14px", resize: "vertical",
-                    fontFamily: "Inter, sans-serif",
-                    outline: "none", boxSizing: "border-box",
-                  }}
-                  placeholder="Tweet will appear here…"
-                />
-              )}
-            </div>
-
-            {/* Char count + regenerate */}
-            {!loading && !error && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-                <button onClick={handleRegenerate} style={{
-                  background: "none", border: "none", color: "#8b949e",
-                  fontSize: "12px", cursor: "pointer", padding: 0,
-                }}>
-                  ↻ Regenerate
-                </button>
-                <span style={{
-                  fontFamily: "IBM Plex Mono, monospace", fontSize: "12px",
-                  color: overLimit ? "#ff7b7b" : charCount > 250 ? "#f0a500" : "#8b949e",
-                }}>
-                  {charCount}/280
-                </span>
+            {/* Loading */}
+            {loading && (
+              <div style={{
+                display: "flex", flexDirection: "column", alignItems: "center",
+                justifyContent: "center", gap: "14px", padding: "48px 0",
+              }}>
+                <Spinner />
+                <span style={{ color: "#8b949e", fontSize: "13px" }}>Generating 6 angles…</span>
               </div>
             )}
 
-            {/* Actions */}
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button onClick={handleCopy} disabled={!tweet || loading} style={{
-                flex: 1, padding: "10px",
-                background: "transparent", border: "1px solid #30363d", borderRadius: "7px",
-                color: copied ? "#00ff88" : "#8b949e",
-                fontSize: "13px", fontWeight: 500,
-                cursor: tweet && !loading ? "pointer" : "not-allowed",
-                fontFamily: "Inter, sans-serif",
+            {/* Error */}
+            {!loading && error && (
+              <div style={{
+                padding: "16px", background: "#ff000010",
+                border: "1px solid #ff000040", borderRadius: "8px",
+                color: "#ff7b7b", fontSize: "13px", textAlign: "center", marginBottom: "16px",
               }}>
-                {copied ? "✓ Copied" : "Copy"}
-              </button>
-              <button onClick={handlePostToX} disabled={!tweet || loading || overLimit} style={{
-                flex: 2, padding: "10px",
-                background: tweet && !loading && !overLimit ? "#1d9bf0" : "#1d9bf040",
-                border: "none", borderRadius: "7px",
-                color: tweet && !loading && !overLimit ? "#fff" : "#ffffff60",
-                fontSize: "13px", fontWeight: 600,
-                cursor: tweet && !loading && !overLimit ? "pointer" : "not-allowed",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "7px",
-                fontFamily: "Inter, sans-serif",
-              }}>
-                <XIcon size={13} color="currentColor" /> Post to X
-              </button>
-            </div>
+                {error}
+              </div>
+            )}
 
-            <p style={{ color: "#8b949e", fontSize: "11px", textAlign: "center", marginTop: "14px", marginBottom: 0 }}>
-              Opens X in a new window — you confirm before anything posts.
-            </p>
+            {/* 6 angle cards */}
+            {!loading && variants.length > 0 && (
+              <>
+                <div style={{ marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ color: "#8b949e", fontSize: "12px" }}>Pick an angle — click to select, then post</span>
+                  <button onClick={handleRegenerate} style={{
+                    background: "none", border: "none", color: "#8b949e",
+                    fontSize: "12px", cursor: "pointer", padding: 0,
+                  }}>↻ Regenerate all</button>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
+                  {variants.map((v, i) => {
+                    const isActive = selected === i;
+                    const chars = v.tweet.length;
+                    const over = chars > 280;
+                    return (
+                      <div
+                        key={i}
+                        onClick={() => setSelected(i)}
+                        style={{
+                          border: `1px solid ${isActive ? "#1d9bf0" : "#30363d"}`,
+                          borderRadius: "8px",
+                          padding: "12px 14px",
+                          background: isActive ? "#1d9bf008" : "#0d1117",
+                          cursor: "pointer",
+                          transition: "all 0.12s",
+                          position: "relative",
+                        }}
+                      >
+                        {/* Angle label + char count */}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                          <span style={{
+                            fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
+                            color: isActive ? "#1d9bf0" : "#8b949e",
+                            textTransform: "uppercase",
+                          }}>
+                            {isActive ? "✓ " : ""}{v.angle}
+                          </span>
+                          <span style={{
+                            fontFamily: "IBM Plex Mono, monospace", fontSize: "10px",
+                            color: over ? "#ff7b7b" : chars > 250 ? "#f0a500" : "#8b949e",
+                          }}>{chars}/280</span>
+                        </div>
+                        {/* Tweet text */}
+                        <p style={{
+                          margin: 0,
+                          fontSize: "13px",
+                          lineHeight: "1.55",
+                          color: isActive ? "#e6edf3" : "#8b949e",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                        }}>
+                          {v.tweet}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button onClick={handleCopy} style={{
+                    flex: 1, padding: "10px",
+                    background: "transparent", border: "1px solid #30363d", borderRadius: "7px",
+                    color: copied ? "#00ff88" : "#8b949e",
+                    fontSize: "13px", fontWeight: 500, cursor: "pointer",
+                    fontFamily: "Inter, sans-serif",
+                  }}>
+                    {copied ? "✓ Copied" : "Copy"}
+                  </button>
+                  <button onClick={handlePostToX} disabled={overLimit} style={{
+                    flex: 2, padding: "10px",
+                    background: overLimit ? "#1d9bf040" : "#1d9bf0",
+                    border: "none", borderRadius: "7px",
+                    color: overLimit ? "#ffffff60" : "#fff",
+                    fontSize: "13px", fontWeight: 600,
+                    cursor: overLimit ? "not-allowed" : "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: "7px",
+                    fontFamily: "Inter, sans-serif",
+                  }}>
+                    <XIcon size={13} color="currentColor" /> Post to X
+                  </button>
+                </div>
+
+                <p style={{ color: "#8b949e", fontSize: "11px", textAlign: "center", marginTop: "12px", marginBottom: 0 }}>
+                  Opens X in a new window — you confirm before anything posts.
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -259,7 +296,7 @@ function Spinner() {
     <>
       <style>{`@keyframes oef-spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{
-        width: "24px", height: "24px",
+        width: "28px", height: "28px",
         border: "2px solid #30363d", borderTopColor: "#1d9bf0",
         borderRadius: "50%",
         animation: "oef-spin 0.7s linear infinite",

@@ -148,7 +148,7 @@ function sameDay(isoA, isoB) {
   return fmt(isoA) === fmt(isoB)
 }
 
-// ── Tweet generation (admin only) ───────────────────────────────────────────
+// ── Tweet generation (admin only) — returns 6 angle variants ────────────────
 async function generateTweet(setup) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
 
@@ -162,35 +162,43 @@ async function generateTweet(setup) {
   const strike   = setup.strikeStr || setup.strike || ''
   const expiry   = setup.expiryDisplay || setup.expiry || ''
   const mid      = setup.mid || ''
+  const entry    = setup.entry || ''
 
-  const prompt = `You write tweets for @OptionsEdgeFlow. The account shares real scanner results — not hype, not generic content. It sounds like a trader who actually uses the tool, not a marketer.
+  const prompt = `You write tweets for @OptionsEdgeFlow — real scanner results, trader voice, zero marketing speak.
 
 THE SETUP:
 ${ticker} | ${setup_}${strike ? ' ' + strike : ''}${expiry ? ' exp ' + expiry : ''}
-Edge Score: ${score}% | DTE: ${dte}${iv ? ' | IV: ' + iv + '%' : ''}${mid ? ' | Mid: $' + mid : ''}
+Edge Score: ${score}% | DTE: ${dte}${iv ? ' | IV: ' + iv + '%' : ''}${mid ? ' | Mid: $' + mid : ''}${entry ? ' | Entry: ' + entry : ''}
 Profit target: ${target}%
 
-WRITE ONE TWEET. Structure:
-Line 1: A specific observation about THIS setup — not generic ("91% edge on ${ticker}" is lazy). Lead with what's interesting: the IV, the DTE timing, the risk/reward, why this ticker right now.
-Line 2: 1-2 hard numbers that make a trader stop scrolling. Dollar amounts, percentages, days — be specific.
-Line 3: optionsedgeflow.com (just the URL, no filler text before it)
-Line 4: 4-5 hashtags
+Write 6 tweets — one per angle below. Each tweet must:
+- Be under 280 chars total
+- End with optionsedgeflow.com on its own line
+- End with 4-5 hashtags on the last line (always include #${ticker} and #OptionsTrading)
+- Max 1 emoji per tweet, only if it adds meaning. Never use 📊
+- Sound like a trader, not a marketer. Never say "Discover", "Check out", "Real edge, real money"
 
-GOOD EXAMPLES (study the voice, don't copy):
-"${ticker} IV compressed to ${iv || 40}% with ${dte} days left — textbook window for a defined-risk play before it pops. Scanner flagged it at ${score}%. optionsedgeflow.com #OptionsTrading #${ticker} #IVCrush #SwingTrade"
+ANGLE 1 — ALMOST MISSED IT: Make it feel like the scanner caught something a human would have overlooked. Imply the opportunity is quiet, not obvious.
 
-"${dte}-day window, ${score}% conviction, ${target}% profit target. ${ticker} setup that took 3 seconds to find. optionsedgeflow.com #OptionsFlow #${ticker} #Spreads"
+ANGLE 2 — HARD MATH: Lead with cold specific numbers — dollar amounts from the entry/target/stop, risk vs reward ratio. Let the math speak. No adjectives.
 
-BAD (never write like this):
-- "${ticker} just hit a neutral spread setup with ${score}% edge score." (boring, sounds automated)
-- "Real edge, real money" (cringe marketing speak)
-- Any sentence starting with "Discover" or "Check out"
-- Emojis used as decoration rather than meaning
+ANGLE 3 — MARKET CONTEXT: Tie the setup to what's happening broadly with ${ticker} or its sector right now. Make it feel timely, not evergreen.
 
-RULES:
-- Max 1 emoji, only if it adds meaning (📉 for bearish, 🎯 for precision — not 📊 ever)
-- Under 280 chars total
-- Return ONLY the tweet, nothing else, no explanation`
+ANGLE 4 — THE CONTRAST: Most traders are guessing. This setup has a score. Create the tension between noise and signal without being preachy.
+
+ANGLE 5 — THE PROCESS: Show what the scanner actually evaluated to surface this — IV, DTE, delta, spread width. Make the methodology feel rigorous and repeatable.
+
+ANGLE 6 — WHAT PROS LOOK FOR: Educational hook. Break down 2-3 things this setup has going for it that experienced traders recognize instantly.
+
+Respond with ONLY a JSON array of 6 objects. No markdown. No explanation. Nothing before [ or after ].
+[
+  {"angle": "Almost Missed It", "tweet": "..."},
+  {"angle": "Hard Math", "tweet": "..."},
+  {"angle": "Market Context", "tweet": "..."},
+  {"angle": "The Contrast", "tweet": "..."},
+  {"angle": "The Process", "tweet": "..."},
+  {"angle": "What Pros Look For", "tweet": "..."}
+]`
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -201,7 +209,7 @@ RULES:
     },
     body: JSON.stringify({
       model:      'claude-haiku-4-5-20251001',
-      max_tokens: 400,
+      max_tokens: 1200,
       messages:   [{ role: 'user', content: prompt }],
     }),
   })
@@ -213,7 +221,15 @@ RULES:
 
   const data      = await res.json()
   const textBlock = (data.content || []).filter(b => b.type === 'text').pop()
-  return (textBlock?.text || '').trim()
+  const raw       = (textBlock?.text || '').trim()
+
+  const match = raw.match(/\[[\s\S]*\]/)
+  if (!match) throw new Error('No JSON array in response')
+  try {
+    return JSON.parse(match[0]) // returns array of {angle, tweet}
+  } catch(e) {
+    throw new Error('Failed to parse tweet variants')
+  }
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -242,8 +258,8 @@ module.exports = async function handler(req, res) {
     }
 
     try {
-      const tweet = await generateTweet(setup)
-      return res.status(200).json({ tweet })
+      const tweets = await generateTweet(setup)
+      return res.status(200).json({ tweets })
     } catch (e) {
       console.error('[brief] Tweet generation failed:', e.message)
       return res.status(500).json({ error: e.message })
