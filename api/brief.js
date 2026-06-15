@@ -152,28 +152,45 @@ function sameDay(isoA, isoB) {
 async function generateTweet(setup) {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set')
 
-  const prompt = `You are a copywriter for OptionsEdgeFlow, a premium options trading scanner at optionsedgeflow.com.
+  const ticker   = setup.ticker
+  const setup_   = setup.setup || setup.strategy || setup.tradeType || 'Options Spread'
+  const score    = setup.edgeScore || setup.edge_score || setup.score
+  const dte      = setup.dte
+  const ivRaw    = setup.ivRank || setup.iv_rank || setup.iv
+  const iv       = ivRaw ? (ivRaw < 2 ? Math.round(ivRaw * 100) : Math.round(ivRaw)) : null
+  const target   = setup.profitTarget || setup.profit_target || 80
+  const strike   = setup.strikeStr || setup.strike || ''
+  const expiry   = setup.expiryDisplay || setup.expiry || ''
+  const mid      = setup.mid || ''
 
-Write a single tweet (max 260 chars including the URL) about this options setup that:
-1. Opens with a punchy hook — make it feel like a real trader spotted something
-2. Shows 2-3 key stats inline (ticker, setup type, edge score, DTE, or IV rank — pick the most compelling)
-3. Ends with a subtle tease that makes people want to see more, with the URL: optionsedgeflow.com
-4. Includes 4-6 relevant hashtags on a new line at the end
+  const prompt = `You write tweets for @OptionsEdgeFlow. The account shares real scanner results — not hype, not generic content. It sounds like a trader who actually uses the tool, not a marketer.
 
-Trade details:
-- Ticker: ${setup.ticker}
-- Setup: ${setup.setup || setup.strategy || 'Options Spread'}
-- Edge Score: ${setup.edgeScore || setup.edge_score}%
-- DTE: ${setup.dte} days
-- IV Rank: ${setup.ivRank || setup.iv_rank || 'N/A'}
-- Direction: ${setup.direction || 'Neutral'}
-- Profit Target: ${setup.profitTarget || setup.profit_target || '80'}%
+THE SETUP:
+${ticker} | ${setup_}${strike ? ' ' + strike : ''}${expiry ? ' exp ' + expiry : ''}
+Edge Score: ${score}% | DTE: ${dte}${iv ? ' | IV: ' + iv + '%' : ''}${mid ? ' | Mid: $' + mid : ''}
+Profit target: ${target}%
 
-Rules:
-- Max 2 emojis
-- Sound like a sharp trader, not a bot
-- Never say "I" or "we" — write in 3rd person or impersonally
-- Return ONLY the tweet text, nothing else`
+WRITE ONE TWEET. Structure:
+Line 1: A specific observation about THIS setup — not generic ("91% edge on ${ticker}" is lazy). Lead with what's interesting: the IV, the DTE timing, the risk/reward, why this ticker right now.
+Line 2: 1-2 hard numbers that make a trader stop scrolling. Dollar amounts, percentages, days — be specific.
+Line 3: optionsedgeflow.com (just the URL, no filler text before it)
+Line 4: 4-5 hashtags
+
+GOOD EXAMPLES (study the voice, don't copy):
+"${ticker} IV compressed to ${iv || 40}% with ${dte} days left — textbook window for a defined-risk play before it pops. Scanner flagged it at ${score}%. optionsedgeflow.com #OptionsTrading #${ticker} #IVCrush #SwingTrade"
+
+"${dte}-day window, ${score}% conviction, ${target}% profit target. ${ticker} setup that took 3 seconds to find. optionsedgeflow.com #OptionsFlow #${ticker} #Spreads"
+
+BAD (never write like this):
+- "${ticker} just hit a neutral spread setup with ${score}% edge score." (boring, sounds automated)
+- "Real edge, real money" (cringe marketing speak)
+- Any sentence starting with "Discover" or "Check out"
+- Emojis used as decoration rather than meaning
+
+RULES:
+- Max 1 emoji, only if it adds meaning (📉 for bearish, 🎯 for precision — not 📊 ever)
+- Under 280 chars total
+- Return ONLY the tweet, nothing else, no explanation`
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
