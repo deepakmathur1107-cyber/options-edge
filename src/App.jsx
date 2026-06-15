@@ -1924,7 +1924,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <span>Stp: <span style={{color:C.red}}>{al.stop}</span></span>
                     </div>
                     <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                      <span style={{fontSize:11,color:C.subtext}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv} {'·'} Delta: {al.delta}</span>
+                      <span style={{fontSize:11,color:C.subtext}}>Exp: {al.expiryDisplay} {'·'} IV: {al.iv ? `${(al.iv*100).toFixed(0)}%` : '—'} {'·'} Delta: {al.delta}</span>
                       {tgToken&&tgChatId&&(
                         <button className="hv" onClick={async()=>{const aTok=await getAuthToken().catch(()=>null);await sendTelegram(buildScanAlert({...al,ticker:al.sym}),tgToken,tgChatId,aTok);setTgStatus('Sent!');setTimeout(()=>setTgStatus(''),3000)}} style={{marginLeft:'auto',background:`${C.blue}18`,border:`1px solid ${C.blue}40`,color:C.blue,padding:'3px 9px',borderRadius:3,fontSize:11,cursor:'pointer'}}>TG</button>
                       )}
@@ -2072,6 +2072,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
                     <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
                     <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
+                    <TweetShare setup={scanResult} userId={user?.id} />
                     {tgToken&&tgChatId&&(
                       <button className="hv" onClick={async()=>{const aTok2=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId,aTok2);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
                     )}
@@ -2439,6 +2440,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>⚡ SET ALERT</button>
+                              <TweetShare setup={{...al, ticker:al.ticker||al.sym, edgeScore:al.score}} userId={user?.id} />
                             </div>
                           </div>
                         )}
