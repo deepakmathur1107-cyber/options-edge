@@ -12,6 +12,7 @@
 
 const { createClient }    = require('@supabase/supabase-js')
 const { getAuth }         = require('./_lib/auth')
+const { isAdminServer }   = require('./_lib/adminBypass')
 const { isTradingDay, tzParts } = require('./_lib/marketCalendar')
 const { fetchMarketData, fetchNews } = require('./_lib/newsData')
 
@@ -19,8 +20,6 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
-
-const ADMIN_CLERK_ID = 'user_3EYMA65Nxj9g1WnfYXQ01xMk9hF'
 
 // ── Is it within the active brief window? (7am–4pm CT, trading days) ────────
 function inBriefWindow(now) {
@@ -216,7 +215,7 @@ module.exports = async function handler(req, res) {
   // ── POST ?action=tweet — generate X tweet for a setup (admin only) ─────────
   if (req.method === 'POST' && req.query.action === 'tweet') {
     const { clerkId } = await getAuth(req)
-    if (!clerkId || clerkId !== ADMIN_CLERK_ID) {
+    if (!clerkId || !isAdminServer(clerkId)) {
       return res.status(401).json({ error: 'Admin only' })
     }
 

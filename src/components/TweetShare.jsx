@@ -1,9 +1,13 @@
 import { useState } from "react";
 
-async function generateTweet(setup) {
+async function generateTweet(setup, getToken) {
+  const token = getToken ? await getToken().catch(() => null) : null;
   const res = await fetch("/api/brief?action=tweet", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ setup }),
   });
   const data = await res.json();
@@ -11,7 +15,7 @@ async function generateTweet(setup) {
   return data.tweet;
 }
 
-export default function TweetShare({ setup, isAdmin }) {
+export default function TweetShare({ setup, isAdmin, getToken }) {
   const [open, setOpen]     = useState(false);
   const [tweet, setTweet]   = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,7 +33,7 @@ export default function TweetShare({ setup, isAdmin }) {
     setError("");
     setLoading(true);
     try {
-      setTweet(await generateTweet(setup));
+      setTweet(await generateTweet(setup, getToken));
     } catch (e) {
       setError(e.message || "Failed to generate tweet");
     } finally {
@@ -49,7 +53,7 @@ export default function TweetShare({ setup, isAdmin }) {
     setError("");
     setLoading(true);
     try {
-      setTweet(await generateTweet(setup));
+      setTweet(await generateTweet(setup, getToken));
     } catch (e) {
       setError(e.message || "Failed to generate tweet");
     } finally {
