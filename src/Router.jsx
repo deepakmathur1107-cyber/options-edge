@@ -479,8 +479,8 @@ export default function Router() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
-      signInFallbackRedirectUrl="/app"
-      signUpFallbackRedirectUrl="/app"
+      signInForceRedirectUrl="/app"
+      signUpForceRedirectUrl="/app"
     >
       <BrowserRouter>
         <AuthShell />
