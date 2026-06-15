@@ -418,7 +418,7 @@ function AuthShell() {
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: '#4a7a8a', letterSpacing: 3, marginBottom: 6 }}>WELCOME BACK</div>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>SIGN IN TO CONTINUE</div>
           </div>
-          <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" fallbackRedirectUrl="/app" />
+          <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" forceRedirectUrl="/app" />
           <div style={{ textAlign: 'center', marginTop: 20 }}>
             <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
           </div>
@@ -436,7 +436,7 @@ function AuthShell() {
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 6 }}>7-DAY FREE TRIAL</div>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>CREATE YOUR ACCOUNT</div>
           </div>
-          <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" fallbackRedirectUrl="/app" />
+          <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" forceRedirectUrl="/app" />
           <div style={{ textAlign: 'center', marginTop: 20 }}>
             <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
           </div>
