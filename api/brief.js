@@ -46,17 +46,24 @@ async function fetchMarketSnapshot() {
 
 // Phase 1 prompt: just research, no JSON
 function buildSearchPrompt(snap, now) {
-  const fmt    = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
-  const dayStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
-  return `You are a market research assistant. Today is ${dayStr}.
+  const fmt     = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
+  const dayStr  = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+  const dateISO = now.toISOString().slice(0, 10)
+  return `You are a market research assistant. Today is ${dayStr} (${dateISO}).
 
-Current prices: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
+Current prices: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO (crude proxy) ${fmt(snap.uso)}
 
-Search the web for:
-1. Top market-moving news headlines today (geopolitics, Fed, earnings, macro)
-2. Any high-impact economic data released today
+IMPORTANT: Note the current price levels. If SPY/QQQ are significantly up or down, that is itself a key signal.
 
-Summarize what you find in 5-8 bullet points. Be factual and specific.`
+Run these searches in order:
+1. "stock market news today ${dateISO}" — what is moving markets RIGHT NOW
+2. "S&P 500 ${dateISO}" — current direction and the main reason
+3. "breaking news geopolitical market ${dateISO}" — wars, ceasefires, trade deals, sanctions affecting markets
+4. "economic data released ${dateISO}" — any data that came out today
+
+CRITICAL PRIORITY RULE: If there is major breaking news (ceasefire, war escalation, trade deal, surprise Fed action), lead with that. Do NOT default to routine economic calendar items if breaking news exists.
+
+Summarize in 5-8 bullet points ranked by market impact. Be specific — name the event and how markets reacted.`
 }
 
 // Phase 2 prompt: JSON generation using research summary
