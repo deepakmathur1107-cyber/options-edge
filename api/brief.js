@@ -46,24 +46,17 @@ async function fetchMarketSnapshot() {
 
 // Phase 1 prompt: just research, no JSON
 function buildSearchPrompt(snap, now) {
-  const fmt     = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
-  const dayStr  = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
-  const dateISO = now.toISOString().slice(0, 10)
-  return `You are a market research assistant. Today is ${dayStr} (${dateISO}).
+  const fmt    = (v, suffix = '') => v != null ? `${v}${suffix}` : 'N/A'
+  const dayStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+  return `You are a market research assistant. Today is ${dayStr}.
 
-Current prices: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO (crude proxy) ${fmt(snap.uso)}
+Current prices: SPY ${fmt(snap.spy)} | QQQ ${fmt(snap.qqq)} | VIX proxy ${fmt(snap.vix)} | USO ${fmt(snap.uso)}
 
-IMPORTANT: Note the current price levels. If SPY/QQQ are significantly up or down, that is itself a key signal.
+Search the web for:
+1. Top market-moving news headlines today (geopolitics, Fed, earnings, macro)
+2. Any high-impact economic data released today
 
-Run these searches in order:
-1. "stock market news today ${dateISO}" — what is moving markets RIGHT NOW
-2. "S&P 500 ${dateISO}" — current direction and the main reason
-3. "breaking news geopolitical market ${dateISO}" — wars, ceasefires, trade deals, sanctions affecting markets
-4. "economic data released ${dateISO}" — any data that came out today
-
-CRITICAL PRIORITY RULE: If there is major breaking news (ceasefire, war escalation, trade deal, surprise Fed action), lead with that. Do NOT default to routine economic calendar items if breaking news exists.
-
-Summarize in 5-8 bullet points ranked by market impact. Be specific — name the event and how markets reacted.`
+Summarize what you find in 5-8 bullet points. Be factual and specific.`
 }
 
 // Phase 2 prompt: JSON generation using research summary
@@ -123,16 +116,20 @@ async function generateAndStore(now) {
     }
     const d1 = await r1.json()
     console.log(`[brief] search turn ${turn}:`, d1.stop_reason, (d1.content||[]).map(b=>b.type))
-    searchMessages.push({ role: 'assistant', content: d1.content })
+    // Trim trailing whitespace from text blocks — API rejects messages ending with whitespace
+    const cleanContent = (d1.content || []).map(b => {
+      if (b.type === 'text') return { ...b, text: b.text.trimEnd() }
+      return b
+    }).filter(b => b.type !== 'text' || b.text.length > 0)
+
+    searchMessages.push({ role: 'assistant', content: cleanContent })
 
     if (d1.stop_reason === 'end_turn') {
-      // Claude finished researching — collect its summary text
-      const tb = (d1.content || []).filter(b => b.type === 'text').pop()
+      const tb = cleanContent.filter(b => b.type === 'text').pop()
       researchSummary = tb?.text || ''
       break
     }
     if (d1.stop_reason === 'tool_use') {
-      // Feed tool results back so search can complete
       const toolResults = (d1.content || [])
         .filter(b => b.type === 'tool_use')
         .map(b => ({ type: 'tool_result', tool_use_id: b.id, content: 'Search executed.' }))
