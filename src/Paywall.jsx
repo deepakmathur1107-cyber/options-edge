@@ -74,7 +74,7 @@ export default function Paywall() {
 
         {/* Pricing */}
         <div style={{ marginBottom:20 }}>
-          <div style={{ fontFamily:BB, fontSize:40, color:'#c8d8e8', letterSpacing:1 }}>$29<span style={{ fontSize:16, color:'#4a7a8a' }}>/month</span></div>
+          <div style={{ fontFamily:BB, fontSize:40, color:'#c8d8e8', letterSpacing:1 }}>$19<span style={{ fontSize:16, color:'#4a7a8a' }}>/month</span></div>
           <div style={{ fontSize:10, color:'#00ff88', marginTop:4, letterSpacing:1 }}>7-DAY FREE TRIAL INCLUDED</div>
         </div>
 

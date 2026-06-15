@@ -26,7 +26,7 @@ const FEATURES = [
 const FAQS = [
   { q:'Do I need a brokerage account?',         a:'No. Options Edge provides trade ideas and analytics. You execute through your own broker — TD Ameritrade, IBKR, Tastytrade, etc.' },
   { q:'Where does the market data come from?',  a:'Live options chain data via Tradier API — real bid/ask, Greeks, open interest, and volume on every scan.' },
-  { q:'What happens after the free trial?',     a:"You're charged $29/month after 7 days. Cancel anytime before then and you won't be charged. Your journal data is always preserved." },
+  { q:'What happens after the free trial?',     a:"You're charged $19/month after 7 days. Cancel anytime before then and you won't be charged. Your journal data is always preserved." },
   { q:'Is this financial advice?',              a:'No. Options Edge is an analytical tool. All setups are generated algorithmically. You are solely responsible for your trading decisions.' },
   { q:'What makes this different from a screener?', a:"Screeners show you what moved. Options Edge scores why a specific contract makes sense right now — then blocks the trades that look good but historically lose." },
 ]
@@ -317,7 +317,7 @@ export default function Landing() {
             { value:'8',   label:'Symbols Scanned',  suffix:'' },
             { value:'6',   label:'Hard-Block Filters',suffix:'' },
             { value:'21',  label:'Ideal DTE Window',  suffix:'–35' },
-            { value:'$29', label:'Per Month',         suffix:'' },
+            { value:'$19', label:'Per Month',         suffix:'' },
           ].map((s,i) => (
             <div key={i} style={{ textAlign:'center' }}>
               <div style={{ fontFamily:BB, fontSize:38, color:'#00ff88', letterSpacing:2, lineHeight:1 }}>
@@ -407,7 +407,7 @@ export default function Landing() {
             <div style={{ position:'absolute', top:-13, left:'50%', transform:'translateX(-50%)', background:'#00ff88', color:'#000', fontFamily:BB, fontSize:11, letterSpacing:2, padding:'4px 16px', borderRadius:4, whiteSpace:'nowrap' }}>7-DAY FREE TRIAL</div>
             <div style={{ fontFamily:BB, fontSize:28, color:'#00ff88', letterSpacing:3, marginBottom:4 }}>PRO</div>
             <div style={{ display:'flex', alignItems:'baseline', gap:6, marginBottom:24 }}>
-              <span style={{ fontFamily:BB, fontSize:52, color:'#c8d8e8', lineHeight:1 }}>$29</span>
+              <span style={{ fontFamily:BB, fontSize:52, color:'#c8d8e8', lineHeight:1 }}>$19</span>
               <span style={{ fontFamily:MONO, fontSize:13, color:'#4a7a8a' }}>/month</span>
             </div>
             <div style={{ marginBottom:24 }}>
@@ -464,7 +464,7 @@ export default function Landing() {
           <div style={{ display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }} className="cta-btns">
             <button className="btn-primary" onClick={() => navigate('/sign-up')} style={{ padding:'16px 48px', fontSize:15 }}>START FREE TRIAL →</button>
           </div>
-          <div style={{ fontFamily:MONO, fontSize:10, color:'#1a3040', marginTop:16 }}>$29/month after trial · Cancel anytime</div>
+          <div style={{ fontFamily:MONO, fontSize:10, color:'#1a3040', marginTop:16 }}>$19/month after trial · Cancel anytime</div>
         </div>
       </div>
 

@@ -120,7 +120,7 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
           <div style={{
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 42,
             color: C.text, lineHeight: 1, marginBottom: 4,
-          }}>$29<span style={{ fontSize: 16, color: C.dim }}>/mo</span></div>
+          }}>$19<span style={{ fontSize: 16, color: C.dim }}>/mo</span></div>
           <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
             Cancel anytime · No charge for 7 days
           </div>
@@ -404,7 +404,7 @@ function AuthShell() {
 
       {/* Social proof line */}
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#1a3040', lineHeight: 2 }}>
-        7-day free trial · $29/month · Cancel anytime
+        7-day free trial · $19/month · Cancel anytime
       </div>
     </div>
   )
