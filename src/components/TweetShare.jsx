@@ -31,17 +31,14 @@ Rules:
 }
 
 async function generateTweet(setup) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/tweet-generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: buildPrompt(setup) }],
-    }),
+    body: JSON.stringify({ setup }),
   });
   const data = await response.json();
-  return data.content?.find((b) => b.type === "text")?.text?.trim() || "";
+  if (!data.tweet) throw new Error("No tweet returned");
+  return data.tweet;
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
