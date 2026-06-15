@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import AppNav from './components/AppNav'
+import AdminDashboard from './components/AdminDashboard'
 import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
@@ -2512,6 +2513,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         )}
 
                 {/* journal tab removed — see /app/trades */}
+        {tab==='admin' && isAdmin && <AdminDashboard getToken={getAuthToken} />}
 
       </div>
 

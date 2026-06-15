@@ -140,6 +140,14 @@ export default function AppNav({
                 style={topTab(showTools)}>
                 ⚙&nbsp;TOOLS
               </button>
+
+              {isAdmin && (
+                <button className="oe-navbtn oe-toptab"
+                  onClick={() => setTab('admin')}
+                  style={{...topTab(tab === 'admin'), color: tab === 'admin' ? '#000' : '#00ff88', borderColor: '#00ff8840'}}>
+                  ★&nbsp;ADMIN
+                </button>
+              )}
             </div>
           )}
 
@@ -250,12 +258,13 @@ export default function AppNav({
         boxShadow: '0 -2px 12px rgba(0,0,0,.08)',
       }}>
         {isMainApp ? (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)' }}>
+          <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 5 : 4},1fr)` }}>
             {[
               { id:'dash',   icon:'◈', label:'DASH'   },
               { id:'scan',   icon:'⌁', label:'SCAN'   },
               { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
               { id:'tools',  icon:'⚙', label:'TOOLS'  },
+              ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),
             ].map(t => {
               const active = t.id === 'tools' ? showTools : tab === t.id
               const col    = active ? C.green : C.dim

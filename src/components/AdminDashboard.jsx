@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useAuth } from '@clerk/clerk-react';
 
 const FEATURE_COLORS = ['#1D9E75', '#378ADD', '#BA7517', '#D4537E', '#7F77DD'];
 
@@ -98,30 +97,20 @@ function SignupChart({ data }) {
     if (!data?.length || !canvasRef.current) return;
     let Chart = window.Chart;
     if (!Chart) return;
-
     if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
-
     const labels = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
       labels.push(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
     }
-
     chartRef.current = new Chart(canvasRef.current, {
       type: 'bar',
       data: {
         labels,
-        datasets: [{
-          label: 'Signups',
-          data,
-          backgroundColor: '#1D9E75',
-          borderRadius: 3,
-          borderSkipped: false,
-        }],
+        datasets: [{ label: 'Signups', data, backgroundColor: '#1D9E75', borderRadius: 3, borderSkipped: false }],
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
           x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 7, color: '#8b949e' } },
@@ -139,8 +128,8 @@ function SignupChart({ data }) {
   );
 }
 
-export default function AdminDashboard() {
-  const { getToken } = useAuth();
+export default function AdminDashboard({ getToken }) {
+  const resolvedGetToken = getToken || (async () => null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -158,9 +147,9 @@ export default function AdminDashboard() {
   const loadMetrics = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const token = await getToken();
+      const token = await resolvedGetToken();
       const res = await fetch('/api/admin/metrics', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
@@ -171,7 +160,7 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [getToken]);
+  }, []);
 
   useEffect(() => { loadMetrics(); }, [loadMetrics]);
 
@@ -208,7 +197,6 @@ export default function AdminDashboard() {
   return (
     <div style={{ padding: '1.5rem', fontFamily: 'Inter, sans-serif', color: '#e6edf3', maxWidth: 960, margin: '0 auto' }}>
 
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#3fb950', animation: 'pulse-dot 2s infinite' }} />
@@ -227,7 +215,6 @@ export default function AdminDashboard() {
       </div>
       {lastUpdated && <div style={{ fontSize: 11, color: '#8b949e', marginBottom: '1rem' }}>Last updated: {lastUpdated}</div>}
 
-      {/* Users KPIs */}
       <div style={sectionLabel}>Users</div>
       <div style={grid4}>
         <MetricCard label="Total users" value={data?.totalUsers} sub="all time" />
@@ -238,7 +225,6 @@ export default function AdminDashboard() {
         <MetricCard label="Conversion rate" value={conv !== null ? `${conv}%` : null} sub="trial → paid" subVariant={conv > 30 ? 'up' : conv < 15 ? 'down' : null} />
       </div>
 
-      {/* Revenue KPIs */}
       <div style={sectionLabel}>Revenue</div>
       <div style={grid4}>
         <MetricCard label="MRR" value={mrr !== null ? `$${mrr.toLocaleString()}` : null} sub="monthly recurring" />
@@ -246,7 +232,6 @@ export default function AdminDashboard() {
         <MetricCard label="Trials expiring" value={data?.expiringTrials} sub="next 48 hours" subVariant={data?.expiringTrials > 0 ? 'down' : null} />
       </div>
 
-      {/* Feature usage + System status */}
       <div style={sectionLabel}>App health</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div style={card}>
@@ -259,13 +244,11 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Signup trend */}
       <div style={sectionLabel}>Signup trend (last 14 days)</div>
       <div style={card}>
         {chartJsReady && data?.signupsByDay ? <SignupChart data={data.signupsByDay} /> : <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e', fontSize: 13 }}>Loading chart…</div>}
       </div>
 
-      {/* Recent signups */}
       <div style={sectionLabel}>Recent signups</div>
       <div style={card}>
         <RecentUsers users={data?.recentUsers} />
