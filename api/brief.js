@@ -8,7 +8,7 @@ const { createClient } = require('@supabase/supabase-js')
 const { getSRLevels }    = require('./_lib/srLevels')
 const { getTickerBrief } = require('./_lib/tickerBrief')
 const { getAuth }        = require('./_lib/auth')
-const { isTradingDay, isMarketHours } = require('./_lib/marketCalendar')
+const { isTradingDay, isMarketHours, tzParts } = require('./_lib/marketCalendar')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -292,13 +292,17 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // Intraday refresh: ?refresh=1, market open, brief older than 2 hours
-    if (wantsRefresh && isMarketHours(now)) {
+    // Intraday refresh: on every GET, 7am-4pm CT on trading days, if brief ≥2hrs old
+    // Using 7am CT (not 9:30am ET market open) so morning loads get fresh content
+    const ctParts  = tzParts(now, 'America/Chicago')
+    const ctMins   = parseInt(ctParts.hour, 10) * 60 + parseInt(ctParts.minute, 10)
+    const inWindow = isTradingDay(now) && ctMins >= 7 * 60 && ctMins < 16 * 60
+    if (inWindow) {
       const ageMs    = now.getTime() - new Date(data.generated_at).getTime()
       const twoHours = 2 * 60 * 60 * 1000
       if (ageMs >= twoHours) {
         try {
-          console.log(`Brief is ${Math.round(ageMs / 60000)}min old — intraday refresh`)
+          console.log(`Brief is ${Math.round(ageMs / 60000)}min old — auto-refreshing`)
           const result = await generateAndStore(now)
           return res.status(200).json({ brief: result.brief, generatedAt: result.generatedAt, isOldBrief: false, justRefreshed: true })
         } catch (e) {

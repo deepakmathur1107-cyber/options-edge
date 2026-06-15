@@ -69,4 +69,4 @@ function isMarketHours(date) {
   return mins >= 9 * 60 + 30 && mins < 16 * 60
 }
 
-module.exports = { isTradingDay, isMarketHours, getHolidays }
+module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts }

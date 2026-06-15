@@ -70,7 +70,7 @@ export default function MorningBrief({ getToken, theme }) {
   const [isOldBrief,    setIsOldBrief]    = useState(false)
   const [justRefreshed, setJustRefreshed] = useState(false)
   const [marketSt,      setMarketSt]      = useState(() => getMarketStatus())
-  const refreshTimerRef = useRef(null)
+
   const flashTimerRef   = useRef(null)
 
   useEffect(() => {
@@ -102,12 +102,7 @@ export default function MorningBrief({ getToken, theme }) {
 
   useEffect(() => { load(false) }, [load])
 
-  useEffect(() => {
-    refreshTimerRef.current = setInterval(() => {
-      if (getMarketStatus().open) load(true)
-    }, 30 * 60_000)
-    return () => clearInterval(refreshTimerRef.current)
-  }, [load])
+  // No client polling needed — server auto-refreshes on every GET if brief is ≥2hrs old
 
   useEffect(() => () => clearTimeout(flashTimerRef.current), [])
 
