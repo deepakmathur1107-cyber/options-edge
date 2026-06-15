@@ -13,14 +13,9 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Extract Clerk user ID from JWT via Clerk's public key verification
-  // Simpler: just check the raw token against ADMIN_CLERK_IDS via a Clerk API call,
-  // OR accept a simpler secret header for admin endpoints
+  // Decode Clerk JWT to get user ID
   const authHeader = req.headers.authorization || '';
   const token = authHeader.replace('Bearer ', '').trim();
-
-  // Decode JWT payload (no verification needed — Clerk verifies on their side;
-  // we just need the sub claim to check against our admin list)
   let userId = null;
   try {
     const payload = token.split('.')[1];
@@ -28,9 +23,7 @@ module.exports = async (req, res) => {
       const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
       userId = decoded.sub || null;
     }
-  } catch (e) {
-    // token malformed
-  }
+  } catch (e) {}
 
   if (!isAdminServer(userId)) {
     return res.status(403).json({ error: 'Admin access required' });
@@ -38,43 +31,86 @@ module.exports = async (req, res) => {
 
   try {
     const now = new Date();
-    const startOfToday = new Date(now); startOfToday.setHours(0, 0, 0, 0);
-    const startOfWeek  = new Date(now); startOfWeek.setDate(now.getDate() - 7);
+    const startOfToday  = new Date(now); startOfToday.setHours(0, 0, 0, 0);
+    const startOfWeek   = new Date(now); startOfWeek.setDate(now.getDate() - 7);
     const startOf14Days = new Date(now); startOf14Days.setDate(now.getDate() - 13); startOf14Days.setHours(0, 0, 0, 0);
-    const trialExpiryCutoff = new Date(now); trialExpiryCutoff.setHours(now.getHours() + 48);
+    const in48Hours     = new Date(now); in48Hours.setHours(now.getHours() + 48);
 
-    const [allSubsResult, activeTodayResult, newThisWeekResult, expiringResult, signupTrendResult, recentUsersResult, featureUsageResult] = await Promise.all([
-      supabase.from('subscriptions').select('status, plan, created_at, trial_end'),
-      supabase.from('subscriptions').select('user_id').gte('last_seen', startOfToday.toISOString()),
-      supabase.from('subscriptions').select('user_id').gte('created_at', startOfWeek.toISOString()),
-      supabase.from('subscriptions').select('user_id, trial_end').eq('status', 'trialing').lte('trial_end', trialExpiryCutoff.toISOString()).gte('trial_end', now.toISOString()),
-      supabase.from('subscriptions').select('created_at').gte('created_at', startOf14Days.toISOString()).order('created_at', { ascending: true }),
-      supabase.from('subscriptions').select('email, status, trial_end, created_at').order('created_at', { ascending: false }).limit(8),
-      supabase.from('feature_usage').select('feature, user_id').limit(5000),
-    ]);
+    // All subscriptions — source of truth
+    const { data: allSubs, error: subsErr } = await supabase
+      .from('subscriptions')
+      .select('clerk_id, status, plan, created_at, current_period_end')
+      .order('created_at', { ascending: false });
 
-    const allSubs    = allSubsResult.data || [];
-    const totalUsers = allSubs.length;
-    const paidUsers  = allSubs.filter(s => s.status === 'active').length;
-    const trialUsers = allSubs.filter(s => s.status === 'trialing').length;
-    const activeToday   = (activeTodayResult.data || []).length;
-    const newThisWeek   = (newThisWeekResult.data || []).length;
-    const expiringTrials = (expiringResult.data || []).length;
+    if (subsErr) return res.status(500).json({ error: subsErr.message });
 
-    const signupsByDay = buildSignupTrend(signupTrendResult.data || [], startOf14Days);
-    const recentUsers  = (recentUsersResult.data || []).map(u => ({
-      initials: getInitials(u.email),
-      name:     u.email,
-      plan:     u.status === 'active' ? 'paid' : u.status === 'trialing' ? 'trial' : 'free',
-      daysLeft: u.trial_end ? Math.max(0, Math.ceil((new Date(u.trial_end) - now) / (1000 * 60 * 60 * 24))) : null,
-    }));
-    const features = buildFeatureUsage(featureUsageResult.data || [], totalUsers);
+    const subs = allSubs || [];
+    const totalUsers  = subs.length;
+    const paidUsers   = subs.filter(s => s.status === 'active').length;
+    const trialUsers  = subs.filter(s => s.status === 'trialing').length;
+    const newThisWeek = subs.filter(s => new Date(s.created_at) >= startOfWeek).length;
+
+    // Trials expiring in next 48h
+    const expiringTrials = subs.filter(s =>
+      s.status === 'trialing' &&
+      s.current_period_end &&
+      new Date(s.current_period_end) >= now &&
+      new Date(s.current_period_end) <= in48Hours
+    ).length;
+
+    // Signup trend — last 14 days
+    const signupsByDay = buildSignupTrend(
+      subs.filter(s => new Date(s.created_at) >= startOf14Days),
+      startOf14Days
+    );
+
+    // Get emails from alert_prefs (optional — graceful fallback)
+    const clerkIds = subs.map(s => s.clerk_id).filter(Boolean);
+    const { data: prefs } = await supabase
+      .from('alert_prefs')
+      .select('clerk_user_id, alert_email')
+      .in('clerk_user_id', clerkIds);
+
+    const emailMap = {};
+    (prefs || []).forEach(p => { if (p.alert_email) emailMap[p.clerk_user_id] = p.alert_email; });
+
+    // Recent signups (last 8)
+    const recentUsers = subs.slice(0, 8).map(s => {
+      const email = emailMap[s.clerk_id] || s.clerk_id?.slice(0, 16) + '…';
+      const daysLeft = s.current_period_end
+        ? Math.max(0, Math.ceil((new Date(s.current_period_end) - now) / (1000 * 60 * 60 * 24)))
+        : null;
+      return {
+        initials: getInitials(email),
+        name:     email,
+        plan:     s.status === 'active' ? 'paid' : s.status === 'trialing' ? 'trial' : 'free',
+        daysLeft,
+      };
+    });
+
+    // Feature usage — graceful if table doesn't exist
+    let features = defaultFeatures();
+    try {
+      const { data: fuRows } = await supabase
+        .from('feature_usage')
+        .select('feature, clerk_user_id')
+        .limit(5000);
+      if (fuRows?.length) features = buildFeatureUsage(fuRows, totalUsers);
+    } catch (_) {}
+
+    // active_today — use updated_at as proxy for last seen
+    const activeToday = subs.filter(s =>
+      s.updated_at && new Date(s.updated_at) >= startOfToday
+    ).length;
 
     return res.status(200).json({
-      totalUsers, paidUsers, trialUsers, activeToday, newThisWeek,
-      expiringTrials, signupsByDay, recentUsers, features,
-      systemOk: true, generatedAt: now.toISOString(),
+      totalUsers, paidUsers, trialUsers,
+      activeToday, newThisWeek, expiringTrials,
+      signupsByDay, recentUsers, features,
+      systemOk: true,
+      generatedAt: now.toISOString(),
     });
+
   } catch (err) {
     console.error('[admin/metrics] error:', err);
     return res.status(500).json({ error: 'Failed to load metrics', detail: err.message });
@@ -88,25 +124,37 @@ function buildSignupTrend(rows, startDate) {
     buckets[d.toISOString().slice(0, 10)] = 0;
   }
   for (const row of rows) {
-    const day = row.created_at.slice(0, 10);
+    const day = new Date(row.created_at).toISOString().slice(0, 10);
     if (day in buckets) buckets[day]++;
   }
   return Object.values(buckets);
 }
 
+function defaultFeatures() {
+  return [
+    { name: 'Scanner',       pct: 0 },
+    { name: 'Morning brief', pct: 0 },
+    { name: 'Email alerts',  pct: 0 },
+    { name: 'Trade log',     pct: 0 },
+    { name: 'S&R levels',    pct: 0 },
+  ];
+}
+
 function buildFeatureUsage(rows, totalUsers) {
   const featureNames = ['Scanner', 'Morning brief', 'Email alerts', 'Trade log', 'S&R levels'];
   const featureKeys  = ['scanner', 'morning_brief', 'email_alerts', 'trade_log', 'sr_levels'];
-  if (!rows.length || !totalUsers) return featureNames.map(name => ({ name, pct: 0 }));
+  if (!rows.length || !totalUsers) return defaultFeatures();
   return featureNames.map((name, i) => {
-    const uniqueUsers = new Set(rows.filter(r => r.feature === featureKeys[i]).map(r => r.user_id)).size;
-    return { name, pct: Math.round((uniqueUsers / totalUsers) * 100) };
+    const unique = new Set(rows.filter(r => r.feature === featureKeys[i]).map(r => r.clerk_user_id)).size;
+    return { name, pct: Math.round((unique / totalUsers) * 100) };
   });
 }
 
-function getInitials(email) {
-  if (!email) return '??';
-  const local = email.split('@')[0];
+function getInitials(str) {
+  if (!str) return '??';
+  const local = str.includes('@') ? str.split('@')[0] : str;
   const parts = local.split(/[._-]/);
-  return parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : local.slice(0, 2).toUpperCase();
+  return parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : local.slice(0, 2).toUpperCase();
 }
