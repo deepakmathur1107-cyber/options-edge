@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import AppNav from './components/AppNav'
 import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
@@ -617,6 +617,7 @@ export default function App(props={}) {
 
   // ── auth token from Router (Phase 2) ──
   const getAuthToken = props.getToken || (async () => null)
+  const navigate = useNavigate()
   // Phase 2: admin key is always active — no per-user token required.
   // hasDataAccess = true when admin key is set OR user has a personal token (legacy).
   // Used to gate UI elements that need market data.
@@ -1678,7 +1679,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       }
       // Only navigate after successful save — use saved record from API if available
       setTrades(p=>[t,...p])
-      setTab('trades')
+      navigate('/app/trades')
       setPaperToast(`✅ ${ticker} saved to Trade Log`)
     } catch(e) {
       setPaperToast(`❌ Save failed — check connection`)
