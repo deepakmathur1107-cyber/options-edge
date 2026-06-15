@@ -37,8 +37,12 @@ function buildPrompt(prices, news, calendar, now) {
     hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York'
   })
 
-  const spyDir  = prices.spyChange > 0 ? `+${prices.spyChange?.toFixed(2)}%` : `${prices.spyChange?.toFixed(2)}%`
-  const qqqDir  = prices.qqqChange > 0 ? `+${prices.qqqChange?.toFixed(2)}%` : `${prices.qqqChange?.toFixed(2)}%`
+  const spyDir   = prices.spyChange > 0 ? `+${prices.spyChange?.toFixed(2)}%` : `${prices.spyChange?.toFixed(2)}%`
+  const qqqDir   = prices.qqqChange > 0 ? `+${prices.qqqChange?.toFixed(2)}%` : `${prices.qqqChange?.toFixed(2)}%`
+  const sessionLabel = prices.session === 'pre'   ? ' [PREMARKET]'
+                     : prices.session === 'after'  ? ' [AFTER HOURS]'
+                     : prices.session === 'regular' ? ' [MARKET OPEN]'
+                     : ' [MARKET CLOSED]'
 
   const newsSection = news.length > 0
     ? news.map((n, i) => `${i + 1}. ${n.headline} [${n.source}]`).join('\n')
@@ -51,7 +55,7 @@ function buildPrompt(prices, news, calendar, now) {
   return `You are a senior options trader writing a market readout for OptionsEdgeFlow.
 Today is ${dayStr}, ${timeStr} ET.
 
-LIVE PRICES (Tradier):
+LIVE PRICES (Tradier)${sessionLabel}:
 SPY: ${fmt(prices.spy)} (${spyDir}) | QQQ: ${fmt(prices.qqq)} (${qqqDir}) | VIXY: ${fmt(prices.vixy)} | USO: ${fmt(prices.uso)}
 
 LATEST MARKET NEWS (last 8 hours):
