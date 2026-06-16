@@ -4,6 +4,7 @@ import AppNav from './components/AppNav'
 import AdminDashboard from './components/AdminDashboard'
 import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
+import { computeFlowSignals } from './lib/flowSignals'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -1037,25 +1038,43 @@ useEffect(() => {
       const chgPct=parseFloat(quote.change_percentage||0)
       const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
       const isSpread     = SPREAD_TYPES.includes(scanType)
-      const bearish=scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
-      const optType=bearish?'put':'call'
-      const tradeType=scanType==='Any'?(bearish?'Put':'Call'):scanType
+      // Direction driven by flow signal consensus (4 signals) not just intraday %
+      const flow = computeFlowSignals(chain, price)
+      let bearish, directionSource
+      if (scanType === 'Put' || scanType === 'Put Spread') {
+        bearish = true; directionSource = 'user selected Put'
+      } else if (scanType === 'Call' || scanType === 'Call Spread') {
+        bearish = false; directionSource = 'user selected Call'
+      } else if (flow.consensus >= 3) {
+        bearish = flow.direction === 'put'
+        directionSource = `${flow.consensus}/4 signals ${bearish ? 'bearish' : 'bullish'}`
+      } else if (flow.consensus === 2) {
+        bearish = flow.direction === 'put'
+        directionSource = '2/4 signals — weak consensus'
+      } else {
+        bearish = chgPct < -0.5
+        directionSource = `intraday fallback (${chgPct.toFixed(1)}%)`
+      }
+      const optType    = bearish ? 'put' : 'call'
+      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
+      const isSpread   = SPREAD_TYPES.includes(scanType)
+      dbg(`   ✓ Direction: ${optType.toUpperCase()} via ${directionSource}`)
+      dbg(`   ✓ Flow: ${flow.bullCount}B/${flow.bearCount}Be | sweeps ${flow.callSweeps}C/${flow.putSweeps}P | P/C vol ${flow.pcVolRatio.toFixed(2)}`)
 
-      const step=autoStep(price)
-      const strikePct=bearish?(2-tfCfg.strikePct):tfCfg.strikePct
-      const tgtStrike=Math.round(price*strikePct/step)*step
-      const side=chain.filter(o=>o.option_type===optType)
+      const step       = autoStep(price)
+      const strikePct  = bearish ? (2-tfCfg.strikePct) : tfCfg.strikePct
+      const tgtStrike  = Math.round(price*strikePct/step)*step
+      const side       = chain.filter(o=>o.option_type===optType)
       if (!side.length) throw new Error(`No ${optType} contracts found`)
-      const best=side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
-      const bid=parseFloat(best.bid||0)
-      const ask=parseFloat(best.ask||0)
-      const mid=(bid+ask)/2
+      const best       = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
+      const bid        = parseFloat(best.bid||0)
+      const ask        = parseFloat(best.ask||0)
+      const mid        = (bid+ask)/2
       if (mid===0) throw new Error('Bid/ask both $0 — no liquidity')
-      const iv=best.greeks?.mid_iv||best.implied_volatility||0
-      const delta=best.greeks?.delta||null
-      const theta=best.greeks?.theta||null
-      dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Bid: ${fmtP(bid)} | Ask: ${fmtP(ask)} | Mid: ${fmtP(mid)}`)
-      dbg(`   ✓ IV: ${fmtPct(iv)} | Delta: ${delta?.toFixed(3)||'—'} | Theta: ${theta?.toFixed(3)||'—'}`)
+      const iv         = best.greeks?.mid_iv||best.implied_volatility||0
+      const delta      = best.greeks?.delta||null
+      const theta      = best.greeks?.theta||null
+      dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Mid: ${fmtP(mid)} | IV: ${fmtPct(iv)}`)
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
@@ -1064,16 +1083,9 @@ useEffect(() => {
       const etHour=now.getHours()+(now.getMinutes()/60)
       const isMorningNoise=etHour<10.0
       const isHighIV=iv>0.55&&!isSpread
-
-      // Chasing vs earnings gap distinction:
-      // 2–5% with no catalyst = chasing intraday drift → block
-      // >5% = almost certainly a gap from earnings/news event → allow with context
-      // This is why MDB (+8.8% earnings gap) should score, but MSTR (+3.9% intraday) should not
       const isIntraChasing = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0 && !isSpread
       const isEarningsGap  = Math.abs(chgPct)>5.0 && !isSpread
-      const isChasing      = isIntraChasing  // only the intraday drift case is a hard block
-
-      // Market regime — use esBar/nqBar already in state as directional context
+      const isChasing      = isIntraChasing
       const spxChgToday  = esBar?.chgPct||0
       const ndxChgToday  = nqBar?.chgPct||0
       const marketFalling= spxChgToday<-0.5 && ndxChgToday<-0.5
@@ -1085,127 +1097,137 @@ useEffect(() => {
 
       let score=50; const reasons=[],warnings=[],hardBlocks=[]
 
-      // Hard blocks — cap at 48 regardless of other signals
-      if(isMorningNoise){
-        // No score penalty — a genuinely strong setup is still valid at open.
-        // But surface a clear contextual warning so the user can make an informed call.
-        warnings.push('🔔 MARKET OPEN — First 30 min are volatile. Spreads are wider, volume signals are unreliable, and IV is inflated. If conviction is high, size smaller than normal and use a limit order at mid or better.')
-      }
-      if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
-      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
+      // ── Flow signals scoring (new — 4 independent signals) ────────────────
 
-      // ── Earnings gap handling ────────────────────────────────────────────
-      // >5% gap = earnings/news catalyst, not intraday drift
-      // Score it as strong momentum; warn about premium expansion
-      if(isEarningsGap){
-        const gapOpt = chgPct>0 ? 'call' : 'put'
-        if(optType===gapOpt){
-          score+=15
-          reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
-          warnings.push('⚡ GAP PLAY — Premium is expanded. Size at 50% of normal. Enter on a small pullback or consolidation. Target 50–80% of premium.')
-        } else {
-          score-=20
-          warnings.push(`Trading AGAINST the gap — stock moved ${chgPct.toFixed(1)}% and you are playing the other direction. Very high risk.`)
-        }
-      }
-
-      // ── Market regime scoring ────────────────────────────────────────────
-      if(marketFalling && optType==='call' && !isSpread){
-        score-=12
-        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Calls face drag when index is falling.`)
-      } else if(marketRising && optType==='put' && !isSpread){
-        score-=10
-        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Puts face drag when index is rising.`)
-      } else if(marketRising && optType==='call'){
-        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`)
-      } else if(marketFalling && optType==='put'){
-        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`)
-      }
-
-      // IV environment
-      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
-      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct.toFixed(0)}% — moderate`)}
-      else if(iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
-      else if(iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
-
-      // ── Volume + price coherence ─────────────────────────────────────────────
-      // Key insight: high volume with tiny move = institutional roll/distribution.
-      // Volume only becomes a bullish signal when it ACCOMPANIES significant price action.
-      if(!isMorningNoise){
-        const volPriceCoherent = volRatio>=1.5 && Math.abs(chgPct)>=1.0
-        const volPriceDivergent= volRatio>=3.0 && Math.abs(chgPct)<0.8
-        if(volPriceDivergent){
-          score-=8
-          warnings.push(`Vol ${volRatio.toFixed(1)}x but stock barely moved (${chgPct.toFixed(1)}%) — likely institutional roll or distribution, not directional flow`)
-        } else if(volPriceCoherent){
-          score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent bullish signal`)
-        } else if(volRatio>=1.5){
-          score+=4
-          warnings.push(`Vol ${volRatio.toFixed(1)}x avg but price only ${chgPct.toFixed(1)}% — confirm this is directional before entering`)
-        } else if(volRatio<0.8){
-          score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x — weak conviction`)
+      // Signal 1: Ask-side sweeps (weight 30%) — best proxy for dark pool/institutional flow
+      if (flow.callSweeps + flow.putSweeps >= 10) {
+        if (flow.flowBias === 'bullish' && !bearish) {
+          score += 18; reasons.push(`Bullish sweep flow — ${flow.callSweeps} call buys vs ${flow.putSweeps} put buys`)
+        } else if (flow.flowBias === 'bearish' && bearish) {
+          score += 18; reasons.push(`Bearish sweep flow — ${flow.putSweeps} put buys vs ${flow.callSweeps} call buys`)
+        } else if (flow.flowBias !== 'neutral') {
+          score -= 12; warnings.push(`Flow contradicts direction — ${flow.flowBias} sweeps but taking ${optType}`)
         }
       } else {
-        // Still score the volume but add the open-volatility context
-        if(volRatio>=2.0){score+=8;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
-        warnings.push(`🔔 Market open — volume signals less reliable in first 30 min`)
+        warnings.push('Low sweep volume — flow signal inconclusive, rely on other signals')
       }
 
-      // ── Price momentum ────────────────────────────────────────────────────
-      if(isIntraChasing){
-        warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday without a specific catalyst — chasing`)
-      } else if(!isEarningsGap){
-        // Normal momentum scoring (earnings gap handled above)
-        if(Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
-        else if(Math.abs(chgPct)>=0.8&&Math.abs(chgPct)<1.5){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
+      // Signal 2: P/C volume ratio (weight 25%) — who is active today
+      if (flow.pcVolBias === 'bullish' && !bearish) {
+        score += 12; reasons.push(`Call volume dominates (P/C vol ${flow.pcVolRatio.toFixed(2)}: ${flow.callVol}C vs ${flow.putVol}P)`)
+      } else if (flow.pcVolBias === 'bearish' && bearish) {
+        score += 12; reasons.push(`Put volume dominates (P/C vol ${flow.pcVolRatio.toFixed(2)}: ${flow.putVol}P vs ${flow.callVol}C)`)
+      } else if (flow.pcVolBias !== 'neutral') {
+        score -= 8; warnings.push(`P/C volume ratio ${flow.pcVolRatio.toFixed(2)} contradicts ${optType} direction`)
       }
 
-      // Delta quality
-      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
-      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5;reasons.push(`Delta ${delta.toFixed(2)}`)}
+      // Signal 3: Near-price OI (weight 15%) — institutional positioning
+      if (flow.pcOIBias === 'bullish' && !bearish) {
+        score += 8; reasons.push(`Call OI dominant near price (P/C OI ${flow.pcRatio.toFixed(2)})`)
+      } else if (flow.pcOIBias === 'bearish' && bearish) {
+        score += 8; reasons.push(`Put OI dominant near price (P/C OI ${flow.pcRatio.toFixed(2)})`)
+      } else if (flow.pcOIBias !== 'neutral') {
+        score -= 5; warnings.push(`Near-price OI ratio ${flow.pcRatio.toFixed(2)} leans against ${optType}`)
+      }
 
-      // Strike activity
-      if(!isMorningNoise&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} contracts on strike`)}
+      // Signal 4: GEX wall proximity (weight 15%) — dealer positioning
+      if (flow.wallBias === 'bullish' && !bearish) {
+        score += 8; reasons.push(`Put wall support at $${flow.nearestPutWall} (-${flow.putWallDist.toFixed(1)}%) — dealer defense likely`)
+      } else if (flow.wallBias === 'bearish' && bearish) {
+        score += 8; reasons.push(`Call wall resistance at $${flow.nearestCallWall} (+${flow.callWallDist.toFixed(1)}%) — ceiling likely`)
+      } else if (flow.wallBias !== 'neutral') {
+        score -= 5; warnings.push(`GEX walls suggest price may move against ${optType}`)
+      }
 
-      // Trend
-      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
-      else if(pos52>0.65){score+=4}
-      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+      // ── Consensus cap — if signals conflict, cap conviction ───────────────
+      if (flow.consensus < 2) {
+        score = Math.min(score, 62)
+        warnings.push(`Signal conflict: ${flow.bullCount} bullish vs ${flow.bearCount} bearish signals. Direction uncertain — reduce size or wait for clarity.`)
+      } else if (flow.consensus === 2) {
+        score = Math.min(score, 75)
+        warnings.push(`Only 2/4 signals agree on direction — moderate confidence. Verify with news/catalyst before entering.`)
+      }
+      // 3+ signals agree → no cap, full conviction possible
 
-      // ── DTE / IV incompatibility ─────────────────────────────────────────
-      if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
-      else if(dte>=21&&dte<=60){score+=5;reasons.push(`${dte} DTE — good buffer`)}
+      // ── Hard blocks ───────────────────────────────────────────────────────
+      if (isMorningNoise) warnings.push('🔔 MARKET OPEN — First 30 min volatile. Flow signals less reliable. Size smaller.')
+      if (isChasing) { hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday — chasing premium. Wait for pullback.`); score=Math.min(score,42) }
+      if (isHighIV) { hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% high — buying here expensive. Consider spread instead.`); score=Math.min(score,48) }
+
+      // ── Earnings gap ──────────────────────────────────────────────────────
+      if (isEarningsGap) {
+        const gapOpt = chgPct>0 ? 'call' : 'put'
+        if (optType===gapOpt) {
+          score+=15; reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
+          warnings.push('⚡ GAP PLAY — Premium expanded. Size 50% normal. Enter on pullback.')
+        } else {
+          score-=20; warnings.push(`Trading AGAINST the gap — very high risk.`)
+        }
+      }
+
+      // ── Market regime ─────────────────────────────────────────────────────
+      if (marketFalling && optType==='call' && !isSpread) { score-=12; warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}%/NDX ${ndxChgToday.toFixed(1)}%. Calls face drag.`) }
+      else if (marketRising && optType==='put' && !isSpread) { score-=10; warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}%/NDX ${ndxChgToday.toFixed(1)}%. Puts face drag.`) }
+      else if (marketRising && optType==='call') { score+=5; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`) }
+      else if (marketFalling && optType==='put') { score+=5; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`) }
+
+      // ── IV environment ────────────────────────────────────────────────────
+      if (iv>=0.20&&iv<=0.40){score+=10;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
+      else if (iv>0.40&&iv<=0.55){score+=5;reasons.push(`IV ${ivPct.toFixed(0)}% — moderate`)}
+      else if (iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
+      else if (iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
+
+      // ── Volume coherence ──────────────────────────────────────────────────
+      if (!isMorningNoise) {
+        const volPriceCoherent = volRatio>=1.5 && Math.abs(chgPct)>=1.0
+        const volPriceDivergent= volRatio>=3.0 && Math.abs(chgPct)<0.8
+        if (volPriceDivergent){score-=8;warnings.push(`Vol ${volRatio.toFixed(1)}x but barely moved — likely institutional roll not directional`)}
+        else if (volPriceCoherent){score+=8;reasons.push(`Vol ${volRatio.toFixed(1)}x with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent`)}
+        else if (volRatio>=1.5){score+=3;warnings.push(`Vol ${volRatio.toFixed(1)}x but price only ${chgPct.toFixed(1)}% — confirm directional`)}
+        else if (volRatio<0.8){score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x — weak conviction`)}
+      }
+
+      // ── Price momentum (now minor signal, not direction driver) ───────────
+      if (!isIntraChasing&&!isEarningsGap) {
+        if (Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=5;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
+        else if (Math.abs(chgPct)>=0.8){score+=3}
+      }
+
+      // ── Delta quality ─────────────────────────────────────────────────────
+      if (delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=8;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
+      else if (delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=4;reasons.push(`Delta ${delta.toFixed(2)}`)}
+
+      // ── 52w position ──────────────────────────────────────────────────────
+      if (pos52>0.80){score+=6;reasons.push('Near 52w high — uptrend')}
+      else if (pos52>0.65){score+=3}
+      else if (pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+
+      // ── DTE / IV ──────────────────────────────────────────────────────────
+      if (dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE.`)}
+      else if (dte>=21&&dte<=60){score+=4;reasons.push(`${dte} DTE — good buffer`)}
 
       const tradeData = isSpread
         ? buildSpreadResult(chain, price, step, scanType, tfCfg)
-        : buildNakedResult (chain, price, step, optType, tfCfg)
+        : buildNakedResult(chain, price, step, optType, tfCfg)
       if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
 
-      // ── Break-even reality: feeds directly into score ────────────────────
-      if(!isSpread && tradeData && tradeData.mid>0){
-        const strike_ = parseFloat(tradeData.primaryStrike||0)
-        const beReq_  = ((strike_ + tradeData.mid) / price - 1) * 100
-        if(beReq_>5.0){
-          score-=14
-          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — bottom 20% probability. Only enter with strong specific catalyst.`)
-        } else if(beReq_>3.5){
-          score-=7
-          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs a real catalyst to be viable`)
-        } else if(beReq_>0 && beReq_<=2.0){
-          score+=5
-          reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic target`)
-        }
+      // ── Break-even reality ────────────────────────────────────────────────
+      if (!isSpread&&tradeData&&tradeData.mid>0) {
+        const strike_=parseFloat(tradeData.primaryStrike||0)
+        const beReq_=((strike_+tradeData.mid)/price-1)*100
+        if (beReq_>5.0){score-=14;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% — bottom 20% probability.`)}
+        else if (beReq_>3.5){score-=7;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% — needs real catalyst`)}
+        else if (beReq_>0&&beReq_<=2.0){score+=5;reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic`)}
       }
 
-      // ── No-catalyst cap — use data values not string matching ──────────────
-      // Earnings gap IS a real signal — don't apply no-catalyst cap to it
-      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap
-      if(!hasRealSignal && hardBlocks.length===0){
+      // ── No-catalyst cap ───────────────────────────────────────────────────
+      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap || flow.consensus >= 3
+      if (!hasRealSignal&&hardBlocks.length===0){
         score=Math.min(score,72)
-        warnings.push('No identifiable catalyst — technical signals confirm structure but cannot predict direction. Know the specific WHY before entering.')
+        warnings.push('No identifiable catalyst — confirm direction with news before entering.')
       }
 
-      if(hardBlocks.length>0) score=Math.min(score,48)
+      if (hardBlocks.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ Scan complete`)
