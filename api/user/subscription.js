@@ -1,5 +1,4 @@
 // api/user/subscription.js
-// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth }      = require('../_lib/auth')
 
@@ -13,16 +12,20 @@ module.exports = async function handler(req, res) {
   const { clerkId, isAdmin, error: authErr } = await getAuth(req)
   if (!clerkId) return res.status(401).json({ error: authErr || 'Auth failed' })
 
-  // ── Admin always gets active status ───────────────────────────────────────
+  // Admins always get active status — no trial logic needed
   if (isAdmin) {
-    return res.status(200).json({ status: 'active', plan: 'admin', isAdmin: true })
+    return res.status(200).json({
+      status:         'active',
+      plan:           'admin',
+      isAdmin:        true,
+      trial_eligible: false,
+    })
   }
 
-  // ── Regular user — check Supabase ─────────────────────────────────────────
   const supaUrl = process.env.SUPABASE_URL
   const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supaUrl || !supaKey) {
-    return res.status(200).json({ status: 'active', plan: 'pro' }) // dev mode fallback
+    return res.status(200).json({ status: 'active', plan: 'pro', trial_eligible: false })
   }
 
   const supabase = createClient(supaUrl, supaKey)
@@ -33,38 +36,67 @@ module.exports = async function handler(req, res) {
     .maybeSingle()
 
   if (error) return res.status(500).json({ error: error.message })
-  if (!data)  return res.status(200).json({ status: 'inactive', plan: null })
+
+  // Brand new user — no Supabase row at all, definitely trial eligible
+  if (!data) {
+    return res.status(200).json({
+      status:         'inactive',
+      plan:           null,
+      trial_eligible: true,
+    })
+  }
 
   let status = data.status
+  let trialEligible = false
 
-  // Check Stripe directly if pending (race condition between checkout redirect and webhook)
-  if ((status === 'pending' || status === 'inactive') && data.stripe_customer_id) {
+  // ── Stripe fallback: fix race condition between checkout redirect and webhook
+  // Also used here to determine trial eligibility from Stripe's authoritative record
+  if (data.stripe_customer_id) {
     try {
       const Stripe = require('stripe')
       const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
-      const subs   = await stripe.subscriptions.list({
-        customer: data.stripe_customer_id, limit: 5, status: 'all'
+      const allSubs = await stripe.subscriptions.list({
+        customer: data.stripe_customer_id,
+        limit: 10,
+        status: 'all',
       })
-      const active = subs.data.find(s => s.status === 'active' || s.status === 'trialing')
-      if (active) {
-        status = active.status
-        const periodEnd = new Date(active.current_period_end * 1000).toISOString()
-        await supabase.from('subscriptions').upsert({
-          clerk_id:               clerkId,
-          stripe_subscription_id: active.id,
-          status,
-          current_period_end:     periodEnd,
-          updated_at:             new Date().toISOString(),
-        }, { onConflict: 'clerk_id' })
+
+      // Fix pending/inactive status if Stripe shows active/trialing
+      if (status === 'pending' || status === 'inactive') {
+        const activeSub = allSubs.data.find(
+          s => s.status === 'active' || s.status === 'trialing'
+        )
+        if (activeSub) {
+          status = activeSub.status
+          const periodEnd = new Date(activeSub.current_period_end * 1000).toISOString()
+          await supabase.from('subscriptions').upsert({
+            clerk_id:               clerkId,
+            stripe_subscription_id: activeSub.id,
+            status,
+            current_period_end:     periodEnd,
+            updated_at:             new Date().toISOString(),
+          }, { onConflict: 'clerk_id' })
+        }
       }
+
+      // Trial eligible only if no subscription has ever had a trial
+      const trialEverUsed = allSubs.data.some(
+        s => s.trial_start !== null || s.trial_end !== null
+      )
+      // Also ineligible if they have any subscription record at all (even cancelled)
+      const everSubscribed = allSubs.data.length > 0 || !!data.stripe_subscription_id
+      trialEligible = !trialEverUsed && !everSubscribed
+
     } catch (e) {
-      console.warn('Stripe fallback check failed:', e.message)
+      console.warn('Stripe check failed:', e.message)
+      // Safe default — don't grant trial if check errors
+      trialEligible = false
     }
   }
 
-  // Period expiry check — add 1hr grace for webhook delivery delay
+  // ── Period expiry check — 1hr grace for webhook delivery delay
   const periodEnd = data.current_period_end ? new Date(data.current_period_end) : null
-  const grace     = 60 * 60 * 1000  // 1 hour grace period
+  const grace     = 60 * 60 * 1000
   if ((status === 'active' || status === 'trialing') && periodEnd && periodEnd < new Date(Date.now() - grace)) {
     status = 'expired'
   }
@@ -74,5 +106,6 @@ module.exports = async function handler(req, res) {
     plan:               data.plan,
     current_period_end: data.current_period_end,
     subscription_id:    data.stripe_subscription_id,
+    trial_eligible:     trialEligible,
   })
 }
