@@ -18,6 +18,7 @@ const ls = (key, fallback = '') => {
   try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
 }
 
+// ── Clerk appearance ──────────────────────────────────────────────────────────
 const clerkAppearance = {
   variables: {
     colorBackground:      '#0d1117',
@@ -73,6 +74,8 @@ const clerkAppearance = {
   },
 }
 
+// ── Pure UI components — defined OUTSIDE AuthShell so React never recreates them ──
+
 function LoadingScreen({ C, message }) {
   return (
     <div style={{
@@ -86,7 +89,37 @@ function LoadingScreen({ C, message }) {
   )
 }
 
-function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
+function PaywallScreen({ C, onStartTrial, loading, error, onSignOut, trialEligible }) {
+  // null = still checking subscription status
+  const checking  = trialEligible === null
+  const hasTrial  = trialEligible === true
+
+  const planLabel = checking
+    ? 'PRO PLAN'
+    : hasTrial
+      ? 'PRO PLAN — 7-DAY FREE TRIAL'
+      : 'PRO PLAN — SUBSCRIBE NOW'
+
+  const priceNote = checking
+    ? ''
+    : hasTrial
+      ? 'Cancel anytime · No charge for 7 days'
+      : 'Billed immediately · Cancel anytime'
+
+  const ctaLabel = loading
+    ? 'REDIRECTING TO CHECKOUT...'
+    : checking
+      ? 'CHECKING ACCOUNT...'
+      : hasTrial
+        ? 'START FREE TRIAL'
+        : 'SUBSCRIBE — $19/MONTH'
+
+  const fineprint = checking
+    ? ''
+    : hasTrial
+      ? 'Secured by Stripe · No card charged for 7 days'
+      : 'Secured by Stripe · Your card will be charged $19 today'
+
   return (
     <div style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center',
@@ -107,20 +140,27 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
         </div>
 
         <div style={{
-          background: C.bgDeep, border: `1px solid ${C.green}40`,
+          background: C.bgDeep,
+          border: `1px solid ${hasTrial || checking ? C.green : '#ff8844'}40`,
           borderRadius: 10, padding: '24px 20px', marginBottom: 24,
         }}>
           <div style={{
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 20,
-            color: C.green, letterSpacing: 2, marginBottom: 8,
-          }}>PRO PLAN — 7-DAY FREE TRIAL</div>
+            color: hasTrial || checking ? C.green : '#ff8844',
+            letterSpacing: 2, marginBottom: 8,
+          }}>{planLabel}</div>
+
           <div style={{
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 42,
             color: C.text, lineHeight: 1, marginBottom: 4,
           }}>$19<span style={{ fontSize: 16, color: C.dim }}>/mo</span></div>
-          <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
-            Cancel anytime · No charge for 7 days
-          </div>
+
+          {priceNote && (
+            <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
+              {priceNote}
+            </div>
+          )}
+
           <div style={{ textAlign: 'left' }}>
             {[
               'Live options scanner — real Tradier data',
@@ -141,6 +181,18 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
           </div>
         </div>
 
+        {/* Trial-used warning banner */}
+        {!checking && !hasTrial && (
+          <div style={{
+            background: '#1a0e04', border: '1px solid #ff884440',
+            borderRadius: 6, padding: '10px 14px', marginBottom: 14,
+            fontSize: 12, color: '#ffaa66', lineHeight: 1.6,
+          }}>
+            ⚠️ Your 7-day free trial has already been used on this account.
+            Subscribing now will charge your card immediately.
+          </div>
+        )}
+
         {error && (
           <div style={{
             background: `${C.red}15`, border: `1px solid ${C.red}40`,
@@ -151,22 +203,23 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
 
         <button
           onClick={onStartTrial}
-          disabled={loading}
+          disabled={loading || checking}
           style={{
             width: '100%', padding: '16px', borderRadius: 8,
-            background: loading ? `${C.green}40` : C.green,
+            background: (loading || checking) ? `${C.green}40` : C.green,
             border: 'none', color: '#000', fontWeight: 700,
             fontFamily: "'Bebas Neue', sans-serif", fontSize: 16,
-            letterSpacing: 2, cursor: loading ? 'not-allowed' : 'pointer',
+            letterSpacing: 2, cursor: (loading || checking) ? 'not-allowed' : 'pointer',
             marginBottom: 12,
           }}
         >
-          {loading ? 'REDIRECTING TO CHECKOUT...' : 'START FREE TRIAL'}
+          {ctaLabel}
         </button>
 
         <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
-          Secured by Stripe · No card charged for 7 days
+          {fineprint}
         </div>
+
         <button
           onClick={onSignOut}
           style={{
@@ -180,6 +233,7 @@ function PaywallScreen({ C, onStartTrial, loading, error, onSignOut }) {
   )
 }
 
+// ── SubscriptionGate — defined OUTSIDE AuthShell ──────────────────────────────
 function SubscriptionGate({ children, isSignedIn, subStatus, isActive, C, startTrial, checkoutLoading, paywallErr, handleSignOut }) {
   if (!isSignedIn) return <Navigate to="/sign-in" replace />
   if (subStatus === null) return <LoadingScreen C={C} message="CHECKING SUBSCRIPTION..." />
@@ -191,10 +245,12 @@ function SubscriptionGate({ children, isSignedIn, subStatus, isActive, C, startT
       loading={checkoutLoading}
       error={paywallErr}
       onSignOut={handleSignOut}
+      trialEligible={subStatus?.trial_eligible ?? null}
     />
   )
 }
 
+// ── Auth shell ────────────────────────────────────────────────────────────────
 function AuthShell() {
   const { getToken, isLoaded, isSignedIn, userId } = useAuth()
   const { user }    = useUser()
@@ -221,17 +277,17 @@ function AuthShell() {
   const fetchSubStatus = useCallback(() => {
     if (!isLoaded || !isSignedIn) { setSubStatus(null); return }
     if (userId && ADMIN_IDS.includes(userId)) {
-      setSubStatus({ status: 'active', plan: 'admin', isAdmin: true })
+      setSubStatus({ status: 'active', plan: 'admin', isAdmin: true, trial_eligible: false })
       return
     }
     stableGetToken().then(token => {
-      if (!token) { setSubStatus({ status: 'active', plan: 'pro' }); return }
+      if (!token) { setSubStatus({ status: 'active', plan: 'pro', trial_eligible: false }); return }
       fetch('/api/user/subscription', {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(r => r.json())
         .then(d => setSubStatus(d))
-        .catch(() => setSubStatus({ status: 'active', plan: 'pro' }))
+        .catch(() => setSubStatus({ status: 'active', plan: 'pro', trial_eligible: false }))
     })
   }, [isLoaded, isSignedIn, userId, stableGetToken])
 
@@ -401,7 +457,7 @@ function AuthShell() {
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: '#4a7a8a', letterSpacing: 3, marginBottom: 6 }}>WELCOME BACK</div>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>SIGN IN TO CONTINUE</div>
           </div>
-          <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" forceRedirectUrl="/app" />
+          <SignIn appearance={clerkAppearance} routing="path" path="/sign-in" fallbackRedirectUrl="/app" />
           <div style={{ textAlign: 'center', marginTop: 20 }}>
             <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
           </div>
@@ -419,7 +475,7 @@ function AuthShell() {
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#00ff88', letterSpacing: 2, marginBottom: 6 }}>7-DAY FREE TRIAL</div>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#c8d8e8', letterSpacing: 2 }}>CREATE YOUR ACCOUNT</div>
           </div>
-          <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" forceRedirectUrl="/app" />
+          <SignUp appearance={clerkAppearance} routing="path" path="/sign-up" fallbackRedirectUrl="/app" />
           <div style={{ textAlign: 'center', marginTop: 20 }}>
             <a href="/" style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2a4a5a', textDecoration: 'none' }}>← Back to home</a>
           </div>
@@ -430,29 +486,29 @@ function AuthShell() {
 
   return (
     <>
-    <style>{`
-      @media (max-width: 640px) {
-        .auth-left { display: none !important; }
-        .auth-right { padding: 32px 20px !important; }
-      }
-    `}</style>
-    <Routes>
-      <Route path="/app/settings/alerts" element={<Navigate to="/app" replace />} />
-      <Route path="/app/trades" element={
-        <SubscriptionGate {...gateProps}><TradeLog {...authProps} /></SubscriptionGate>
-      } />
-      <Route path="/app" element={
-        <SubscriptionGate {...gateProps}><App {...authProps} /></SubscriptionGate>
-      } />
-      <Route path="/sign-in/*" element={signInPage} />
-      <Route path="/sign-up/*" element={signUpPage} />
-      <Route path="/" element={
-        isSignedIn ? <Navigate to="/app" replace /> : <Landing />
-      } />
-      <Route path="*" element={
-        isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
-      } />
-    </Routes>
+      <style>{`
+        @media (max-width: 640px) {
+          .auth-left { display: none !important; }
+          .auth-right { padding: 32px 20px !important; }
+        }
+      `}</style>
+      <Routes>
+        <Route path="/app/settings/alerts" element={<Navigate to="/app" replace />} />
+        <Route path="/app/trades" element={
+          <SubscriptionGate {...gateProps}><TradeLog {...authProps} /></SubscriptionGate>
+        } />
+        <Route path="/app" element={
+          <SubscriptionGate {...gateProps}><App {...authProps} /></SubscriptionGate>
+        } />
+        <Route path="/sign-in/*" element={signInPage} />
+        <Route path="/sign-up/*" element={signUpPage} />
+        <Route path="/" element={
+          isSignedIn ? <Navigate to="/app" replace /> : <Landing />
+        } />
+        <Route path="*" element={
+          isSignedIn ? <Navigate to="/app" replace /> : <Navigate to="/" replace />
+        } />
+      </Routes>
     </>
   )
 }
@@ -461,8 +517,8 @@ export default function Router() {
   return (
     <ClerkProvider
       publishableKey={CLERK_KEY}
-      signInForceRedirectUrl="/app"
-      signUpForceRedirectUrl="/app"
+      signInFallbackRedirectUrl="/app"
+      signUpFallbackRedirectUrl="/app"
     >
       <BrowserRouter>
         <AuthShell />
