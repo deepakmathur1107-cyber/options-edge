@@ -35,17 +35,29 @@ module.exports = async function handler(req, res) {
     if (existingSub?.stripe_customer_id) {
       stripeCustomerId = existingSub.stripe_customer_id
 
-      // If they ever had a subscription_id recorded in Supabase, trial was used
+      // Check Stripe for all subscriptions on this customer
+      const allSubs = await stripe.subscriptions.list({
+        customer: stripeCustomerId,
+        limit: 10,
+        status: 'all',
+      })
+
+      // GUARD: Block if already has an active or trialing subscription
+      const alreadyActive = allSubs.data.some(
+        s => s.status === 'active' || s.status === 'trialing'
+      )
+      if (alreadyActive) {
+        return res.status(400).json({
+          error: 'You already have an active subscription. Use "Manage subscription" below to make changes.',
+          already_subscribed: true,
+        })
+      }
+
+      // Check if trial was ever used on any past subscription
       if (existingSub.stripe_subscription_id) {
         trialEverUsed = true
       } else {
-        // Double-check Stripe directly — catches cases where webhook hasn't fired yet
-        const subs = await stripe.subscriptions.list({
-          customer: stripeCustomerId,
-          limit: 10,
-          status: 'all',
-        })
-        trialEverUsed = subs.data.some(
+        trialEverUsed = allSubs.data.some(
           s => s.trial_start !== null || s.trial_end !== null
         )
       }
