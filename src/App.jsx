@@ -1202,7 +1202,7 @@ useEffect(() => {
       let fund = null
       try {
         const authTok = await getAuthToken().catch(()=>null)
-        const fRes = await fetch(`/api/fundamentals?ticker=${ticker}`, {
+        const fRes = await fetch(`/api/tradier?fundamentals=${ticker}`, {
           headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
         })
         if (fRes.ok) {
@@ -1525,7 +1525,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       if (withFundamentals) {
         try {
           const authTok = await getAuthToken().catch(()=>null)
-          const fRes = await fetch(`/api/fundamentals?ticker=${ticker}`, {
+          const fRes = await fetch(`/api/tradier?fundamentals=${ticker}`, {
             headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
           })
           if (fRes.ok) {

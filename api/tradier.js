@@ -73,6 +73,7 @@ function getTTL(path) {
 
 // ─── Clerk JWT verify ──────────────────────────────────────────────────────────
 const { getAuth, ADMIN_IDS: LIB_ADMIN_IDS } = require('./_lib/auth')
+const { getFundamentals } = require('./_lib/fundamentals')
 
 async function getPlan(clerkId) {
   const url = process.env.SUPABASE_URL
@@ -95,6 +96,24 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tradier-token, x-tradier-mode')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
+
+  // ── GET ?fundamentals=TICKER — serve cached fundamentals (Supabase → Redis → api-ninjas) ──
+  if (req.query.fundamentals) {
+    const { clerkId: fClerkId } = await getAuth(req)
+    if (!fClerkId) return res.status(401).json({ error: 'Unauthorized' })
+    const ticker = (req.query.fundamentals || '').toUpperCase().trim()
+    if (!ticker || !/^[A-Z]{1,5}$/.test(ticker)) {
+      return res.status(400).json({ error: 'Invalid ticker' })
+    }
+    try {
+      const data = await getFundamentals(ticker)
+      if (!data) return res.status(200).json({ ticker, available: false })
+      return res.status(200).json({ ticker, available: true, ...data })
+    } catch (e) {
+      console.error('[tradier/fundamentals] error:', e.message)
+      return res.status(500).json({ error: 'Failed to fetch fundamentals' })
+    }
+  }
 
   const tradierPath = req.query.path
   if (!tradierPath) return res.status(400).json({ error: 'Missing ?path= param' })
