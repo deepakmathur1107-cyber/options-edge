@@ -1138,13 +1138,6 @@ useEffect(() => {
       }
 
       // ── Consensus cap — if signals conflict, cap conviction ───────────────
-      if (flow.consensus < 2) {
-        score = Math.min(score, 62)
-        warnings.push(`Signal conflict: ${flow.bullCount} bullish vs ${flow.bearCount} bearish signals. Direction uncertain — reduce size or wait for clarity.`)
-      } else if (flow.consensus === 2) {
-        score = Math.min(score, 75)
-        warnings.push(`Only 2/4 signals agree on direction — moderate confidence. Verify with news/catalyst before entering.`)
-      }
       // 3+ signals agree → no cap, full conviction possible
 
       // ── Hard blocks ───────────────────────────────────────────────────────
@@ -1225,6 +1218,14 @@ useEffect(() => {
         warnings.push('No identifiable catalyst — confirm direction with news before entering.')
       }
 
+      // ── Consensus cap fires LAST — prevents post-flow signals inflating past it ──
+      if (flow.consensus < 2) {
+        score = Math.min(score, 62)
+        warnings.push(`Signal conflict: ${flow.bullCount} bullish vs ${flow.bearCount} bearish signals. Direction uncertain — reduce size or wait for clarity.`)
+      } else if (flow.consensus === 2) {
+        score = Math.min(score, 75)
+        warnings.push(`Only 2/4 signals agree on direction — moderate confidence. Verify with news/catalyst before entering.`)
+      }
       if (hardBlocks.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
