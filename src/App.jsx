@@ -691,6 +691,8 @@ export default function App(props={}) {
   // ── price bar ──
   const [esBar, setEsBar] = useState(null)
   const [nqBar, setNqBar] = useState(null)
+  const [spxBar, setSpxBar] = useState(null)
+  const [ndxBar, setNdxBar] = useState(null)
   const [barLoading, setBarLoading] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState(null)
   const [nextRefresh,   setNextRefresh]   = useState(30)
@@ -951,6 +953,13 @@ export default function App(props={}) {
 
     if (es) setEsBar({...es, label: es.sym==='SPY'?'SPY':es.sym==='SPX'?'SPX':'SPX'})
     if (nq) setNqBar({...nq, label: nq.sym==='QQQ'?'QQQ':nq.sym==='NDX'?'NDX':'NDX'})
+
+    // Fetch real index prices separately for SPX/NDX dashboard cards
+    const [spxResult, ndxResult] = await Promise.all([directQuote('SPX'), directQuote('NDX')])
+    if (spxResult) setSpxBar({...spxResult, label:'SPX'})
+    if (ndxResult) setNdxBar({...ndxResult, label:'NDX'})
+
+    // Fetch real index prices separately for SPX/NDX dashboard cards
 
     if (es) {
       const spxChg = es.chgPct
@@ -1855,8 +1864,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {/* ── SPX / NDX price cards ── */}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
               {[
-                {sym:esBar?.label||'SPX',data:esBar,label:'S&P 500 Index'},
-                {sym:nqBar?.label||'NDX',data:nqBar,label:'Nasdaq 100 Index'},
+                {sym:'SPX',data:spxBar,label:'S&P 500 Index'},
+                {sym:'NDX',data:ndxBar,label:'Nasdaq 100 Index'},
               ].map(({sym,data,label})=>{
                 const up=data?.chgPct>=0
                 const bc=data?up?C.green:C.red:C.dim
