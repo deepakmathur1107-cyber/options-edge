@@ -1,5 +1,3 @@
-// api/stripe/checkout.js
-// Consolidated: uses shared getAuth from _lib/auth.js (no more duplicate JWT verification).
 const Stripe        = require('stripe')
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth }   = require('../_lib/auth')
@@ -21,37 +19,56 @@ module.exports = async function handler(req, res) {
   let body = req.body
   if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
   body = body || {}
-
   const email  = body.email || ''
   const origin = req.headers.origin || `https://${req.headers.host}`
 
   try {
-    // Reuse existing Stripe customer if one exists
     let stripeCustomerId
+    let trialEverUsed = false
+
     const { data: existingSub } = await supabase
       .from('subscriptions')
-      .select('stripe_customer_id')
+      .select('stripe_customer_id, stripe_subscription_id')
       .eq('clerk_id', clerkId)
       .maybeSingle()
 
     if (existingSub?.stripe_customer_id) {
       stripeCustomerId = existingSub.stripe_customer_id
+
+      // If they ever had a subscription_id recorded in Supabase, trial was used
+      if (existingSub.stripe_subscription_id) {
+        trialEverUsed = true
+      } else {
+        // Double-check Stripe directly — catches cases where webhook hasn't fired yet
+        const subs = await stripe.subscriptions.list({
+          customer: stripeCustomerId,
+          limit: 10,
+          status: 'all',
+        })
+        trialEverUsed = subs.data.some(
+          s => s.trial_start !== null || s.trial_end !== null
+        )
+      }
     } else {
-      const customer   = await stripe.customers.create({
+      const customer = await stripe.customers.create({
         email,
         metadata: { clerk_id: clerkId },
       })
       stripeCustomerId = customer.id
     }
 
+    const subscriptionData = {
+      metadata: { clerk_id: clerkId },
+    }
+    if (!trialEverUsed) {
+      subscriptionData.trial_period_days = 7
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer:   stripeCustomerId,
       mode:       'subscription',
       line_items: [{ price: process.env.STRIPE_PRICE_ID_PRO, quantity: 1 }],
-      subscription_data: {
-        trial_period_days: 7,
-        metadata: { clerk_id: clerkId },
-      },
+      subscription_data: subscriptionData,
       success_url: `${origin}/app?sub=success`,
       cancel_url:  `${origin}/app`,
       allow_promotion_codes:      true,
@@ -65,8 +82,7 @@ module.exports = async function handler(req, res) {
       plan:               'pro',
     }, { onConflict: 'clerk_id' })
 
-    return res.status(200).json({ url: session.url })
-
+    return res.status(200).json({ url: session.url, trial: !trialEverUsed })
   } catch (e) {
     console.error('Checkout error:', e.message)
     return res.status(500).json({ error: e.message })
