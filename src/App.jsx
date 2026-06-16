@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import AppNav from './components/AppNav'
-import AdminDashboard from './components/AdminDashboard'
 import MorningBrief from './components/MorningBrief'
 import { DARK_THEME, LIGHT_THEME } from './theme'
-import { computeFlowSignals } from './lib/flowSignals'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -619,7 +617,6 @@ export default function App(props={}) {
 
   // ── auth token from Router (Phase 2) ──
   const getAuthToken = props.getToken || (async () => null)
-  const navigate = useNavigate()
   // Phase 2: admin key is always active — no per-user token required.
   // hasDataAccess = true when admin key is set OR user has a personal token (legacy).
   // Used to gate UI elements that need market data.
@@ -692,8 +689,6 @@ export default function App(props={}) {
   // ── price bar ──
   const [esBar, setEsBar] = useState(null)
   const [nqBar, setNqBar] = useState(null)
-  const [spxBar, setSpxBar] = useState(null)
-  const [ndxBar, setNdxBar] = useState(null)
   const [barLoading, setBarLoading] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState(null)
   const [nextRefresh,   setNextRefresh]   = useState(30)
@@ -955,13 +950,6 @@ export default function App(props={}) {
     if (es) setEsBar({...es, label: es.sym==='SPY'?'SPY':es.sym==='SPX'?'SPX':'SPX'})
     if (nq) setNqBar({...nq, label: nq.sym==='QQQ'?'QQQ':nq.sym==='NDX'?'NDX':'NDX'})
 
-    // Fetch real index prices separately for SPX/NDX dashboard cards
-    const [spxResult, ndxResult] = await Promise.all([directQuote('SPX'), directQuote('NDX')])
-    if (spxResult) setSpxBar({...spxResult, label:'SPX'})
-    if (ndxResult) setNdxBar({...ndxResult, label:'NDX'})
-
-    // Fetch real index prices separately for SPX/NDX dashboard cards
-
     if (es) {
       const spxChg = es.chgPct
       const ndxChg = nq?.chgPct || spxChg
@@ -1036,68 +1024,27 @@ useEffect(() => {
       dbg(`   ✓ ${chain.length} contracts`)
 
       const chgPct=parseFloat(quote.change_percentage||0)
-      // Direction driven by flow signal consensus (4 signals) not just intraday %
-      const flow = computeFlowSignals(chain, price)
-      let bearish, directionSource
-      if (scanType === 'Put' || scanType === 'Put Spread') {
-        bearish = true; directionSource = 'user selected Put'
-      } else if (scanType === 'Call' || scanType === 'Call Spread') {
-        bearish = false; directionSource = 'user selected Call'
-      } else if (flow.consensus >= 3) {
-        bearish = flow.direction === 'put'
-        directionSource = `${flow.consensus}/4 signals ${bearish ? 'bearish' : 'bullish'}`
-      } else if (flow.consensus === 2) {
-        bearish = flow.direction === 'put'
-        directionSource = '2/4 signals — weak consensus'
-      } else {
-        bearish = chgPct < -0.5
-        directionSource = `intraday fallback (${chgPct.toFixed(1)}%)`
-      }
-      const optType    = bearish ? 'put' : 'call'
       const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
-      const isSpread   = SPREAD_TYPES.includes(scanType)
-      dbg(`   ✓ Direction: ${optType.toUpperCase()} via ${directionSource}`)
-      dbg(`   ✓ Flow: ${flow.bullCount}B/${flow.bearCount}Be | sweeps ${flow.callSweeps}C/${flow.putSweeps}P | P/C vol ${flow.pcVolRatio.toFixed(2)}`)
+      const isSpread     = SPREAD_TYPES.includes(scanType)
+      const bearish=scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
+      const optType=bearish?'put':'call'
+      const tradeType=scanType==='Any'?(bearish?'Put':'Call'):scanType
 
-      const step       = autoStep(price)
-      const strikePct  = bearish ? (2-tfCfg.strikePct) : tfCfg.strikePct
-      const tgtStrike  = Math.round(price*strikePct/step)*step
-      const side       = chain.filter(o=>o.option_type===optType)
+      const step=autoStep(price)
+      const strikePct=bearish?(2-tfCfg.strikePct):tfCfg.strikePct
+      const tgtStrike=Math.round(price*strikePct/step)*step
+      const side=chain.filter(o=>o.option_type===optType)
       if (!side.length) throw new Error(`No ${optType} contracts found`)
-      const best       = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
-      const bid        = parseFloat(best.bid||0)
-      const ask        = parseFloat(best.ask||0)
-      const mid        = (bid+ask)/2
+      const best=side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
+      const bid=parseFloat(best.bid||0)
+      const ask=parseFloat(best.ask||0)
+      const mid=(bid+ask)/2
       if (mid===0) throw new Error('Bid/ask both $0 — no liquidity')
-      let iv           = best.greeks?.mid_iv||best.implied_volatility||0
-      const delta      = best.greeks?.delta||null
-      const theta      = best.greeks?.theta||null
-      dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Mid: ${fmtP(mid)} | IV: ${fmtPct(iv)}`)
-
-      // ── Earnings detection via IV term structure ──────────────────────────
-      let earningsFlag = false
-      await (async (scanIV, scanExpiry, tkr, px) => {
-        try {
-          const _now = new Date(); _now.setHours(0,0,0,0)
-          const _expR = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fexpirations%3Fsymbol%3D${ticker}%26includeAllRoots%3Dfalse`)
-          const _exps = ((await _expR.json())?.expirations?.date) || []
-          const _fExp = _exps[0]
-          if (!_fExp || _fExp === expiryRaw) return
-          const _fDTE = Math.round((new Date(_fExp+'T12:00:00') - _now) / 86400000)
-          if (_fDTE > 21) return
-          const _fcR   = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fchains%3Fsymbol%3D${ticker}%26expiration%3D${_fExp}%26greeks%3Dtrue`)
-          const _fc    = ((await _fcR.json())?.options?.option) || []
-          const _fatm  = _fc.filter(o => o.option_type==='call' && Math.abs(o.strike-price)<price*0.05 && parseFloat(o.greeks?.mid_iv||0)>0)
-          const _fiv   = _fatm.length ? _fatm.reduce((s,o)=>s+parseFloat(o.greeks?.mid_iv||0),0)/_fatm.length : 0
-          const _spike = scanIV>0 && _fiv>0 ? _fiv/scanIV : 0
-          dbg(`   ✓ Earnings: front ${_fExp}(${_fDTE}d) IV ${(_fiv*100).toFixed(0)}% vs scan IV ${(scanIV*100).toFixed(0)}% = ${_spike.toFixed(2)}x`)
-          if (_spike >= 1.35) {
-            earningsFlag = true
-            score = Math.min(score, 60)
-            hardBlocks.push(`🗓 Earnings likely within ${_fDTE} days — IV spike ${_spike.toFixed(1)}x (${(_fiv*100).toFixed(0)}% front vs ${(scanIV*100).toFixed(0)}% scan expiry). Naked option risks IV crush. Use spread to define risk.`)
-          }
-        } catch(_e) { console.warn('[earnings]', _e.message) }
-      })(iv, expiryRaw, ticker, price)
+      const iv=best.greeks?.mid_iv||best.implied_volatility||0
+      const delta=best.greeks?.delta||null
+      const theta=best.greeks?.theta||null
+      dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Bid: ${fmtP(bid)} | Ask: ${fmtP(ask)} | Mid: ${fmtP(mid)}`)
+      dbg(`   ✓ IV: ${fmtPct(iv)} | Delta: ${delta?.toFixed(3)||'—'} | Theta: ${theta?.toFixed(3)||'—'}`)
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
@@ -1106,9 +1053,16 @@ useEffect(() => {
       const etHour=now.getHours()+(now.getMinutes()/60)
       const isMorningNoise=etHour<10.0
       const isHighIV=iv>0.55&&!isSpread
+
+      // Chasing vs earnings gap distinction:
+      // 2–5% with no catalyst = chasing intraday drift → block
+      // >5% = almost certainly a gap from earnings/news event → allow with context
+      // This is why MDB (+8.8% earnings gap) should score, but MSTR (+3.9% intraday) should not
       const isIntraChasing = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0 && !isSpread
       const isEarningsGap  = Math.abs(chgPct)>5.0 && !isSpread
-      const isChasing      = isIntraChasing
+      const isChasing      = isIntraChasing  // only the intraday drift case is a hard block
+
+      // Market regime — use esBar/nqBar already in state as directional context
       const spxChgToday  = esBar?.chgPct||0
       const ndxChgToday  = nqBar?.chgPct||0
       const marketFalling= spxChgToday<-0.5 && ndxChgToday<-0.5
@@ -1120,173 +1074,159 @@ useEffect(() => {
 
       let score=50; const reasons=[],warnings=[],hardBlocks=[]
 
-      // ── Flow signals scoring (new — 4 independent signals) ────────────────
-
-      // Signal 1: Ask-side sweeps (weight 30%) — best proxy for dark pool/institutional flow
-      if (flow.callSweeps + flow.putSweeps >= 10) {
-        if (flow.flowBias === 'bullish' && !bearish) {
-          score += 18; reasons.push(`Bullish sweep flow — ${flow.callSweeps} call buys vs ${flow.putSweeps} put buys`)
-        } else if (flow.flowBias === 'bearish' && bearish) {
-          score += 18; reasons.push(`Bearish sweep flow — ${flow.putSweeps} put buys vs ${flow.callSweeps} call buys`)
-        } else if (flow.flowBias !== 'neutral') {
-          score -= 12; warnings.push(`Flow contradicts direction — ${flow.flowBias} sweeps but taking ${optType}`)
-        }
-      } else {
-        warnings.push('Low sweep volume — flow signal inconclusive, rely on other signals')
+      // Hard blocks — cap at 48 regardless of other signals
+      if(isMorningNoise){
+        // No score penalty — a genuinely strong setup is still valid at open.
+        // But surface a clear contextual warning so the user can make an informed call.
+        warnings.push('🔔 MARKET OPEN — First 30 min are volatile. Spreads are wider, volume signals are unreliable, and IV is inflated. If conviction is high, size smaller than normal and use a limit order at mid or better.')
       }
+      if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
+      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
 
-      // Signal 2: P/C volume ratio (weight 25%) — who is active today
-      if (flow.pcVolBias === 'bullish' && !bearish) {
-        score += 12; reasons.push(`Call volume dominates (P/C vol ${flow.pcVolRatio.toFixed(2)}: ${flow.callVol}C vs ${flow.putVol}P)`)
-      } else if (flow.pcVolBias === 'bearish' && bearish) {
-        score += 12; reasons.push(`Put volume dominates (P/C vol ${flow.pcVolRatio.toFixed(2)}: ${flow.putVol}P vs ${flow.callVol}C)`)
-      } else if (flow.pcVolBias !== 'neutral') {
-        score -= 8; warnings.push(`P/C volume ratio ${flow.pcVolRatio.toFixed(2)} contradicts ${optType} direction`)
-      }
-
-      // Signal 3: Near-price OI (weight 15%) — institutional positioning
-      if (flow.pcOIBias === 'bullish' && !bearish) {
-        score += 8; reasons.push(`Call OI dominant near price (P/C OI ${flow.pcRatio.toFixed(2)})`)
-      } else if (flow.pcOIBias === 'bearish' && bearish) {
-        score += 8; reasons.push(`Put OI dominant near price (P/C OI ${flow.pcRatio.toFixed(2)})`)
-      } else if (flow.pcOIBias !== 'neutral') {
-        score -= 5; warnings.push(`Near-price OI ratio ${flow.pcRatio.toFixed(2)} leans against ${optType}`)
-      }
-
-      // Signal 4: GEX wall proximity (weight 15%) — dealer positioning
-      if (flow.wallBias === 'bullish' && !bearish) {
-        score += 8; reasons.push(`Put wall support at $${flow.nearestPutWall} (-${flow.putWallDist.toFixed(1)}%) — dealer defense likely`)
-      } else if (flow.wallBias === 'bearish' && bearish) {
-        score += 8; reasons.push(`Call wall resistance at $${flow.nearestCallWall} (+${flow.callWallDist.toFixed(1)}%) — ceiling likely`)
-      } else if (flow.wallBias !== 'neutral') {
-        score -= 5; warnings.push(`GEX walls suggest price may move against ${optType}`)
-      }
-
-      // ── Consensus cap — if signals conflict, cap conviction ───────────────
-      // 3+ signals agree → no cap, full conviction possible
-
-      // ── Hard blocks ───────────────────────────────────────────────────────
-      if (isMorningNoise) warnings.push('🔔 MARKET OPEN — First 30 min volatile. Flow signals less reliable. Size smaller.')
-      if (isChasing) { hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday — chasing premium. Wait for pullback.`); score=Math.min(score,42) }
-      if (isHighIV) { hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% high — buying here expensive. Consider spread instead.`); score=Math.min(score,48) }
-
-      // ── Earnings gap ──────────────────────────────────────────────────────
-      if (isEarningsGap) {
+      // ── Earnings gap handling ────────────────────────────────────────────
+      // >5% gap = earnings/news catalyst, not intraday drift
+      // Score it as strong momentum; warn about premium expansion
+      if(isEarningsGap){
         const gapOpt = chgPct>0 ? 'call' : 'put'
-        if (optType===gapOpt) {
-          score+=15; reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
-          warnings.push('⚡ GAP PLAY — Premium expanded. Size 50% normal. Enter on pullback.')
+        if(optType===gapOpt){
+          score+=15
+          reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
+          warnings.push('⚡ GAP PLAY — Premium is expanded. Size at 50% of normal. Enter on a small pullback or consolidation. Target 50–80% of premium.')
         } else {
-          score-=20; warnings.push(`Trading AGAINST the gap — very high risk.`)
+          score-=20
+          warnings.push(`Trading AGAINST the gap — stock moved ${chgPct.toFixed(1)}% and you are playing the other direction. Very high risk.`)
         }
       }
 
-      // ── Market regime ─────────────────────────────────────────────────────
-      // ── Market regime filter (IV-derived beta, no hardcoding) ──────────────
-      // Beta proxy from IV — high IV stocks move more with the market
-      const ivAnnualized  = iv * 100
-      const betaClass     = ivAnnualized > 50 ? 'high' : ivAnnualized > 25 ? 'mid' : 'low'
-      const betaMult      = betaClass === 'high' ? 1.5 : betaClass === 'mid' ? 1.0 : 0.6
-      const regimeScore   = marketConviction?.score || 50
-      const regimeDir     = marketConviction?.direction || 'NEUTRAL'
-      const regimeBullish = regimeScore >= 62
-      const regimeBearish = regimeScore <= 38
-      const regimeStrong  = regimeScore >= 70 || regimeScore <= 30
-      if (regimeBearish && optType==='call' && !isSpread) {
-        const base    = regimeStrong ? 14 : 9
-        const penalty = Math.round(base * betaMult)
-        score -= penalty
-        if (regimeStrong && betaClass === 'high') {
-          warnings.push(`⚠ Strong bearish regime (${regimeScore}% conviction) + high-volatility stock (IV ${ivAnnualized.toFixed(0)}%) — calls face severe headwind. SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}%.`)
-        } else {
-          warnings.push(`Market headwind — regime ${regimeScore}% bearish, stock IV ${ivAnnualized.toFixed(0)}% (${betaClass}-beta). Calls face drag. SPX ${spxChgToday.toFixed(1)}%.`)
-        }
-      } else if (regimeBullish && optType==='put' && !isSpread) {
-        const base    = regimeStrong ? 12 : 8
-        const penalty = Math.round(base * betaMult)
-        score -= penalty
-        warnings.push(`Market headwind — regime ${regimeScore}% bullish, IV ${ivAnnualized.toFixed(0)}% (${betaClass}-beta). Puts face drag. NDX ${ndxChgToday.toFixed(1)}%.`)
-      } else if (regimeBullish && optType==='call') {
-        const bonus = Math.round(6 * betaMult)
-        score += bonus
-        reasons.push(`Market tailwind — regime ${regimeScore}% bullish, IV ${ivAnnualized.toFixed(0)}% ${betaClass}-beta amplifier. SPX ${spxChgToday.toFixed(1)}%`)
-      } else if (regimeBearish && optType==='put') {
-        const bonus = Math.round(6 * betaMult)
-        score += bonus
-        reasons.push(`Market tailwind — regime ${regimeScore}% bearish, IV ${ivAnnualized.toFixed(0)}% ${betaClass}-beta amplifier. SPX ${spxChgToday.toFixed(1)}% falling`)
-      } else {
-        if (marketFalling && optType==='call') { score -= 4 }
-        else if (marketRising && optType==='put') { score -= 4 }
+      // ── Market regime scoring ────────────────────────────────────────────
+      if(marketFalling && optType==='call' && !isSpread){
+        score-=12
+        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Calls face drag when index is falling.`)
+      } else if(marketRising && optType==='put' && !isSpread){
+        score-=10
+        warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}% today. Puts face drag when index is rising.`)
+      } else if(marketRising && optType==='call'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`)
+      } else if(marketFalling && optType==='put'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`)
       }
 
-      // ── IV environment ────────────────────────────────────────────────────
-      if (iv>=0.20&&iv<=0.40){score+=10;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
-      else if (iv>0.40&&iv<=0.55){score+=5;reasons.push(`IV ${ivPct.toFixed(0)}% — moderate`)}
-      else if (iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
-      else if (iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
+      // IV environment
+      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
+      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct.toFixed(0)}% — moderate`)}
+      else if(iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct.toFixed(0)}% elevated — overpaying`)}
+      else if(iv>0.65){score-=15;warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`)}
 
-      // ── Volume coherence ──────────────────────────────────────────────────
-      if (!isMorningNoise) {
+      // ── Volume + price coherence ─────────────────────────────────────────────
+      // Key insight: high volume with tiny move = institutional roll/distribution.
+      // Volume only becomes a bullish signal when it ACCOMPANIES significant price action.
+      if(!isMorningNoise){
         const volPriceCoherent = volRatio>=1.5 && Math.abs(chgPct)>=1.0
         const volPriceDivergent= volRatio>=3.0 && Math.abs(chgPct)<0.8
-        if (volPriceDivergent){score-=8;warnings.push(`Vol ${volRatio.toFixed(1)}x but barely moved — likely institutional roll not directional`)}
-        else if (volPriceCoherent){score+=8;reasons.push(`Vol ${volRatio.toFixed(1)}x with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent`)}
-        else if (volRatio>=1.5){score+=3;warnings.push(`Vol ${volRatio.toFixed(1)}x but price only ${chgPct.toFixed(1)}% — confirm directional`)}
-        else if (volRatio<0.8){score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x — weak conviction`)}
+        if(volPriceDivergent){
+          score-=8
+          warnings.push(`Vol ${volRatio.toFixed(1)}x but stock barely moved (${chgPct.toFixed(1)}%) — likely institutional roll or distribution, not directional flow`)
+        } else if(volPriceCoherent){
+          score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent bullish signal`)
+        } else if(volRatio>=1.5){
+          score+=4
+          warnings.push(`Vol ${volRatio.toFixed(1)}x avg but price only ${chgPct.toFixed(1)}% — confirm this is directional before entering`)
+        } else if(volRatio<0.8){
+          score-=8;warnings.push(`Low volume ${volRatio.toFixed(1)}x — weak conviction`)
+        }
+      } else {
+        // Still score the volume but add the open-volatility context
+        if(volRatio>=2.0){score+=8;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
+        warnings.push(`🔔 Market open — volume signals less reliable in first 30 min`)
       }
 
-      // ── Price momentum (now minor signal, not direction driver) ───────────
-      if (!isIntraChasing&&!isEarningsGap) {
-        if (Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=5;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
-        else if (Math.abs(chgPct)>=0.8){score+=3}
+      // ── Price momentum ────────────────────────────────────────────────────
+      if(isIntraChasing){
+        warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday without a specific catalyst — chasing`)
+      } else if(!isEarningsGap){
+        // Normal momentum scoring (earnings gap handled above)
+        if(Math.abs(chgPct)>=1.5&&Math.abs(chgPct)<=2.0){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`)}
+        else if(Math.abs(chgPct)>=0.8&&Math.abs(chgPct)<1.5){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
       }
 
-      // ── Delta quality ─────────────────────────────────────────────────────
-      if (delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=8;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
-      else if (delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=4;reasons.push(`Delta ${delta.toFixed(2)}`)}
+      // Delta quality
+      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
+      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5;reasons.push(`Delta ${delta.toFixed(2)}`)}
 
-      // ── 52w position ──────────────────────────────────────────────────────
-      if (pos52>0.80){score+=6;reasons.push('Near 52w high — uptrend')}
-      else if (pos52>0.65){score+=3}
-      else if (pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+      // Strike activity
+      if(!isMorningNoise&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} contracts on strike`)}
 
-      // ── DTE / IV ──────────────────────────────────────────────────────────
-      if (dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE.`)}
-      else if (dte>=21&&dte<=60){score+=4;reasons.push(`${dte} DTE — good buffer`)}
+      // Trend
+      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
+      else if(pos52>0.65){score+=4}
+      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+
+      // ── DTE / IV incompatibility ─────────────────────────────────────────
+      if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
+      else if(dte>=21&&dte<=60){score+=5;reasons.push(`${dte} DTE — good buffer`)}
 
       const tradeData = isSpread
         ? buildSpreadResult(chain, price, step, scanType, tfCfg)
-        : buildNakedResult(chain, price, step, optType, tfCfg)
+        : buildNakedResult (chain, price, step, optType, tfCfg)
       if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
 
-      // ── Break-even reality ────────────────────────────────────────────────
-      if (!isSpread&&tradeData&&tradeData.mid>0) {
-        const strike_=parseFloat(tradeData.primaryStrike||0)
-        const beReq_=((strike_+tradeData.mid)/price-1)*100
-        if (beReq_>5.0){score-=14;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% — bottom 20% probability.`)}
-        else if (beReq_>3.5){score-=7;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% — needs real catalyst`)}
-        else if (beReq_>0&&beReq_<=2.0){score+=5;reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic`)}
+      // ── Break-even reality: feeds directly into score ────────────────────
+      if(!isSpread && tradeData && tradeData.mid>0){
+        const strike_ = parseFloat(tradeData.primaryStrike||0)
+        const beReq_  = ((strike_ + tradeData.mid) / price - 1) * 100
+        if(beReq_>5.0){
+          score-=14
+          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — bottom 20% probability. Only enter with strong specific catalyst.`)
+        } else if(beReq_>3.5){
+          score-=7
+          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs a real catalyst to be viable`)
+        } else if(beReq_>0 && beReq_<=2.0){
+          score+=5
+          reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic target`)
+        }
       }
 
-      // ── No-catalyst cap ───────────────────────────────────────────────────
-      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap || flow.consensus >= 3
-      if (!hasRealSignal&&hardBlocks.length===0){
+      // ── No-catalyst cap — use data values not string matching ──────────────
+      // Earnings gap IS a real signal — don't apply no-catalyst cap to it
+      const hasRealSignal = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap
+      if(!hasRealSignal && hardBlocks.length===0){
         score=Math.min(score,72)
-        warnings.push('No identifiable catalyst — confirm direction with news before entering.')
+        warnings.push('No identifiable catalyst — technical signals confirm structure but cannot predict direction. Know the specific WHY before entering.')
       }
 
-      // ── Consensus cap fires LAST — prevents post-flow signals inflating past it ──
-      if (flow.consensus < 2) {
-        score = Math.min(score, 62)
-        warnings.push(`Signal conflict: ${flow.bullCount} bullish vs ${flow.bearCount} bearish signals. Direction uncertain — reduce size or wait for clarity.`)
-      } else if (flow.consensus === 2) {
-        score = Math.min(score, 75)
-        warnings.push(`Only 2/4 signals agree on direction — moderate confidence. Verify with news/catalyst before entering.`)
-      }
-      if (hardBlocks.length>0) score=Math.min(score,48)
+      if(hardBlocks.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
       dbg(`✅ Scan complete`)
+      // Fetch fundamentals (Supabase → Redis → api-ninjas)
+      let fund = null
+      try {
+        const authTok = await getAuthToken().catch(()=>null)
+        const fRes = await fetch(`/api/fundamentals?ticker=${ticker}`, {
+          headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
+        })
+        if (fRes.ok) {
+          const fData = await fRes.json()
+          if (fData.available) fund = fData
+        }
+      } catch {}
+      // Apply fundamentals scoring
+      if(fund){
+        if(fund.market_cap && fund.market_cap > 100_000_000_000){
+          score+=3;reasons.push(`Large-cap (${fund.sector||'—'})`)
+        }
+        if(fund.earnings_date){
+          const earnDays = Math.round((new Date(fund.earnings_date)-now)/(1000*60*60*24))
+          if(earnDays>=0 && earnDays<=7){
+            warnings.push(`⚠️ Earnings in ${earnDays}d — IV crush risk after event`)
+            if(!isEarningsGap) score-=10
+          } else if(earnDays>7 && earnDays<=21){
+            warnings.push(`Earnings in ${earnDays}d — factor into DTE choice`)
+          }
+        }
+        score=Math.min(95,Math.max(20,score))
+        dbg(`   ✓ Fundamentals: ${fund.sector||'—'} | MCap: ${fund.market_cap?'$'+(fund.market_cap/1e9).toFixed(0)+'B':'N/A'} | Earnings: ${fund.earnings_date||'N/A'}`)
+      }
 
       // Fetch S/R levels + AI brief in background (non-blocking)
       setSrData(null); setTickerBrief(null); setSrLoading(true)
@@ -1345,6 +1285,12 @@ useEffect(() => {
         breakevenPct:(((parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid)/price-1)*100).toFixed(1),
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:'',
+        // Fundamentals
+        sector:       fund?.sector       || null,
+        industry:     fund?.industry     || null,
+        marketCap:    fund?.market_cap   || null,
+        peRatio:      fund?.pe_ratio     || null,
+        earningsDate: fund?.earnings_date || null,
       })
     } catch(e) {
       if (e.message.startsWith('USAGE_LIMIT:')) {
@@ -1520,7 +1466,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   }
 
   // ─── Auto scanner ─────────────────────────────────────────────────────────
-  const scanOneTicker = useCallback(async (ticker, tf='Swing (21–45 DTE)')=>{
+  // ── scanOneTicker — unified scoring with manual runScan ──────────────────────
+  // Uses identical scoring logic as the manual scanner.
+  // Fundamentals (sector, market cap, earnings date) are fetched from
+  // /api/fundamentals which reads Supabase → Redis → api-ninjas (in that order).
+  // This keeps api-ninjas calls well within the 3000/month limit.
+  const scanOneTicker = useCallback(async (ticker, tf='Swing (21–45 DTE)', withFundamentals=false)=>{
     const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)']
     try {
       const quote=await getQuote(ticker)
@@ -1532,17 +1483,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const expiryRaw=pickExpiry(expDates, tfCfg2.minDTE, tfCfg2.maxDTE)
       const chain=await getChain(ticker,expiryRaw)
       if (!chain.length) return null
+
       const chgPct=parseFloat(quote.change_percentage||0)
       const optType=chgPct>=0?'call':'put'
       const step=autoStep(price)
-      const tgt=optType==='call'?Math.round(price*1.02/step)*step:Math.round(price*0.98/step)*step
       const side=chain.filter(o=>o.option_type===optType)
       if (!side.length) return null
-      const best=side.reduce((a,b)=>Math.abs(b.strike-tgt)<Math.abs(a.strike-tgt)?b:a)
-      const bid=parseFloat(best.bid||0),ask=parseFloat(best.ask||0),mid=(bid+ask)/2
-      if (mid===0) return null
-      const iv=best.greeks?.mid_iv||0,delta=best.greeks?.delta||null
-      const vol=quote.volume||0,avg=quote.average_volume||vol
+
+      // Use buildNakedResult for consistent contract selection (same as manual scan)
+      const td = buildNakedResult(chain, price, step, optType, tfCfg2)
+      if (!td) return null
+
+      const iv=td.iv||0, delta=td.delta||null
+      const vol=quote.volume||0, avg=quote.average_volume||vol
       const volRatio=vol/(avg||1)
       const ivPct2=iv*100
       const now2=new Date()
@@ -1551,74 +1504,168 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const isIntraChasing2 = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0
       const isEarningsGap2  = Math.abs(chgPct)>5.0
       const isChasing2      = isIntraChasing2
-      const isHighIV2=iv>0.55
+      const isHighIV2       = iv>0.55
       const expDate2=new Date(expiryRaw+'T12:00:00')
       const dte2=Math.round((expDate2-now2)/(1000*60*60*24))
 
-      let score=50; const reasons=[],warnings=[],hardBlocks2=[]
-      if(isMorning2){
-        warnings.push('Market open — volatile first 30 min, size smaller')
+      // 52-week position (Tradier provides this in quote)
+      const hi52=parseFloat(quote.week_52_high||price)
+      const lo52=parseFloat(quote.week_52_low||price)
+      const pos52=(price-lo52)/((hi52-lo52)||1)
+
+      // Market regime from live index state (same as manual scan)
+      const spxChgToday = esBar?.chgPct||0
+      const ndxChgToday = nqBar?.chgPct||0
+      const marketFalling = spxChgToday<-0.5 && ndxChgToday<-0.5
+      const marketRising  = spxChgToday>0.5  && ndxChgToday>0.5
+
+      // Fundamentals — fetched from /api/fundamentals (Supabase-cached, not live ninjas call)
+      // Only fetched when withFundamentals=true (manual scan or when alert fires threshold)
+      let fund = null
+      if (withFundamentals) {
+        try {
+          const authTok = await getAuthToken().catch(()=>null)
+          const fRes = await fetch(`/api/fundamentals?ticker=${ticker}`, {
+            headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
+          })
+          if (fRes.ok) {
+            const fData = await fRes.json()
+            if (fData.available) fund = fData
+          }
+        } catch {}
       }
+
+      let score=50; const reasons=[],warnings=[],hardBlocks2=[]
+
+      // Morning warning
+      if(isMorning2) warnings.push('Market open — volatile first 30 min, size smaller')
+
+      // Hard blocks
       if(isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday`);score=Math.min(score,42)}
-      if(isEarningsGap2){score+=15;reasons.push(`Gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — earnings/news catalyst`);warnings.push('Gap play — size smaller, enter on pullback')}
       if(isHighIV2){hardBlocks2.push(`High IV ${ivPct2.toFixed(0)}%`);score=Math.min(score,48)}
 
-      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct2.toFixed(0)}% low`)}
-      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct2.toFixed(0)}% moderate`)}
-      else if(iv>0.55){score-=10;warnings.push(`IV ${ivPct2.toFixed(0)}% high`)}
+      // Earnings gap (>5% move = catalyst, not chasing)
+      if(isEarningsGap2){
+        const gapOpt = chgPct>0?'call':'put'
+        if(optType===gapOpt){
+          score+=15;reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}%`)
+          warnings.push('Gap play — size at 50% normal, enter on pullback')
+        } else {
+          score-=20;warnings.push(`Trading against gap — very high risk`)
+        }
+      }
 
+      // Market regime (matches manual scanner)
+      if(marketFalling && optType==='call'){
+        score-=12;warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}%`)
+      } else if(marketRising && optType==='put'){
+        score-=10;warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}%`)
+      } else if(marketRising && optType==='call'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`)
+      } else if(marketFalling && optType==='put'){
+        score+=6;reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`)
+      }
+
+      // IV environment (4-tier, matches manual scanner)
+      if(iv>=0.20&&iv<=0.40){score+=12;reasons.push(`IV ${ivPct2.toFixed(0)}% — cheap premium`)}
+      else if(iv>0.40&&iv<=0.55){score+=6;reasons.push(`IV ${ivPct2.toFixed(0)}% — moderate`)}
+      else if(iv>0.55&&iv<=0.65){score-=8;warnings.push(`IV ${ivPct2.toFixed(0)}% elevated`)}
+      else if(iv>0.65){score-=15;warnings.push(`IV ${ivPct2.toFixed(0)}% HIGH — move priced in`)}
+
+      // Volume coherence
       if(!isMorning2){
         const vCoherent2  = volRatio>=1.5 && Math.abs(chgPct)>=1.0
         const vDiverge2   = volRatio>=3.0 && Math.abs(chgPct)<0.8
-        if(vDiverge2){score-=8;warnings.push(`Vol ${volRatio.toFixed(1)}x but only ${chgPct.toFixed(1)}% move — likely roll/distribution`)}
+        if(vDiverge2){score-=8;warnings.push(`Vol ${volRatio.toFixed(1)}x but only ${chgPct.toFixed(1)}% — likely roll`)}
         else if(vCoherent2){score+=12;reasons.push(`Vol ${volRatio.toFixed(1)}x with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move`)}
         else if(volRatio>=1.5){score+=4;warnings.push(`Vol ${volRatio.toFixed(1)}x but price only ${chgPct.toFixed(1)}%`)}
         else if(volRatio<0.8){score-=8;warnings.push(`Low vol ${volRatio.toFixed(1)}x`)}
       }
 
-      if(!isChasing2&&!isEarningsGap2&&Math.abs(chgPct)>=1.5){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
-      else if(!isChasing2&&!isEarningsGap2&&Math.abs(chgPct)>=0.8){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
-      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
-      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5}
-      if(!isMorning2&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} vol on strike`)}
+      // Price momentum
+      if(!isChasing2&&!isEarningsGap2){
+        if(Math.abs(chgPct)>=1.5){score+=8;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+        else if(Math.abs(chgPct)>=0.8){score+=4;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}%`)}
+      }
+
+      // Delta quality
+      if(delta&&Math.abs(delta)>=0.35&&Math.abs(delta)<=0.55){score+=10;reasons.push(`Delta ${delta.toFixed(2)} ideal`)}
+      else if(delta&&Math.abs(delta)>=0.25&&Math.abs(delta)<=0.65){score+=5;reasons.push(`Delta ${delta.toFixed(2)}`)}
+
+      // Strike activity
+      if(!isMorning2&&(td.volume||0)>500){score+=5;reasons.push(`${td.volume} contracts on strike`)}
+
+      // 52-week position (matches manual scanner)
+      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
+      else if(pos52>0.65){score+=4}
+      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+
+      // DTE / IV incompatibility
       if(dte2<14&&iv>0.45){score-=12;warnings.push(`DTE ${dte2} + IV ${ivPct2.toFixed(0)}% crush risk`)}
       else if(dte2>=21&&dte2<=60){score+=5;reasons.push(`${dte2} DTE`)}
 
-      const hasRealSignal2 = Math.abs(chgPct)>=1.5 || isEarningsGap2
+      // Break-even reality check (matches manual scanner)
+      if(td && td.mid>0){
+        const strike_ = parseFloat(td.primaryStrike||0)
+        if(strike_>0){
+          const beReq_ = ((strike_ + td.mid) / price - 1) * 100
+          if(beReq_>5.0){score-=14;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — low probability`)}
+          else if(beReq_>3.5){score-=7;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs catalyst`)}
+          else if(beReq_>0&&beReq_<=2.0){score+=5;reasons.push(`Break-even only +${beReq_.toFixed(1)}% away`)}
+        }
+      }
+
+      // Fundamentals bonus — sector momentum, earnings proximity
+      if(fund){
+        // Large-cap bonus: more liquid, tighter spreads
+        if(fund.market_cap && fund.market_cap > 100_000_000_000){
+          score+=3;reasons.push(`Large-cap (${fund.sector||'—'})`)
+        }
+        // Earnings proximity warning
+        if(fund.earnings_date){
+          const earnDays = Math.round((new Date(fund.earnings_date)-now2)/(1000*60*60*24))
+          if(earnDays>=0 && earnDays<=7){
+            warnings.push(`⚠️ Earnings in ${earnDays}d — IV crush risk after event`)
+            if(!isEarningsGap2) score-=10  // approaching earnings = avoid naked options
+          } else if(earnDays>7 && earnDays<=21){
+            warnings.push(`Earnings in ${earnDays}d — factor into DTE choice`)
+          }
+        }
+      }
+
+      // No-catalyst cap (uses pos52 like manual scanner)
+      const hasRealSignal2 = Math.abs(chgPct)>=1.5 || pos52>0.85 || isEarningsGap2
       if(!hasRealSignal2 && hardBlocks2.length===0){
         score=Math.min(score,72)
-        warnings.push('No clear catalyst — confirm direction before alerting')
+        warnings.push('No clear catalyst — confirm direction before entering')
       }
       if(hardBlocks2.length>0) score=Math.min(score,48)
       score=Math.min(95,Math.max(20,score))
+
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       return {
-        ticker,score,tradeType:optType==='call'?'Call':'Put',
-        price:fmtP(price),bid:fmtP(bid),ask:fmtP(ask),mid:fmtP(mid),
+        ticker,score,
+        tradeType: td.structureType,
+        price:fmtP(price),bid:fmtP(td.bid),ask:fmtP(td.ask),mid:fmtP(td.mid),
         iv:fmtPct(iv),delta:delta?delta.toFixed(3):'—',
-        volume:best.volume||0,oi:best.open_interest||0,
+        volume:td.volume||0,oi:td.oi||0,
         expiryDisplay,
-        // Auto-scanner always uses naked option (single best strike)
-        ...(() => {
-          const td = buildNakedResult(chain, price, step, optType, tfCfg2)
-          if (!td) return { strikeStr:'—', entry:'—', target:'—', stop:'—', mid:fmtP(mid), legsList:[] }
-          return {
-            strikeStr: td.strikeStr,
-            entry:     td.entry,
-            target:    td.target,
-            stop:      td.stop,
-            mid:       fmtP(td.mid),
-            legsList:  [],
-            tradeType: td.structureType,
-          }
-        })(),
-        tfLabel:tfCfg2.label, tfBadge:tfCfg2.badge, tfColor:tfCfg2.color,
+        strikeStr:td.strikeStr,
+        entry:td.entry,target:td.target,stop:td.stop,
+        legsList:[],
+        tfLabel:tfCfg2.label,tfBadge:tfCfg2.badge,tfColor:tfCfg2.color,
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
+        // Fundamentals metadata (shown in expanded detail card)
+        sector:     fund?.sector     || null,
+        industry:   fund?.industry   || null,
+        marketCap:  fund?.market_cap || null,
+        peRatio:    fund?.pe_ratio   || null,
+        earningsDate: fund?.earnings_date || null,
       }
     } catch { return null }
-  },[tradierToken,tradierMode])
+  },[tradierToken,tradierMode,esBar,nqBar])
 
   const runAutoScan = useCallback(async()=>{
     stopRef.current = false   // reset at start of each scan run
@@ -1637,13 +1684,15 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
       if (r.score>=minScore) {
-        setLastAlert(r)
-        setAlertHistory(p=>[{...r, alertedAt: ts2}, ...p.slice(0,9)])
+        // Threshold hit — now enrich with fundamentals (Supabase-cached, safe to call)
+        const rEnriched = await scanOneTicker(ticker, activeTF, true) || r
+        setLastAlert(rEnriched)
+        setAlertHistory(p=>[{...rEnriched, alertedAt: ts2}, ...p.slice(0,9)])
         if (tgToken&&tgChatId) {
-          const authTok=await getAuthToken().catch(()=>null);const res=await sendTelegram(buildScanAlert(r),tgToken,tgChatId,authTok)
-          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% ${r.tradeType} ${r.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
+          const authTok=await getAuthToken().catch(()=>null);const res=await sendTelegram(buildScanAlert(rEnriched),tgToken,tgChatId,authTok)
+          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${rEnriched.score}% ${rEnriched.tradeType} ${rEnriched.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
         } else {
-          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${r.score}% hits threshold`,...p.slice(0,99)])
+          setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${rEnriched.score}% hits threshold`,...p.slice(0,99)])
         }
       }
       await new Promise(res=>setTimeout(res,400))
@@ -1700,32 +1749,21 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const onSignOut   = props.onSignOut   || (()=>{})
 
   // Push a scan result directly into the journal as a paper trade
-  const pushToJournal = async r => {
-    const ticker = (r.ticker||r.sym||'').toUpperCase()
-    // Clean mid price — strip $ prefix, keep numeric string
-    const rawMid   = r.mid||r.entry||''
-    const cleanMid = String(rawMid).replace(/[^0-9.]/g,'')
-    // Clean strike — strip $ and option letter suffix e.g. "$290C" → "290"
-    const rawStrike   = r.strikeStr||r.strike||''
-    const cleanStrike = String(rawStrike).replace(/[^0-9.]/g,'')
-    // Option type — extract from tradeType e.g. "Long Call" → "Call", "Bull Call Spread" → "Call Spread"
-    const rawType  = r.tradeType||''
-    const optType  = rawType.replace(/^(Long|Short|Bull|Bear)\s*/i,'').trim() || 'Call'
-    const score    = r.score||r.edgeScore||''
+  const pushToJournal = r => {
     const t = {
-      id:               Date.now()+'',
-      ticker,
-      type:             optType,
+      id: Date.now()+'',
+      ticker:           r.ticker||r.sym||'',
+      type:             r.tradeType||'Call',
       status:           'Open',
-      entry:            cleanMid,
+      entry:            r.mid||r.entry||'',   // mid price for clean journal display
       exitPrice:        '',
       pnl:              '',
       contracts:        '1',
       expiry:           r.expiryDisplay||'',
-      strike:           cleanStrike,
+      strike:           r.strikeStr||'',
       date:             new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
-      notes:            `Paper trade · ${score}% conviction · ${r.tfLabel||''}`,
-      conviction:       String(score),
+      notes:            `App alert · ${r.score}% conviction · ${r.tfLabel||''}`,
+      conviction:       String(r.score||''),
       iv:               r.ivPct ? String(r.ivPct)
                     : r.ivRaw ? String((r.ivRaw*100).toFixed(1))
                     : r.iv   ? String((parseFloat(r.iv)*100).toFixed(1))
@@ -1735,44 +1773,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
     }
-    setPaperToast(`⏳ Saving ${ticker}…`)
-    // Persist to Supabase first, then update UI
-    try {
-      const token = await getAuthToken().catch(()=>null)
-      const res = await fetch('/api/user/trades', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json', ...(token?{Authorization:`Bearer ${token}`}:{}) },
-        body: JSON.stringify({
-          ticker,
-          type:             optType,
-          action:           'buy',
-          entry:            cleanMid,
-          entry_price:      parseFloat(cleanMid)||null,
-          expiry:           t.expiry,
-          strike:           cleanStrike,
-          contracts:        '1',
-          status:           'Open',
-          notes:            t.notes,
-          conviction:       String(score),
-          grade:            t.grade,
-          chgPctAtEntry:    t.chgPctAtEntry,
-          breakevenReqPct:  t.breakevenReqPct,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setPaperToast(`❌ ${data.error || 'Save failed'}`)
-        setTimeout(()=>setPaperToast(''), 4000)
-        return
-      }
-      // Only navigate after successful save — use saved record from API if available
-      setTrades(p=>[t,...p])
-      navigate('/app/trades')
-      setPaperToast(`✅ ${ticker} saved to Trade Log`)
-    } catch(e) {
-      setPaperToast(`❌ Save failed — check connection`)
-    }
-    setTimeout(()=>setPaperToast(''), 4000)
+    setTrades(p=>[t,...p])
+    setTab('dash')
+    setPaperToast(`✅ ${t.ticker} logged as paper trade`)
+    setTimeout(()=>setPaperToast(''), 3000)
   }
 
   // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
@@ -1942,8 +1946,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {/* ── SPX / NDX price cards ── */}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
               {[
-                {sym:'SPX',data:spxBar,label:'S&P 500 Index'},
-                {sym:'NDX',data:ndxBar,label:'Nasdaq 100 Index'},
+                {sym:esBar?.label||'SPX',data:esBar,label:'S&P 500 Index'},
+                {sym:nqBar?.label||'NDX',data:nqBar,label:'Nasdaq 100 Index'},
               ].map(({sym,data,label})=>{
                 const up=data?.chgPct>=0
                 const bc=data?up?C.green:C.red:C.dim
@@ -2063,6 +2067,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       )}
                     </div>
                     {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:11,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
+                  {/* Fundamentals chips */}
+                  {(al.sector||al.earningsDate)&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:5}}>
+                    {al.sector&&<span style={{fontSize:10,padding:'1px 6px',background:C.card,border:`1px solid ${C.border}`,borderRadius:3,color:C.subtext}}>{al.sector}</span>}
+                    {al.marketCap&&<span style={{fontSize:10,padding:'1px 6px',background:C.card,border:`1px solid ${C.blue}30`,borderRadius:3,color:C.blue}}>MCap ${(al.marketCap/1e9).toFixed(0)}B</span>}
+                    {al.earningsDate&&(()=>{const d=Math.round((new Date(al.earningsDate)-new Date())/(864e5));const clr=d>=0&&d<=7?C.red:d<=21?C.orange:C.subtext;return<span style={{fontSize:10,padding:'1px 6px',background:C.card,border:`1px solid ${clr}`,borderRadius:3,color:clr}}>📅 Earnings {d>=0?`in ${d}d`:`${Math.abs(d)}d ago`}</span>})()}
+                  </div>}
                   </div>
                 )
               })}
@@ -2203,7 +2213,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    {isAdmin&&<button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>}
+                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
                     <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
                       <button className="hv" onClick={async()=>{const aTok2=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId,aTok2);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
@@ -2408,6 +2418,41 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         </>
                       )
                     })()}
+                    {/* Fundamentals row — sector, market cap, earnings date */}
+                    {scanResult && (scanResult.sector || scanResult.earningsDate || scanResult.peRatio) && (
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:10,marginBottom:4}}>
+                        {scanResult.sector && (
+                          <span style={{fontSize:10,padding:'2px 8px',background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.subtext,letterSpacing:0.5}}>
+                            {scanResult.sector}
+                          </span>
+                        )}
+                        {scanResult.industry && (
+                          <span style={{fontSize:10,padding:'2px 8px',background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.subtext,letterSpacing:0.5}}>
+                            {scanResult.industry}
+                          </span>
+                        )}
+                        {scanResult.marketCap && (
+                          <span style={{fontSize:10,padding:'2px 8px',background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.blue,letterSpacing:0.5}}>
+                            MCap ${(scanResult.marketCap/1e9).toFixed(0)}B
+                          </span>
+                        )}
+                        {scanResult.peRatio && (
+                          <span style={{fontSize:10,padding:'2px 8px',background:C.card,border:`1px solid ${C.border}`,borderRadius:4,color:C.subtext,letterSpacing:0.5}}>
+                            P/E {parseFloat(scanResult.peRatio).toFixed(1)}
+                          </span>
+                        )}
+                        {scanResult.earningsDate && (() => {
+                          const ed = new Date(scanResult.earningsDate)
+                          const daysOut = Math.round((ed - new Date()) / (1000*60*60*24))
+                          const color = daysOut >= 0 && daysOut <= 7 ? C.red : daysOut <= 21 ? C.orange : C.subtext
+                          return (
+                            <span style={{fontSize:10,padding:'2px 8px',background:C.card,border:`1px solid ${color}`,borderRadius:4,color,letterSpacing:0.5}}>
+                              📅 Earnings {daysOut >= 0 ? `in ${daysOut}d` : `${Math.abs(daysOut)}d ago`}
+                            </span>
+                          )
+                        })()}
+                      </div>
+                    )}
                     {tickerBrief && (
                       <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
                         <div style={{fontSize:11,color:C.blue,letterSpacing:2,marginBottom:8}}>
@@ -2568,10 +2613,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>📋 PAPER TRADE</button>
-                              {isAdmin&&<button className="hv" onClick={()=>pushToAlert(al)} style={{
+                              <button className="hv" onClick={()=>pushToAlert(al)} style={{
                                 background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
-                              }}>⚡ SET ALERT</button>}
+                              }}>⚡ SET ALERT</button>
                             </div>
                           </div>
                         )}
@@ -2600,7 +2645,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         )}
 
                 {/* journal tab removed — see /app/trades */}
-        {tab==='admin' && isAdmin && <AdminDashboard getToken={getAuthToken} />}
 
       </div>
 
