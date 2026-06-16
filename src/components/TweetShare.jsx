@@ -1,43 +1,72 @@
 import { useState } from "react";
 
-async function generateTweets(setup, getToken) {
-  const token = getToken ? await getToken().catch(() => null) : null;
-  const res = await fetch("/api/brief?action=tweet", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ setup }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Failed to generate tweets");
-  return data.tweets; // array of {angle, tweet}
+// Admin Clerk ID - matches adminBypass.js
+const ADMIN_CLERK_ID = "user_3EYMA65Nxj9g1WnfYXQ01xMk9hF";
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function buildPrompt(setup) {
+  return `You are a copywriter for OptionsEdgeFlow, a premium options trading scanner at optionsedgeflow.com.
+
+Write a single tweet (max 260 chars including the URL) about this options setup that:
+1. Opens with a punchy hook about the trade — make it feel like a real trader spotted something
+2. Shows 2–3 key stats inline (ticker, setup type, edge score, DTE, or IV rank — pick the most compelling)
+3. Ends with a subtle tease that makes people want to see more setups like this, with the URL: optionsedgeflow.com
+4. Includes 4–6 relevant hashtags on a new line at the end
+
+Trade details:
+- Ticker: ${setup.ticker}
+- Setup: ${setup.setup || setup.strategy || "Options Spread"}
+- Edge Score: ${setup.edgeScore || setup.edge_score}%
+- DTE: ${setup.dte} days
+- IV Rank: ${setup.ivRank || setup.iv_rank || "N/A"}
+- Direction: ${setup.direction || "Neutral"}
+- Profit Target: ${setup.profitTarget || setup.profit_target || "80"}%
+
+Rules:
+- No emojis overload — max 2 emojis
+- Sound like a sharp trader, not a bot
+- Never say "I" or "we" — write in 3rd person or impersonally
+- Return ONLY the tweet text, nothing else`;
 }
 
-export default function TweetShare({ setup, isAdmin, getToken }) {
-  const [open, setOpen]       = useState(false);
-  const [variants, setVariants] = useState([]);
-  const [selected, setSelected] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
-  const [copied, setCopied]   = useState(false);
+async function generateTweet(setup) {
+  const response = await fetch("/api/tweet-generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ setup }),
+  });
+  const data = await response.json();
+  if (!data.tweet) throw new Error("No tweet returned");
+  return data.tweet;
+}
 
-  if (!isAdmin) return null;
-  const edgeScore = setup.edgeScore || setup.edge_score || setup.score || 0;
+// ─── Main Component ──────────────────────────────────────────────────────────
+
+export default function TweetShare({ setup, userId }) {
+  const [open, setOpen] = useState(false);
+  const [tweet, setTweet] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  // Only render for admin
+  if (userId !== ADMIN_CLERK_ID) return null;
+
+  // Only show for high-conviction setups
+  const edgeScore = setup.edgeScore || setup.edge_score || 0;
   if (edgeScore < 90) return null;
 
   async function handleOpen() {
     setOpen(true);
-    setVariants([]);
-    setSelected(0);
+    setTweet("");
     setError("");
     setLoading(true);
     try {
-      const v = await generateTweets(setup, getToken);
-      setVariants(v || []);
+      const generated = await generateTweet(setup);
+      setTweet(generated);
     } catch (e) {
-      setError(e.message || "Failed to generate tweets");
+      setError("Failed to generate tweet. Try again.");
     } finally {
       setLoading(false);
     }
@@ -45,45 +74,38 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
 
   function handleClose() {
     setOpen(false);
-    setVariants([]);
+    setTweet("");
     setError("");
     setCopied(false);
   }
 
-  async function handleRegenerate() {
-    setVariants([]);
-    setError("");
-    setSelected(0);
-    setLoading(true);
-    try {
-      const v = await generateTweets(setup, getToken);
-      setVariants(v || []);
-    } catch (e) {
-      setError(e.message || "Failed to generate tweets");
-    } finally {
-      setLoading(false);
-    }
+  function handlePostToX() {
+    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
+    window.open(url, "_blank", "noopener,noreferrer,width=600,height=500");
   }
 
   async function handleCopy() {
-    const tweet = variants[selected]?.tweet || "";
     await navigator.clipboard.writeText(tweet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function handlePostToX() {
-    const tweet = variants[selected]?.tweet || "";
-    window.open(
-      `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`,
-      "_blank",
-      "noopener,noreferrer,width=600,height=500"
-    );
+  async function handleRegenerate() {
+    setTweet("");
+    setError("");
+    setLoading(true);
+    try {
+      const generated = await generateTweet(setup);
+      setTweet(generated);
+    } catch (e) {
+      setError("Failed to generate tweet. Try again.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const activeTweet = variants[selected]?.tweet || "";
-  const charCount   = activeTweet.length;
-  const overLimit   = charCount > 280;
+  const charCount = tweet.length;
+  const overLimit = charCount > 280;
 
   return (
     <>
@@ -91,7 +113,9 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
       <button
         onClick={handleOpen}
         style={{
-          display: "inline-flex", alignItems: "center", gap: "6px",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
           padding: "6px 12px",
           background: "transparent",
           border: "1px solid #1d9bf0",
@@ -101,187 +125,240 @@ export default function TweetShare({ setup, isAdmin, getToken }) {
           fontFamily: "Inter, sans-serif",
           fontWeight: 500,
           cursor: "pointer",
-          transition: "background 0.15s",
-          whiteSpace: "nowrap",
+          transition: "all 0.15s ease",
+          letterSpacing: "0.02em",
         }}
-        onMouseEnter={e => e.currentTarget.style.background = "#1d9bf015"}
-        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "#1d9bf015";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+        }}
+        title="Share on X (Admin only)"
       >
-        <XIcon /> Share on X
+        <XIcon />
+        Share
       </button>
 
-      {/* ── Modal ── */}
+      {/* ── Modal Overlay ── */}
       {open && (
         <div
           onClick={handleClose}
           style={{
-            position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.8)",
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
             zIndex: 1000,
-            display: "flex", alignItems: "center", justifyContent: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             padding: "16px",
           }}
         >
           <div
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             style={{
               background: "#161b22",
               border: "1px solid #30363d",
               borderRadius: "12px",
-              padding: "24px",
-              width: "100%", maxWidth: "620px",
-              maxHeight: "90vh",
-              overflowY: "auto",
+              padding: "28px",
+              width: "100%",
+              maxWidth: "520px",
               fontFamily: "Inter, sans-serif",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
             }}
           >
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <XIcon size={18} color="#1d9bf0" />
-                <span style={{ color: "#e6edf3", fontSize: "15px", fontWeight: 600 }}>Share on X</span>
+                <XIcon size={20} color="#1d9bf0" />
+                <span style={{ color: "#e6edf3", fontSize: "16px", fontWeight: 600 }}>
+                  Share on X
+                </span>
                 <span style={{
-                  fontSize: "10px", padding: "2px 7px",
-                  background: "#00ff8820", color: "#00ff88",
-                  borderRadius: "4px", fontWeight: 700, letterSpacing: "0.05em",
-                }}>ADMIN</span>
+                  fontSize: "10px",
+                  padding: "2px 7px",
+                  background: "#00ff8820",
+                  color: "#00ff88",
+                  borderRadius: "4px",
+                  fontWeight: 600,
+                  letterSpacing: "0.05em",
+                }}>
+                  ADMIN
+                </span>
               </div>
-              <button onClick={handleClose} style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: "22px", lineHeight: 1, padding: "2px 8px" }}>×</button>
+              <button
+                onClick={handleClose}
+                style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: "20px", lineHeight: 1, padding: "2px 6px" }}
+              >
+                ×
+              </button>
             </div>
 
             {/* Setup pill */}
             <div style={{
-              display: "inline-flex", alignItems: "center", gap: "8px",
-              padding: "5px 12px",
-              background: "#0d1117", border: "1px solid #30363d", borderRadius: "6px",
-              marginBottom: "20px", flexWrap: "wrap",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 12px",
+              background: "#0d1117",
+              border: "1px solid #30363d",
+              borderRadius: "6px",
+              marginBottom: "16px",
             }}>
-              <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px", fontWeight: 600 }}>{setup.ticker}</span>
-              <span style={{ color: "#8b949e" }}>·</span>
-              <span style={{ color: "#e6edf3", fontSize: "12px" }}>{setup.setup || setup.strategy || setup.tradeType || "Options Spread"}</span>
-              <span style={{ color: "#8b949e" }}>·</span>
-              <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "12px" }}>{edgeScore}% edge</span>
+              <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px", fontWeight: 600 }}>
+                {setup.ticker}
+              </span>
+              <span style={{ color: "#8b949e", fontSize: "12px" }}>·</span>
+              <span style={{ color: "#e6edf3", fontSize: "12px" }}>{setup.setup || setup.strategy || "Options Spread"}</span>
+              <span style={{ color: "#8b949e", fontSize: "12px" }}>·</span>
+              <span style={{ color: "#00ff88", fontFamily: "IBM Plex Mono, monospace", fontSize: "12px" }}>
+                {edgeScore}% edge
+              </span>
             </div>
 
-            {/* Loading */}
-            {loading && (
-              <div style={{
-                display: "flex", flexDirection: "column", alignItems: "center",
-                justifyContent: "center", gap: "14px", padding: "48px 0",
-              }}>
-                <Spinner />
-                <span style={{ color: "#8b949e", fontSize: "13px" }}>Generating 6 angles…</span>
+            {/* Tweet area */}
+            <div style={{ position: "relative", marginBottom: "12px" }}>
+              {loading ? (
+                <div style={{
+                  minHeight: "140px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "12px",
+                  background: "#0d1117",
+                  borderRadius: "8px",
+                  border: "1px solid #30363d",
+                }}>
+                  <Spinner />
+                  <span style={{ color: "#8b949e", fontSize: "13px" }}>Generating tweet…</span>
+                </div>
+              ) : error ? (
+                <div style={{
+                  minHeight: "80px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "#ff000010",
+                  border: "1px solid #ff000040",
+                  borderRadius: "8px",
+                  color: "#ff7b7b",
+                  fontSize: "13px",
+                }}>
+                  {error}
+                </div>
+              ) : (
+                <textarea
+                  value={tweet}
+                  onChange={(e) => setTweet(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minHeight: "140px",
+                    background: "#0d1117",
+                    border: `1px solid ${overLimit ? "#ff000060" : "#30363d"}`,
+                    borderRadius: "8px",
+                    color: "#e6edf3",
+                    fontSize: "14px",
+                    lineHeight: "1.6",
+                    padding: "14px",
+                    resize: "vertical",
+                    fontFamily: "Inter, sans-serif",
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                  placeholder="Tweet will appear here…"
+                />
+              )}
+            </div>
+
+            {/* Char count + regen */}
+            {!loading && !error && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+                <button
+                  onClick={handleRegenerate}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#8b949e",
+                    fontSize: "12px",
+                    cursor: "pointer",
+                    padding: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                >
+                  ↻ Regenerate
+                </button>
+                <span style={{
+                  fontFamily: "IBM Plex Mono, monospace",
+                  fontSize: "12px",
+                  color: overLimit ? "#ff7b7b" : charCount > 250 ? "#f0a500" : "#8b949e",
+                }}>
+                  {charCount}/280
+                </span>
               </div>
             )}
 
-            {/* Error */}
-            {!loading && error && (
-              <div style={{
-                padding: "16px", background: "#ff000010",
-                border: "1px solid #ff000040", borderRadius: "8px",
-                color: "#ff7b7b", fontSize: "13px", textAlign: "center", marginBottom: "16px",
-              }}>
-                {error}
-              </div>
-            )}
+            {/* Actions */}
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                onClick={handleCopy}
+                disabled={!tweet || loading}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  background: "transparent",
+                  border: "1px solid #30363d",
+                  borderRadius: "7px",
+                  color: copied ? "#00ff88" : "#8b949e",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: tweet && !loading ? "pointer" : "not-allowed",
+                  transition: "all 0.15s",
+                  fontFamily: "Inter, sans-serif",
+                }}
+              >
+                {copied ? "✓ Copied" : "Copy"}
+              </button>
+              <button
+                onClick={handlePostToX}
+                disabled={!tweet || loading || overLimit}
+                style={{
+                  flex: 2,
+                  padding: "10px",
+                  background: tweet && !loading && !overLimit ? "#1d9bf0" : "#1d9bf040",
+                  border: "none",
+                  borderRadius: "7px",
+                  color: tweet && !loading && !overLimit ? "#fff" : "#ffffff60",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  cursor: tweet && !loading && !overLimit ? "pointer" : "not-allowed",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "7px",
+                  transition: "all 0.15s",
+                  fontFamily: "Inter, sans-serif",
+                }}
+              >
+                <XIcon size={14} color="currentColor" />
+                Post to X
+              </button>
+            </div>
 
-            {/* 6 angle cards */}
-            {!loading && variants.length > 0 && (
-              <>
-                <div style={{ marginBottom: "6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ color: "#8b949e", fontSize: "12px" }}>Pick an angle — click to select, then post</span>
-                  <button onClick={handleRegenerate} style={{
-                    background: "none", border: "none", color: "#8b949e",
-                    fontSize: "12px", cursor: "pointer", padding: 0,
-                  }}>↻ Regenerate all</button>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-                  {variants.map((v, i) => {
-                    const isActive = selected === i;
-                    const chars = v.tweet.length;
-                    const over = chars > 280;
-                    return (
-                      <div
-                        key={i}
-                        onClick={() => setSelected(i)}
-                        style={{
-                          border: `1px solid ${isActive ? "#1d9bf0" : "#30363d"}`,
-                          borderRadius: "8px",
-                          padding: "12px 14px",
-                          background: isActive ? "#1d9bf008" : "#0d1117",
-                          cursor: "pointer",
-                          transition: "all 0.12s",
-                          position: "relative",
-                        }}
-                      >
-                        {/* Angle label + char count */}
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                          <span style={{
-                            fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em",
-                            color: isActive ? "#1d9bf0" : "#8b949e",
-                            textTransform: "uppercase",
-                          }}>
-                            {isActive ? "✓ " : ""}{v.angle}
-                          </span>
-                          <span style={{
-                            fontFamily: "IBM Plex Mono, monospace", fontSize: "10px",
-                            color: over ? "#ff7b7b" : chars > 250 ? "#f0a500" : "#8b949e",
-                          }}>{chars}/280</span>
-                        </div>
-                        {/* Tweet text */}
-                        <p style={{
-                          margin: 0,
-                          fontSize: "13px",
-                          lineHeight: "1.55",
-                          color: isActive ? "#e6edf3" : "#8b949e",
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                        }}>
-                          {v.tweet}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Actions */}
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button onClick={handleCopy} style={{
-                    flex: 1, padding: "10px",
-                    background: "transparent", border: "1px solid #30363d", borderRadius: "7px",
-                    color: copied ? "#00ff88" : "#8b949e",
-                    fontSize: "13px", fontWeight: 500, cursor: "pointer",
-                    fontFamily: "Inter, sans-serif",
-                  }}>
-                    {copied ? "✓ Copied" : "Copy"}
-                  </button>
-                  <button onClick={handlePostToX} disabled={overLimit} style={{
-                    flex: 2, padding: "10px",
-                    background: overLimit ? "#1d9bf040" : "#1d9bf0",
-                    border: "none", borderRadius: "7px",
-                    color: overLimit ? "#ffffff60" : "#fff",
-                    fontSize: "13px", fontWeight: 600,
-                    cursor: overLimit ? "not-allowed" : "pointer",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: "7px",
-                    fontFamily: "Inter, sans-serif",
-                  }}>
-                    <XIcon size={13} color="currentColor" /> Post to X
-                  </button>
-                </div>
-
-                <p style={{ color: "#8b949e", fontSize: "11px", textAlign: "center", marginTop: "12px", marginBottom: 0 }}>
-                  Opens X in a new window — you confirm before anything posts.
-                </p>
-              </>
-            )}
+            <p style={{ color: "#8b949e", fontSize: "11px", textAlign: "center", marginTop: "14px", marginBottom: 0 }}>
+              Opens X in a new window — you confirm before posting.
+            </p>
           </div>
         </div>
       )}
     </>
   );
 }
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 function XIcon({ size = 14, color = "currentColor" }) {
   return (
@@ -293,14 +370,15 @@ function XIcon({ size = 14, color = "currentColor" }) {
 
 function Spinner() {
   return (
-    <>
-      <style>{`@keyframes oef-spin { to { transform: rotate(360deg); } }`}</style>
-      <div style={{
-        width: "28px", height: "28px",
-        border: "2px solid #30363d", borderTopColor: "#1d9bf0",
-        borderRadius: "50%",
-        animation: "oef-spin 0.7s linear infinite",
-      }} />
-    </>
+    <div style={{
+      width: "24px",
+      height: "24px",
+      border: "2px solid #30363d",
+      borderTopColor: "#1d9bf0",
+      borderRadius: "50%",
+      animation: "spin 0.7s linear infinite",
+    }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 }
