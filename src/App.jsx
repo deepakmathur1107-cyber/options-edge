@@ -1036,8 +1036,6 @@ useEffect(() => {
       dbg(`   ✓ ${chain.length} contracts`)
 
       const chgPct=parseFloat(quote.change_percentage||0)
-      const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
-      const isSpread     = SPREAD_TYPES.includes(scanType)
       // Direction driven by flow signal consensus (4 signals) not just intraday %
       const flow = computeFlowSignals(chain, price)
       let bearish, directionSource
