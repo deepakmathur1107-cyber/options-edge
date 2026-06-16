@@ -1076,7 +1076,7 @@ useEffect(() => {
 
       // ── Earnings detection via IV term structure ──────────────────────────
       let earningsFlag = false
-      await (async () => {
+      await (async (scanIV, scanExpiry, tkr, px) => {
         try {
           const _now = new Date(); _now.setHours(0,0,0,0)
           const _expR = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fexpirations%3Fsymbol%3D${ticker}%26includeAllRoots%3Dfalse`)
@@ -1089,15 +1089,15 @@ useEffect(() => {
           const _fc    = ((await _fcR.json())?.options?.option) || []
           const _fatm  = _fc.filter(o => o.option_type==='call' && Math.abs(o.strike-price)<price*0.05 && parseFloat(o.greeks?.mid_iv||0)>0)
           const _fiv   = _fatm.length ? _fatm.reduce((s,o)=>s+parseFloat(o.greeks?.mid_iv||0),0)/_fatm.length : 0
-          const _spike = iv>0 && _fiv>0 ? _fiv/iv : 0
-          dbg(`   ✓ Earnings: front ${_fExp}(${_fDTE}d) IV ${(_fiv*100).toFixed(0)}% vs scan IV ${(iv*100).toFixed(0)}% = ${_spike.toFixed(2)}x`)
+          const _spike = scanIV>0 && _fiv>0 ? _fiv/scanIV : 0
+          dbg(`   ✓ Earnings: front ${_fExp}(${_fDTE}d) IV ${(_fiv*100).toFixed(0)}% vs scan IV ${(scanIV*100).toFixed(0)}% = ${_spike.toFixed(2)}x`)
           if (_spike >= 1.35) {
             earningsFlag = true
             score = Math.min(score, 60)
-            hardBlocks.push(`🗓 Earnings likely within ${_fDTE} days — IV spike ${_spike.toFixed(1)}x (${(_fiv*100).toFixed(0)}% front vs ${(iv*100).toFixed(0)}% scan expiry). Naked option risks IV crush. Use spread to define risk.`)
+            hardBlocks.push(`🗓 Earnings likely within ${_fDTE} days — IV spike ${_spike.toFixed(1)}x (${(_fiv*100).toFixed(0)}% front vs ${(scanIV*100).toFixed(0)}% scan expiry). Naked option risks IV crush. Use spread to define risk.`)
           }
         } catch(_e) { console.warn('[earnings]', _e.message) }
-      })()
+      })(iv, expiryRaw, ticker, price)
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
