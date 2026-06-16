@@ -1157,10 +1157,42 @@ useEffect(() => {
       }
 
       // ── Market regime ─────────────────────────────────────────────────────
-      if (marketFalling && optType==='call' && !isSpread) { score-=12; warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}%/NDX ${ndxChgToday.toFixed(1)}%. Calls face drag.`) }
-      else if (marketRising && optType==='put' && !isSpread) { score-=10; warnings.push(`Market headwind — SPX ${spxChgToday.toFixed(1)}%/NDX ${ndxChgToday.toFixed(1)}%. Puts face drag.`) }
-      else if (marketRising && optType==='call') { score+=5; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`) }
-      else if (marketFalling && optType==='put') { score+=5; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`) }
+      // ── Market regime filter (IV-derived beta, no hardcoding) ──────────────
+      // Beta proxy from IV — high IV stocks move more with the market
+      const ivAnnualized  = iv * 100
+      const betaClass     = ivAnnualized > 50 ? 'high' : ivAnnualized > 25 ? 'mid' : 'low'
+      const betaMult      = betaClass === 'high' ? 1.5 : betaClass === 'mid' ? 1.0 : 0.6
+      const regimeScore   = marketConviction?.score || 50
+      const regimeDir     = marketConviction?.direction || 'NEUTRAL'
+      const regimeBullish = regimeScore >= 62
+      const regimeBearish = regimeScore <= 38
+      const regimeStrong  = regimeScore >= 70 || regimeScore <= 30
+      if (regimeBearish && optType==='call' && !isSpread) {
+        const base    = regimeStrong ? 14 : 9
+        const penalty = Math.round(base * betaMult)
+        score -= penalty
+        if (regimeStrong && betaClass === 'high') {
+          warnings.push(`⚠ Strong bearish regime (${regimeScore}% conviction) + high-volatility stock (IV ${ivAnnualized.toFixed(0)}%) — calls face severe headwind. SPX ${spxChgToday.toFixed(1)}% / NDX ${ndxChgToday.toFixed(1)}%.`)
+        } else {
+          warnings.push(`Market headwind — regime ${regimeScore}% bearish, stock IV ${ivAnnualized.toFixed(0)}% (${betaClass}-beta). Calls face drag. SPX ${spxChgToday.toFixed(1)}%.`)
+        }
+      } else if (regimeBullish && optType==='put' && !isSpread) {
+        const base    = regimeStrong ? 12 : 8
+        const penalty = Math.round(base * betaMult)
+        score -= penalty
+        warnings.push(`Market headwind — regime ${regimeScore}% bullish, IV ${ivAnnualized.toFixed(0)}% (${betaClass}-beta). Puts face drag. NDX ${ndxChgToday.toFixed(1)}%.`)
+      } else if (regimeBullish && optType==='call') {
+        const bonus = Math.round(6 * betaMult)
+        score += bonus
+        reasons.push(`Market tailwind — regime ${regimeScore}% bullish, IV ${ivAnnualized.toFixed(0)}% ${betaClass}-beta amplifier. SPX ${spxChgToday.toFixed(1)}%`)
+      } else if (regimeBearish && optType==='put') {
+        const bonus = Math.round(6 * betaMult)
+        score += bonus
+        reasons.push(`Market tailwind — regime ${regimeScore}% bearish, IV ${ivAnnualized.toFixed(0)}% ${betaClass}-beta amplifier. SPX ${spxChgToday.toFixed(1)}% falling`)
+      } else {
+        if (marketFalling && optType==='call') { score -= 4 }
+        else if (marketRising && optType==='put') { score -= 4 }
+      }
 
       // ── IV environment ────────────────────────────────────────────────────
       if (iv>=0.20&&iv<=0.40){score+=10;reasons.push(`IV ${ivPct.toFixed(0)}% — cheap premium`)}
