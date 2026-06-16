@@ -1069,7 +1069,7 @@ useEffect(() => {
       const ask        = parseFloat(best.ask||0)
       const mid        = (bid+ask)/2
       if (mid===0) throw new Error('Bid/ask both $0 — no liquidity')
-      const iv         = best.greeks?.mid_iv||best.implied_volatility||0
+      let iv           = best.greeks?.mid_iv||best.implied_volatility||0
       const delta      = best.greeks?.delta||null
       const theta      = best.greeks?.theta||null
       dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Mid: ${fmtP(mid)} | IV: ${fmtPct(iv)}`)
