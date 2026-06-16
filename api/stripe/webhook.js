@@ -2,7 +2,6 @@
 // IMPORTANT: Vercel parses req.body by default which breaks Stripe signature verification.
 // The export config below disables body parsing for this route.
 
-// Disable Vercel's automatic body parsing — Stripe needs the raw body
 module.exports.config = {
   api: { bodyParser: false }
 }
@@ -23,8 +22,8 @@ function getRawBody(req) {
   })
 }
 
-// Look up clerk_id from stripe_customer_id in Supabase
-async function getClerkId(stripeCustomerId) {
+// Look up clerk_id from stripe_customer_id in Supabase (fallback only)
+async function getClerkIdByCustomer(stripeCustomerId) {
   const { data } = await supabase
     .from('subscriptions')
     .select('clerk_id')
@@ -33,11 +32,22 @@ async function getClerkId(stripeCustomerId) {
   return data?.clerk_id || null
 }
 
+// Resolve clerk_id from multiple sources in priority order:
+// 1. Session/subscription metadata (most reliable — set at checkout creation time)
+// 2. Supabase lookup by stripe_customer_id (fallback)
+async function resolveClerkId(obj) {
+  const fromMeta = obj.metadata?.clerk_id
+  if (fromMeta) return fromMeta
+  const custId = obj.customer
+  if (!custId) return null
+  return getClerkIdByCustomer(custId)
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
 
-  // Read raw body BEFORE Vercel/Express can parse it
+  // Read raw body BEFORE any parsing
   let rawBody
   try {
     rawBody = await getRawBody(req)
@@ -45,7 +55,7 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Could not read request body' })
   }
 
-  // Verify Stripe signature using raw body
+  // Verify Stripe signature
   const sig = req.headers['stripe-signature']
   let event
   try {
@@ -56,8 +66,6 @@ module.exports = async function handler(req, res) {
     )
   } catch (e) {
     console.error('Stripe signature verification failed:', e.message)
-    console.error('  sig header:', sig?.substring(0, 40))
-    console.error('  secret set:', !!process.env.STRIPE_WEBHOOK_SECRET)
     return res.status(400).json({ error: 'Webhook signature invalid: ' + e.message })
   }
 
@@ -66,17 +74,48 @@ module.exports = async function handler(req, res) {
   try {
     switch (event.type) {
 
+      // ── Checkout completed — fires first, immediately after user pays ──────
+      // Write subscription row right away so the user isn't locked out while
+      // waiting for subscription.created to fire.
+      case 'checkout.session.completed': {
+        const session = event.data.object
+        if (session.mode !== 'subscription') break
+
+        const clerkId = await resolveClerkId(session)
+        if (!clerkId) {
+          console.error('checkout.session.completed: no clerk_id found for customer', session.customer)
+          break
+        }
+
+        // subscription.created will overwrite with full details shortly after.
+        // We write 'trialing' as a safe default — the actual status comes from
+        // subscription.created which fires within seconds.
+        await supabase.from('subscriptions').upsert({
+          clerk_id:               clerkId,
+          stripe_customer_id:     session.customer,
+          stripe_subscription_id: session.subscription,
+          status:                 'trialing',
+          plan:                   'pro',
+          updated_at:             new Date().toISOString(),
+        }, { onConflict: 'clerk_id' })
+
+        console.log(`Checkout completed for clerk_id=${clerkId}, sub=${session.subscription}`)
+        break
+      }
+
+      // ── Subscription created or updated ───────────────────────────────────
+      // Authoritative source for status and current_period_end.
+      // Fires after checkout.session.completed and on every status change.
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const sub     = event.data.object
-        const custId  = sub.customer
-        const status  = sub.status
+        const sub       = event.data.object
+        const custId    = sub.customer
+        const status    = sub.status
         const periodEnd = new Date(sub.current_period_end * 1000).toISOString()
 
-        // Get clerk_id from subscription metadata or look up from Supabase
-        const clerkId = sub.metadata?.clerk_id || await getClerkId(custId)
+        const clerkId = await resolveClerkId(sub)
         if (!clerkId) {
-          console.error('No clerk_id for customer:', custId)
+          console.error(`${event.type}: no clerk_id for customer ${custId}`)
           break
         }
 
@@ -90,15 +129,19 @@ module.exports = async function handler(req, res) {
           updated_at:             new Date().toISOString(),
         }, { onConflict: 'clerk_id' })
 
-        console.log(`Subscription ${status} for clerk_id=${clerkId}`)
+        console.log(`Subscription ${event.type} → status=${status} for clerk_id=${clerkId}`)
         break
       }
 
+      // ── Subscription deleted (cancelled and fully ended) ──────────────────
       case 'customer.subscription.deleted': {
-        const sub    = event.data.object
-        const custId = sub.customer
-        const clerkId = sub.metadata?.clerk_id || await getClerkId(custId)
-        if (!clerkId) break
+        const sub     = event.data.object
+        const custId  = sub.customer
+        const clerkId = await resolveClerkId(sub)
+        if (!clerkId) {
+          console.error(`subscription.deleted: no clerk_id for customer ${custId}`)
+          break
+        }
 
         await supabase.from('subscriptions').upsert({
           clerk_id:               clerkId,
@@ -112,26 +155,51 @@ module.exports = async function handler(req, res) {
         break
       }
 
+      // ── Invoice payment failed (card decline on renewal) ──────────────────
       case 'invoice.payment_failed': {
-        const custId  = event.data.object.customer
-        const clerkId = await getClerkId(custId)
+        const invoice = event.data.object
+        const clerkId = await getClerkIdByCustomer(invoice.customer)
         if (!clerkId) break
+
         await supabase.from('subscriptions')
           .update({ status: 'past_due', updated_at: new Date().toISOString() })
           .eq('clerk_id', clerkId)
-        console.log(`Payment failed for clerk_id=${clerkId}`)
+
+        console.log(`Payment failed → past_due for clerk_id=${clerkId}`)
         break
       }
 
+      // ── Invoice payment succeeded (renewal) ───────────────────────────────
+      // Skip subscription_create — subscription.created already handles that.
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object
         if (invoice.billing_reason === 'subscription_create') break
-        const clerkId = await getClerkId(invoice.customer)
+
+        const clerkId = await getClerkIdByCustomer(invoice.customer)
         if (!clerkId) break
+
+        // On renewal, also update current_period_end from the subscription object
+        let periodEnd = null
+        if (invoice.subscription) {
+          try {
+            const sub = await stripe.subscriptions.retrieve(invoice.subscription)
+            periodEnd = new Date(sub.current_period_end * 1000).toISOString()
+          } catch (e) {
+            console.warn('Could not retrieve subscription for period_end update:', e.message)
+          }
+        }
+
+        const updatePayload = {
+          status:     'active',
+          updated_at: new Date().toISOString(),
+        }
+        if (periodEnd) updatePayload.current_period_end = periodEnd
+
         await supabase.from('subscriptions')
-          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .update(updatePayload)
           .eq('clerk_id', clerkId)
-        console.log(`Payment succeeded for clerk_id=${clerkId}`)
+
+        console.log(`Payment succeeded → active for clerk_id=${clerkId}`)
         break
       }
 
@@ -140,7 +208,7 @@ module.exports = async function handler(req, res) {
     }
   } catch (e) {
     console.error('Webhook handler error:', e.message)
-    // Still return 200 so Stripe doesn't retry — log the error instead
+    // Always return 200 to prevent Stripe retries — log the error
     return res.status(200).json({ received: true, warning: e.message })
   }
 

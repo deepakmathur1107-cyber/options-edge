@@ -1,3 +1,4 @@
+// api/stripe/checkout.js
 const Stripe        = require('stripe')
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth }   = require('../_lib/auth')
@@ -35,14 +36,14 @@ module.exports = async function handler(req, res) {
     if (existingSub?.stripe_customer_id) {
       stripeCustomerId = existingSub.stripe_customer_id
 
-      // Check Stripe for all subscriptions on this customer
+      // Check all subscriptions for this customer on Stripe
       const allSubs = await stripe.subscriptions.list({
         customer: stripeCustomerId,
         limit: 10,
         status: 'all',
       })
 
-      // GUARD: Block if already has an active or trialing subscription
+      // GUARD 1: Block if already has an active or trialing subscription
       const alreadyActive = allSubs.data.some(
         s => s.status === 'active' || s.status === 'trialing'
       )
@@ -53,7 +54,7 @@ module.exports = async function handler(req, res) {
         })
       }
 
-      // Check if trial was ever used on any past subscription
+      // GUARD 2: Check if trial was ever used on any past or present subscription
       if (existingSub.stripe_subscription_id) {
         trialEverUsed = true
       } else {
@@ -62,6 +63,7 @@ module.exports = async function handler(req, res) {
         )
       }
     } else {
+      // Brand new customer — create in Stripe
       const customer = await stripe.customers.create({
         email,
         metadata: { clerk_id: clerkId },
@@ -69,7 +71,9 @@ module.exports = async function handler(req, res) {
       stripeCustomerId = customer.id
     }
 
+    // Build subscription_data — only add trial if eligible
     const subscriptionData = {
+      // Pass clerk_id at subscription level for webhook.subscription.created
       metadata: { clerk_id: clerkId },
     }
     if (!trialEverUsed) {
@@ -77,16 +81,20 @@ module.exports = async function handler(req, res) {
     }
 
     const session = await stripe.checkout.sessions.create({
-      customer:   stripeCustomerId,
-      mode:       'subscription',
+      customer: stripeCustomerId,
+      mode:     'subscription',
       line_items: [{ price: process.env.STRIPE_PRICE_ID_PRO, quantity: 1 }],
       subscription_data: subscriptionData,
+      // Pass clerk_id at SESSION level so checkout.session.completed webhook
+      // can identify the user immediately without a Supabase lookup
+      metadata: { clerk_id: clerkId },
       success_url: `${origin}/app?sub=success`,
       cancel_url:  `${origin}/app`,
       allow_promotion_codes:      true,
       billing_address_collection: 'required',
     })
 
+    // Write pending row so webhook can find clerk_id via customer lookup if needed
     await supabase.from('subscriptions').upsert({
       clerk_id:           clerkId,
       stripe_customer_id: stripeCustomerId,
