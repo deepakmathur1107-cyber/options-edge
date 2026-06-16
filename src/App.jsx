@@ -1075,32 +1075,29 @@ useEffect(() => {
       dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Mid: ${fmtP(mid)} | IV: ${fmtPct(iv)}`)
 
       // ── Earnings detection via IV term structure ──────────────────────────
-      // Fetches front expiry independently and compares IV vs current scan expiry
-      // Front IV spike 35%+ = earnings likely within 21 days
       let earningsFlag = false
-      try {
-        const now_ = new Date(); now_.setHours(0,0,0,0)
-        const earnExpRes  = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fexpirations%3Fsymbol%3D${ticker}%26includeAllRoots%3Dfalse`)
-        const earnExpData = await earnExpRes.json()
-        const earnExpiries = earnExpData?.expirations?.date || []
-        const frontExp  = earnExpiries[0]
-        if (frontExp && frontExp !== expiryRaw) {
-          const frontDTE = Math.round((new Date(frontExp+'T12:00:00') - now_) / 86400000)
-          if (frontDTE <= 21) {
-            const frontRes   = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fchains%3Fsymbol%3D${ticker}%26expiration%3D${frontExp}%26greeks%3Dtrue`)
-            const frontChain = (await frontRes.json())?.options?.option || []
-            const frontATM   = frontChain.filter(o => o.option_type==='call' && Math.abs(o.strike-price) < price*0.05 && parseFloat(o.greeks?.mid_iv||0) > 0)
-            const frontIV    = frontATM.length ? frontATM.reduce((s,o)=>s+parseFloat(o.greeks?.mid_iv||0),0)/frontATM.length : 0
-            const ivSpike    = iv > 0 && frontIV > 0 ? frontIV / iv : 0
-            dbg(`   ✓ Earnings check: front ${frontExp}(${frontDTE}DTE) IV ${(frontIV*100).toFixed(0)}% vs scan IV ${(iv*100).toFixed(0)}% = ${ivSpike.toFixed(2)}x`)
-            if (ivSpike >= 1.35) {
-              earningsFlag = true
-              score = Math.min(score, 60)
-              hardBlocks.push(`🗓 Earnings likely within ${frontDTE} days — IV spike ${ivSpike.toFixed(1)}x (${(frontIV*100).toFixed(0)}% front vs ${(iv*100).toFixed(0)}% scan expiry). Naked option risks IV crush after event. Use spread to define risk.`)
-            }
+      await (async () => {
+        try {
+          const _now = new Date(); _now.setHours(0,0,0,0)
+          const _expR = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fexpirations%3Fsymbol%3D${ticker}%26includeAllRoots%3Dfalse`)
+          const _exps = ((await _expR.json())?.expirations?.date) || []
+          const _fExp = _exps[0]
+          if (!_fExp || _fExp === expiryRaw) return
+          const _fDTE = Math.round((new Date(_fExp+'T12:00:00') - _now) / 86400000)
+          if (_fDTE > 21) return
+          const _fcR   = await fetch(`/api/tradier?path=%2Fmarkets%2Foptions%2Fchains%3Fsymbol%3D${ticker}%26expiration%3D${_fExp}%26greeks%3Dtrue`)
+          const _fc    = ((await _fcR.json())?.options?.option) || []
+          const _fatm  = _fc.filter(o => o.option_type==='call' && Math.abs(o.strike-price)<price*0.05 && parseFloat(o.greeks?.mid_iv||0)>0)
+          const _fiv   = _fatm.length ? _fatm.reduce((s,o)=>s+parseFloat(o.greeks?.mid_iv||0),0)/_fatm.length : 0
+          const _spike = iv>0 && _fiv>0 ? _fiv/iv : 0
+          dbg(`   ✓ Earnings: front ${_fExp}(${_fDTE}d) IV ${(_fiv*100).toFixed(0)}% vs scan IV ${(iv*100).toFixed(0)}% = ${_spike.toFixed(2)}x`)
+          if (_spike >= 1.35) {
+            earningsFlag = true
+            score = Math.min(score, 60)
+            hardBlocks.push(`🗓 Earnings likely within ${_fDTE} days — IV spike ${_spike.toFixed(1)}x (${(_fiv*100).toFixed(0)}% front vs ${(iv*100).toFixed(0)}% scan expiry). Naked option risks IV crush. Use spread to define risk.`)
           }
-        }
-      } catch(e) { console.warn('[earnings]', e.message) }
+        } catch(_e) { console.warn('[earnings]', _e.message) }
+      })()
 
       const vol=quote.volume||0,avgVol=quote.average_volume||vol
       const volRatio=vol/(avgVol||1)
