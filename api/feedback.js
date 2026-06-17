@@ -51,11 +51,71 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ ok: true })
   }
 
-  // ── GET — fetch all feedback (admin only) ───────────────────────────────────
+  // ── GET — fetch feedback + optional app stats (admin only) ─────────────────
   if (req.method === 'GET') {
     const { clerkId } = await getAuth(req)
     if (!clerkId) return res.status(401).json({ error: 'Unauthorized' })
     if (!ADMIN_IDS.includes(clerkId)) return res.status(403).json({ error: 'Admin only' })
+
+    // ?stats=1 — return app health + user stats alongside feedback
+    if (req.query.stats === '1') {
+      const [feedbackRes, subsRes, tradesRes, briefRes] = await Promise.allSettled([
+        // Feedback by type
+        supabase.from('feedback').select('type').order('created_at', { ascending: false }).limit(500),
+        // Subscription stats
+        supabase.from('subscriptions').select('status, plan, created_at'),
+        // Trade log count
+        supabase.from('trades').select('id', { count: 'exact', head: true }),
+        // Last morning brief
+        supabase.from('morning_brief').select('generated_at').order('generated_at', { ascending: false }).limit(1),
+      ])
+
+      const feedbackData  = feedbackRes.status  === 'fulfilled' ? feedbackRes.value.data  || [] : []
+      const subsData      = subsRes.status       === 'fulfilled' ? subsRes.value.data      || [] : []
+      const tradesCount   = tradesRes.status     === 'fulfilled' ? tradesRes.value.count   || 0  : 0
+      const briefData     = briefRes.status      === 'fulfilled' ? briefRes.value.data     || [] : []
+
+      // Subscription breakdown
+      const subStats = {
+        total:    subsData.length,
+        active:   subsData.filter(s => s.status === 'active').length,
+        trialing: subsData.filter(s => s.status === 'trialing').length,
+        past_due: subsData.filter(s => s.status === 'past_due').length,
+        canceled: subsData.filter(s => s.status === 'canceled' || s.status === 'inactive').length,
+      }
+
+      // New users this week
+      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
+      subStats.newThisWeek = subsData.filter(s => s.created_at > oneWeekAgo).length
+
+      // Feedback breakdown
+      const fbStats = feedbackData.reduce((acc, fb) => {
+        acc[fb.type] = (acc[fb.type] || 0) + 1
+        return acc
+      }, {})
+
+      // App health checks
+      const tradierMode = process.env.TRADIER_MODE || 'unknown'
+      const hasRedis    = !!(process.env.UPSTASH_REDIS_REST_URL)
+      const hasFinnhub  = !!(process.env.FINNHUB_API_KEY)
+      const hasNinjas   = !!(process.env.API_NINJAS_KEY)
+
+      return res.status(200).json({
+        feedback:  feedbackData.slice(0, 200),
+        stats: {
+          subscriptions: subStats,
+          feedback:      { total: feedbackData.length, byType: fbStats },
+          trades:        { total: tradesCount },
+          lastBrief:     briefData[0]?.generated_at || null,
+          health: {
+            tradierMode,
+            redis:    hasRedis   ? '✅ configured' : '❌ missing',
+            finnhub:  hasFinnhub ? '✅ configured' : '❌ missing',
+            apiNinjas: hasNinjas ? '✅ configured' : '❌ missing',
+          }
+        }
+      })
+    }
 
     const { data, error } = await supabase
       .from('feedback')
