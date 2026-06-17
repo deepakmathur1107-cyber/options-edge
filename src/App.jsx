@@ -1674,7 +1674,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           else if(beAbs_a<=2.5&&beAbs_a>0){score+=5;reasons.push(`Break-even only ${isPutA?'-':'+'}${beAbs_a.toFixed(1)}% away`)}
         }
       }
-      }
 
       // Fundamentals bonus — sector momentum, earnings proximity
       if(fund){
