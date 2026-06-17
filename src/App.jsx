@@ -1174,7 +1174,7 @@ useEffect(() => {
       else if(!isMorningNoise&&(best.volume||0)<50){score-=5;warnings.push(`Only ${best.volume||0} contracts on strike — thin liquidity, use limit orders`)}
 
       // Trend
-      if(optType==='call'||scanType?.toLowerCase().includes('call')||scanType==='Any') {
+      if(optType==='call') {
         // Call: near 52w high = tailwind, near 52w low = headwind
         if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend tailwind')}
         else if(pos52>0.65){score+=4}
@@ -1208,7 +1208,7 @@ useEffect(() => {
       }
       if(!isSpread && tradeData && tradeData.mid>0){
         const strike_ = parseFloat(tradeData.primaryStrike||0)
-        const isPut_  = (scanType||'').toLowerCase().includes('put')
+        const isPut_  = optType === 'put'
         // For calls: BE = strike + premium (need price to rise)
         // For puts:  BE = strike - premium (need price to fall)
         const bePrice_  = isPut_ ? (strike_ - tradeData.mid) : (strike_ + tradeData.mid)
@@ -1327,8 +1327,20 @@ useEffect(() => {
         volRatio:volRatio.toFixed(1)+'x',
         reasons,warnings,hardBlocks,
         dte, ivPct:ivPct.toFixed(1),
-        breakeven:(()=>{const s=parseFloat(tradeData.primaryStrike||best.strike);const isPutD=(scanType||'').toLowerCase().includes('put');return(isPutD?s-tradeData.mid:s+tradeData.mid).toFixed(2)})(),
-        breakevenPct:(((parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid)/price-1)*100).toFixed(1),
+        // Direction-aware break-even: for naked options only (spreads have their own
+        // payoff math and are excluded entirely via isSpread below).
+        breakeven: isSpread ? null : (()=>{
+          const s = parseFloat(tradeData.primaryStrike||best.strike)
+          const isPutFinal = optType === 'put'
+          return (isPutFinal ? s - tradeData.mid : s + tradeData.mid).toFixed(2)
+        })(),
+        breakevenPct: isSpread ? null : (()=>{
+          const s = parseFloat(tradeData.primaryStrike||best.strike)
+          const isPutFinal = optType === 'put'
+          const bePrice = isPutFinal ? s - tradeData.mid : s + tradeData.mid
+          return (((bePrice/price)-1)*100).toFixed(1)   // signed: negative = move down, positive = move up
+        })(),
+        breakevenIsPut: optType === 'put',
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:'',
         // Fundamentals
@@ -1476,8 +1488,10 @@ _Not financial advice. Trade at your own risk._`
   const blockWarn = r.hardBlocks?.length
     ? `\n🚫 *SKIP FLAGS:*\n${r.hardBlocks.map(b=>'  ⚠ '+b).join('\n')}`
     : ''
+  const beSign  = r.breakevenIsPut || (r.tradeType||'').toLowerCase().includes('put') ? '−' : '+'
+  const beAbsPct = r.breakevenPct != null ? Math.abs(parseFloat(r.breakevenPct)).toFixed(1) : null
   const beBlock = r.breakeven
-    ? `\n📊 *Break-even:* $${r.breakeven} (+${r.breakevenPct}% required) · DTE: ${r.dte}`
+    ? `\n📊 *Break-even:* $${r.breakeven} (${beSign}${beAbsPct}% required) · DTE: ${r.dte}`
     : ''
   return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
@@ -1705,11 +1719,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       // Breakeven for Telegram alert
       const isPutReturn = optType === 'put'
-      const breakeven2 = td.primaryStrike
-        ? (isPutReturn ? parseFloat(td.primaryStrike) - td.mid : parseFloat(td.primaryStrike) + td.mid).toFixed(2)
+      const bePriceReturn = td.primaryStrike
+        ? (isPutReturn ? parseFloat(td.primaryStrike) - td.mid : parseFloat(td.primaryStrike) + td.mid)
         : null
-      const breakevenPct2 = td.primaryStrike && price > 0
-        ? (((parseFloat(td.primaryStrike) + td.mid) / price - 1) * 100).toFixed(1)
+      const breakeven2 = bePriceReturn != null ? bePriceReturn.toFixed(2) : null
+      const breakevenPct2 = bePriceReturn != null && price > 0
+        ? (((bePriceReturn / price) - 1) * 100).toFixed(1)   // signed: negative = move down for puts
         : null
       return {
         ticker,score,
@@ -2432,8 +2447,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       </div>
                       <div style={{width:1,height:28,background:C.border}}/>
                       <div>
-                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>MOVE REQUIRED</div>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:parseFloat(scanResult.breakevenPct)>5?C.red:parseFloat(scanResult.breakevenPct)>3?C.orange:C.green,letterSpacing:1}}>+{scanResult.breakevenPct}%</div>
+                        <div style={{fontSize:7,color:C.dim,letterSpacing:2,marginBottom:1}}>MOVE REQUIRED {scanResult.breakevenIsPut?'(DOWN)':'(UP)'}</div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:Math.abs(parseFloat(scanResult.breakevenPct))>5?C.red:Math.abs(parseFloat(scanResult.breakevenPct))>3?C.orange:C.green,letterSpacing:1}}>{scanResult.breakevenIsPut?'−':'+'}{Math.abs(parseFloat(scanResult.breakevenPct)).toFixed(1)}%</div>
                       </div>
                       <div style={{width:1,height:28,background:C.border}}/>
                       <div>
@@ -2818,7 +2833,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             const conv      = t=>parseFloat(t.conviction||0)
             const ivAt      = t=>parseFloat(t.iv||0)
             const chgAt     = t=>parseFloat(t.chgPctAtEntry||0)
-            const beReq     = t=>parseFloat(t.breakevenReqPct||0)
+            const beReq     = t=>Math.abs(parseFloat(t.breakevenReqPct||0))  // abs: puts now store negative %, magnitude is what matters for difficulty buckets
             const pnl       = t=>parseFloat(t.pnl||0)
             const hb        = t=>parseInt(t.hardBlockCount||0)
 
@@ -3056,7 +3071,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 {t.exitPrice&&<span>Exit: <span style={{color:C.subtext}}>{t.exitPrice}</span></span>}
                                 {t.iv&&<span>IV: <span style={{color:parseFloat(t.iv)>55?C.red:parseFloat(t.iv)>40?C.orange:C.green}}>{t.iv}%</span></span>}
                                 {t.chgPctAtEntry&&<span>Stk Δ: <span style={{color:Math.abs(parseFloat(t.chgPctAtEntry))>2?C.red:C.subtext}}>{t.chgPctAtEntry}%</span></span>}
-                                {t.breakevenReqPct&&<span>BE req: <span style={{color:parseFloat(t.breakevenReqPct)>5?C.red:parseFloat(t.breakevenReqPct)>3?C.orange:C.green}}>+{t.breakevenReqPct}%</span></span>}
+                                {t.breakevenReqPct&&<span>BE req: <span style={{color:Math.abs(parseFloat(t.breakevenReqPct))>5?C.red:Math.abs(parseFloat(t.breakevenReqPct))>3?C.orange:C.green}}>{parseFloat(t.breakevenReqPct)<0?'−':'+'}{Math.abs(parseFloat(t.breakevenReqPct)).toFixed(1)}%</span></span>}
                               </div>
                               {t.notes&&<div style={{marginTop:4,fontSize:12,color:C.subtext,lineHeight:1.5}}>{t.notes}</div>}
                             </div>
