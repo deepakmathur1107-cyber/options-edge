@@ -169,7 +169,7 @@ module.exports = async function handler(req, res) {
       if (req.query.force === '1') {
         const { createClient } = require('@supabase/supabase-js')
         const sbForce = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
-        await sbForce.from('ticker_fundamentals').delete().eq('ticker', ticker).catch(()=>{})
+        try { await sbForce.from('ticker_fundamentals').delete().eq('ticker', ticker) } catch(e) {}
         console.log(`[fundamentals] force-refresh: deleted cached row for ${ticker}`)
       }
       const data = await getFundamentals(ticker)
