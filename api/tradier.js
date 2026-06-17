@@ -164,13 +164,26 @@ module.exports = async function handler(req, res) {
         })
       }
 
-      // ?force=1 busts Supabase cache — useful after adding FINNHUB_KEY
-      // to re-fetch and overwrite an existing row that has earnings_date: null
+      // ?force=1 busts ALL cache layers (Redis + Supabase) then re-fetches fresh
       if (req.query.force === '1') {
-        const { createClient } = require('@supabase/supabase-js')
-        const sbForce = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
-        try { await sbForce.from('ticker_fundamentals').delete().eq('ticker', ticker) } catch(e) {}
-        console.log(`[fundamentals] force-refresh: deleted cached row for ${ticker}`)
+        // 1. Clear Redis
+        const RURL = process.env.UPSTASH_REDIS_REST_URL
+        const RTOK = process.env.UPSTASH_REDIS_REST_TOKEN
+        if (RURL && RTOK) {
+          try {
+            await fetch(`${RURL}/del/${encodeURIComponent('fund:'+ticker)}`, {
+              method: 'POST', headers: { Authorization: `Bearer ${RTOK}` }
+            })
+            console.log(`[fundamentals] force: cleared Redis for ${ticker}`)
+          } catch(e) { console.warn('[fundamentals] force: Redis clear failed', e.message) }
+        }
+        // 2. Clear Supabase
+        try {
+          const { createClient } = require('@supabase/supabase-js')
+          const sbForce = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+          await sbForce.from('ticker_fundamentals').delete().eq('ticker', ticker)
+          console.log(`[fundamentals] force: deleted Supabase row for ${ticker}`)
+        } catch(e) { console.warn('[fundamentals] force: Supabase clear failed', e.message) }
       }
       const data = await getFundamentals(ticker)
       if (!data) return res.status(200).json({ ticker, available: false })
