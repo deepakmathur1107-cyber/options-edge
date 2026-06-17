@@ -1719,24 +1719,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     const ts=new Date().toLocaleTimeString()
     setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
 
-    // Prefetch fundamentals for watchlist tickers in the background (non-blocking)
-    // Sequential with 400ms delay to avoid api-ninjas rate limits
-    // Cached tickers return instantly from Supabase/Redis — only new ones hit api-ninjas
-    ;(async () => {
-      try {
-        const authTok = await getAuthToken().catch(() => null)
-        const prefetchList = tickers.slice(0, 20)
-        for (const t of prefetchList) {
-          if (stopRef.current) break  // stop prefetch if scan was stopped
-          try {
-            await fetch(`/api/tradier?fundamentals=${t}`, {
-              headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
-            })
-          } catch {}
-          await new Promise(r => setTimeout(r, 400))  // 400ms between calls
-        }
-      } catch {}
-    })()
+
 
     for (const ticker of tickers) {
       if (stopRef.current) break   // ← exit immediately when STOP pressed
@@ -1745,51 +1728,34 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const ts2=new Date().toLocaleTimeString()
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
+
+      // Always fetch fundamentals inline — populates Supabase for every scanned ticker
+      // Uses await so it's sequential (no race conditions, no timeouts from parallel calls)
+      const authTokFund = await getAuthToken().catch(()=>null)
+      const fundData = await fetch(`/api/tradier?fundamentals=${ticker}`, {
+        headers: authTokFund ? { Authorization: `Bearer ${authTokFund}` } : {}
+      }).then(r=>r.ok?r.json():null).catch(()=>null)
+
       if (r.score>=minScore) {
-        // Threshold hit — fetch fundamentals (Supabase → Redis → api-ninjas, never hot)
+        // Threshold hit — use fundamentals already fetched above
         let rEnriched = r
-        try {
-          const authTok = await getAuthToken().catch(()=>null)
-          const fRes = await fetch(`/api/tradier?fundamentals=${ticker}`, {
-            headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
-          })
-          if (fRes.ok) {
-            const fData = await fRes.json()
-            if (fData.available) {
-              // Apply earnings warning to score if near earnings
-              let enrichedScore = r.score
-              const enrichedWarnings = [...(r.warnings||[])]
-              const enrichedReasons  = [...(r.reasons||[])]
-              if (fData.earnings_date) {
-                const earnDays = Math.round((new Date(fData.earnings_date) - new Date()) / (1000*60*60*24))
-                if (earnDays >= 0 && earnDays <= 7) {
-                  enrichedWarnings.push(`⚠️ Earnings in ${earnDays}d — IV crush risk after event`)
-                  enrichedScore = Math.min(enrichedScore, enrichedScore - 10)
-                } else if (earnDays > 7 && earnDays <= 21) {
-                  enrichedWarnings.push(`Earnings in ${earnDays}d — factor into DTE choice`)
-                }
-              }
-              if (fData.market_cap && fData.market_cap > 100_000_000_000) {
-                enrichedReasons.push(`Large-cap (${fData.sector||'—'})`)
-                enrichedScore = Math.min(95, enrichedScore + 3)
-              }
-              rEnriched = {
-                ...r,
-                score:        Math.min(95, Math.max(20, enrichedScore)),
-                warnings:     enrichedWarnings,
-                reasons:      enrichedReasons,
-                sector:       fData.sector       || null,
-                industry:     fData.industry     || null,
-                marketCap:    fData.market_cap   || null,
-                peRatio:      fData.pe_ratio     || null,
-                earningsDate: fData.earnings_date || null,
-              }
-            }
+        if (fundData?.available) {
+          let enrichedScore = r.score
+          const enrichedWarnings = [...(r.warnings||[])]
+          const enrichedReasons  = [...(r.reasons||[])]
+          if (fundData.earnings_date) {
+            const earnDays = Math.round((new Date(fundData.earnings_date)-new Date())/(1000*60*60*24))
+            if (earnDays>=0&&earnDays<=7){ enrichedWarnings.push(`⚠️ Earnings in ${earnDays}d — IV crush risk`); enrichedScore-=10 }
+            else if (earnDays>7&&earnDays<=21){ enrichedWarnings.push(`Earnings in ${earnDays}d — factor into DTE`) }
           }
-        } catch {}
+          if (fundData.market_cap && fundData.market_cap>100_000_000_000){ enrichedReasons.push(`Large-cap (${fundData.sector||'—'})`); enrichedScore=Math.min(95,enrichedScore+3) }
+          rEnriched = { ...r, score:Math.min(95,Math.max(20,enrichedScore)), warnings:enrichedWarnings, reasons:enrichedReasons,
+            sector:fundData.sector||null, industry:fundData.industry||null, marketCap:fundData.market_cap||null, earningsDate:fundData.earnings_date||null }
+        }
+
         setLastAlert(rEnriched)
         setAlertHistory(p=>[{...rEnriched, alertedAt: ts2}, ...p.slice(0,9)])
-        if (tgToken&&tgChatId) {
+        if (isAdmin && tgToken&&tgChatId) {
           const authTok=await getAuthToken().catch(()=>null)||await window?.Clerk?.session?.getToken?.().catch(()=>null);const res=await sendTelegram(buildScanAlert(rEnriched),tgToken,tgChatId,authTok)
           setAutoLog(p=>[`[${ts2}] 🚀 $${ticker} ${rEnriched.score}% ${rEnriched.tradeType} ${rEnriched.strikeStr} → TG: ${res.ok?'✅':'❌'+(res.description||'')}`,...p.slice(0,99)])
         } else {
@@ -2314,7 +2280,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-
+                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
                     <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {tgToken&&tgChatId&&(
                       <button className="hv" onClick={async()=>{const aTok2=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId,aTok2);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
@@ -2714,7 +2680,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>📋 PAPER TRADE</button>
-                              
+                              <button className="hv" onClick={()=>pushToAlert(al)} style={{
+                                background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
+                                padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
+                              }}>⚡ SET ALERT</button>
                             </div>
                           </div>
                         )}
@@ -3052,7 +3021,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel}}>
               {[
                 {id:'settings',l:'Settings'},
-
+                {id:'alert',   l:'Alert'},
                 {id:'checklist',l:'Checklist'},
                 {id:'strategy',l:'Strategy'},
                 {id:'exit',    l:'Exit Rules'},
@@ -3339,6 +3308,42 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               )}
 
               {/* ── ALERT BUILDER ── */}
+              {toolsTab==='alert'&&(
+                <div className="si">
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+                    <Field C={C} label="Trade Type" value={alert.type} onChange={v=>setAlert(p=>({...p,type:v}))} options={['Call','Put','Call Spread','Put Spread','Iron Condor','Strangle']}/>
+                    <Field C={C} label="Ticker" value={alert.ticker} onChange={v=>setAlert(p=>({...p,ticker:v.toUpperCase()}))} placeholder="NVDA"/>
+                    <Field C={C} label="Expiry" value={alert.expiry} onChange={v=>setAlert(p=>({...p,expiry:v}))} placeholder="May 16 2026"/>
+                    <Field C={C} label="Strike" value={alert.strike} onChange={v=>setAlert(p=>({...p,strike:v}))} placeholder="210C"/>
+                    <Field C={C} label="Entry" value={alert.entry} onChange={v=>setAlert(p=>({...p,entry:v}))} placeholder="$3.50 – $3.80"/>
+                    <Field C={C} label="Target" value={alert.target} onChange={v=>setAlert(p=>({...p,target:v}))} placeholder="$6.50 (+85%)"/>
+                    <Field C={C} label="Stop Loss" value={alert.stop} onChange={v=>setAlert(p=>({...p,stop:v}))} placeholder="$1.75 (-50%)"/>
+                    <Field C={C} label="Size" value={alert.size} onChange={v=>setAlert(p=>({...p,size:v}))} placeholder="1–3 contracts"/>
+                  </div>
+                  <div style={{display:'grid',gap:8,marginBottom:12}}>
+                    <Field C={C} label="Trade Thesis" value={alert.thesis} onChange={v=>setAlert(p=>({...p,thesis:v}))} placeholder="Why you're entering..." rows={2}/>
+                    <Field C={C} label="Catalyst" value={alert.catalyst} onChange={v=>setAlert(p=>({...p,catalyst:v}))} placeholder="Earnings, breakout..." rows={1}/>
+                    <Field C={C} label="Options Flow" value={alert.flow} onChange={v=>setAlert(p=>({...p,flow:v}))} placeholder="Unusual sweeps..." rows={1}/>
+                  </div>
+                  <Card color={C.border} style={{background:C.panel}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:9}}>
+                      <Lbl C={C}>📱 Preview</Lbl>
+                      <div style={{display:'flex',gap:6}}>
+                        <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildTgAlert(alert));setCopied(true);setTimeout(()=>setCopied(false),2000)}} style={{background:copied?`${C.green}20`:'transparent',border:`1px solid ${copied?C.green:C.border}`,color:copied?C.green:C.dim,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>
+                          {copied?'✅ COPIED':'📋 COPY'}
+                        </button>
+                        {tgToken&&tgChatId&&(
+                          <button className="hv" onClick={async()=>{const aTok3=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildTgAlert(alert),tgToken,tgChatId,aTok3);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'5px 11px',borderRadius:3,fontSize:11,cursor:'pointer'}}>📤 SEND</button>
+                        )}
+                      </div>
+                    </div>
+                    {tgStatus&&<div style={{fontSize:12,color:C.green,marginBottom:7}}>{tgStatus}</div>}
+                    <pre style={{fontSize:12,lineHeight:1.8,color:C.subtext,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{buildTgAlert(alert)}</pre>
+                  </Card>
+                </div>
+              )}
+
+              {/* ── CHECKLIST ── */}
               {toolsTab==='checklist'&&(
                 <div className="si">
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>

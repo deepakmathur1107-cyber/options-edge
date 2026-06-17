@@ -16,9 +16,10 @@ module.exports = async function handler(req, res) {
   const isCron = process.env.CRON_SECRET && cronSecret === process.env.CRON_SECRET
 
   if (!isCron) {
-    // Fall back to Clerk JWT admin check
+    // Any authenticated user can send TG using their own bot token
+    // Admin check removed — the bot token itself is the security (users supply their own)
     const { clerkId } = await getAuth(req)
-    if (!clerkId || !ADMIN_IDS.includes(clerkId)) {
+    if (!clerkId) {
       return res.status(401).json({ error: 'Unauthorized' })
     }
   }
