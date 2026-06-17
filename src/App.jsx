@@ -1816,9 +1816,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const onSignOut   = props.onSignOut   || (()=>{})
 
   // Push a scan result directly into the journal as a paper trade
-  const pushToJournal = r => {
+  const pushToJournal = async r => {
+    const localId = Date.now()+''
     const t = {
-      id: Date.now()+'',
+      id: localId,
       ticker:           r.ticker||r.sym||'',
       type:             r.tradeType||'Call',
       status:           'Open',
@@ -1840,10 +1841,28 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
     }
+    // Optimistic local update so the UI feels instant
     setTrades(p=>[t,...p])
-    setTab('dash')
-    setPaperToast(`✅ ${t.ticker} logged as paper trade`)
+    setPaperToast(`✅ ${t.ticker} logged — view in Trades tab`)
     setTimeout(()=>setPaperToast(''), 3000)
+
+    // Persist to backend so it survives refresh and shows on /app/trades
+    try {
+      const token = await getAuthToken()
+      if (token) {
+        const res = await fetch('/api/user/trades', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+          body: JSON.stringify(t)
+        })
+        const d = await res.json().catch(()=>null)
+        if (d?.trade?.id) {
+          setTrades(p => p.map(x => x.id === localId ? { ...x, id: d.trade.id } : x))
+        }
+      }
+    } catch (e) {
+      console.warn('[pushToJournal] backend save failed:', e.message)
+    }
   }
 
   // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
@@ -2280,7 +2299,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     </div>
                   </div>
                   <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    <button className="hv" onClick={()=>pushToAlert(scanResult)} style={{background:C.green,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>→ ALERT</button>
                     <button className="hv" onClick={()=>pushToJournal(scanResult)} style={{background:C.orange,border:'none',color:'#000',fontWeight:700,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📋 PAPER TRADE</button>
                     {isAdmin&&tgToken&&tgChatId&&(
                       <button className="hv" onClick={async()=>{const aTok2=await getAuthToken().catch(()=>null);const r=await sendTelegram(buildScanAlert(scanResult),tgToken,tgChatId,aTok2);setTgStatus(r.ok?'✅ Sent!':'❌ '+r.description);setTimeout(()=>setTgStatus(''),4000)}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}`,color:C.blue,padding:'7px 13px',borderRadius:4,fontSize:12,letterSpacing:1,cursor:'pointer'}}>📤 TG</button>
@@ -2680,10 +2698,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                                 background:`${C.orange}18`,border:`1px solid ${C.orange}40`,color:C.orange,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>📋 PAPER TRADE</button>
-                              <button className="hv" onClick={()=>pushToAlert(al)} style={{
-                                background:`${scoreCol}18`,border:`1px solid ${scoreCol}40`,color:scoreCol,
-                                padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
-                              }}>⚡ SET ALERT</button>
+
                             </div>
                           </div>
                         )}
