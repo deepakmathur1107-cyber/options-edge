@@ -3634,6 +3634,37 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           </div>
         </div>
       )}
+
+        {/* ── ADMIN TAB ────────────────────────────────────────────────── */}
+        {tab==='admin' && isAdmin && (
+          <div className="si" style={{maxWidth:700,margin:'0 auto',padding:'0 16px'}}>
+
+            {/* Feedback Viewer */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <span style={{fontSize:12,color:C.purple,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>💬 User Feedback</span>
+                <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{background:`${C.purple}18`,border:`1px solid ${C.purple}40`,color:C.purple,padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5}}>
+                  {adminFbLoading?'Loading…':'↺ LOAD'}
+                </button>
+              </div>
+              {adminFbErr&&<div style={{fontSize:11,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}30`,borderRadius:4,padding:'8px 10px',marginBottom:8}}>Error: {adminFbErr}</div>}
+              {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&(
+                <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click LOAD to fetch feedback</div>
+              )}
+              {adminFeedback.map((fb,i)=>(
+                <div key={i} style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',marginBottom:8}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:4}}>
+                    <span style={{fontSize:10,fontWeight:700,letterSpacing:.5,color:fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple,background:fb.type==='bug'?`${C.red}15`:fb.type==='praise'?`${C.green}15`:`${C.purple}15`,border:`1px solid ${fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple}40`,padding:'2px 7px',borderRadius:3}}>{fb.type?.toUpperCase()}</span>
+                    <span style={{fontSize:10,color:C.dim}}>{fb.email||'anonymous'} · {fb.created_at?new Date(fb.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}</span>
+                  </div>
+                  <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
+                </div>
+              ))}
+            </div>
+
+          </div>
+        )}
+
     </div>
   )
 }
