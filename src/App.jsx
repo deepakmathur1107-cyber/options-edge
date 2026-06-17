@@ -1720,16 +1720,23 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
 
     // Prefetch fundamentals for watchlist tickers in the background (non-blocking)
-    // Populates Supabase ticker_fundamentals regardless of score threshold
-    // Capped at 20 tickers to stay within api-ninjas limits
-    const prefetchList = tickers.slice(0, 20)
-    getAuthToken().then(authTok => {
-      prefetchList.forEach(t => {
-        fetch(`/api/tradier?fundamentals=${t}`, {
-          headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
-        }).catch(() => {})
-      })
-    }).catch(() => {})
+    // Sequential with 400ms delay to avoid api-ninjas rate limits
+    // Cached tickers return instantly from Supabase/Redis — only new ones hit api-ninjas
+    ;(async () => {
+      try {
+        const authTok = await getAuthToken().catch(() => null)
+        const prefetchList = tickers.slice(0, 20)
+        for (const t of prefetchList) {
+          if (stopRef.current) break  // stop prefetch if scan was stopped
+          try {
+            await fetch(`/api/tradier?fundamentals=${t}`, {
+              headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
+            })
+          } catch {}
+          await new Promise(r => setTimeout(r, 400))  // 400ms between calls
+        }
+      } catch {}
+    })()
 
     for (const ticker of tickers) {
       if (stopRef.current) break   // ← exit immediately when STOP pressed
