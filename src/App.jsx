@@ -1816,19 +1816,36 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const onSignOut   = props.onSignOut   || (()=>{})
 
   // Push a scan result directly into the journal as a paper trade
+  // Extracts a bare numeric strike from formatted strings like "$595C", "$595.50P",
+  // or spread strings like "$595C / $600C" (takes the first number found).
+  const parseStrikeNum = (strikeStr) => {
+    if (!strikeStr) return null
+    const m = String(strikeStr).match(/[\d.]+/)
+    return m ? parseFloat(m[0]) : null
+  }
+
   const pushToJournal = async r => {
     const localId = Date.now()+''
+    const strikeNum  = parseStrikeNum(r.strikeStr)
+    const entryNum   = parseFloat(r.mid ?? r.entry)
+    const optionType = (r.tradeType||'Call').toLowerCase().includes('put') ? 'put' : 'call'
+
     const t = {
       id: localId,
       ticker:           r.ticker||r.sym||'',
       type:             r.tradeType||'Call',
+      option_type:      optionType,
+      action:           'buy',
       status:           'Open',
-      entry:            r.mid||r.entry||'',   // mid price for clean journal display
-      exitPrice:        '',
+      entry:            isNaN(entryNum) ? null : entryNum,
+      entry_price:      isNaN(entryNum) ? null : entryNum,
+      exit_price:       null,
       pnl:              '',
-      contracts:        '1',
+      contracts:        1,
+      expiration:       r.expiryDisplay||'',
       expiry:           r.expiryDisplay||'',
-      strike:           r.strikeStr||'',
+      strike:           strikeNum,
+      strikeDisplay:    r.strikeStr||'',
       date:             new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
       notes:            `App alert · ${r.score}% conviction · ${r.tfLabel||''}`,
       conviction:       String(r.score||''),
@@ -1841,28 +1858,50 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
     }
-    // Optimistic local update so the UI feels instant
-    setTrades(p=>[t,...p])
-    setPaperToast(`✅ ${t.ticker} logged — view in Trades tab`)
-    setTimeout(()=>setPaperToast(''), 3000)
 
-    // Persist to backend so it survives refresh and shows on /app/trades
+    if (!t.ticker) {
+      setPaperToast(`❌ No ticker — could not log trade`)
+      setTimeout(()=>setPaperToast(''), 4000)
+      return
+    }
+
+    // Show optimistic state immediately, confirm/correct once backend responds
+    setTrades(p=>[t,...p])
+    setPaperToast(`⏳ Logging ${t.ticker}...`)
+
     try {
-      const token = await getAuthToken()
-      if (token) {
-        const res = await fetch('/api/user/trades', {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
-          body: JSON.stringify(t)
-        })
-        const d = await res.json().catch(()=>null)
-        if (d?.trade?.id) {
-          setTrades(p => p.map(x => x.id === localId ? { ...x, id: d.trade.id } : x))
+      const token = await getAuthToken().catch(()=>null) || await window?.Clerk?.session?.getToken?.().catch(()=>null)
+      if (!token) {
+        setTrades(p => p.filter(x => x.id !== localId))
+        setPaperToast(`❌ Not signed in — trade not saved`)
+        setTimeout(()=>setPaperToast(''), 4000)
+        return
+      }
+      const res = await fetch('/api/user/trades', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+        body: JSON.stringify(t)
+      })
+      const d = await res.json().catch(()=>null)
+      if (res.ok && d?.trade?.id) {
+        setTrades(p => p.map(x => x.id === localId ? { ...d.trade } : x))
+        setPaperToast(`✅ ${t.ticker} logged — view in Trades tab`)
+      } else {
+        // Backend rejected — remove the optimistic row so the UI doesn't lie
+        setTrades(p => p.filter(x => x.id !== localId))
+        if (d?.code === 'SUBSCRIPTION_EXPIRED') {
+          setPaperToast(`❌ Subscription expired — renew to use the trade journal`)
+        } else {
+          setPaperToast(`❌ ${t.ticker} not saved: ${d?.error || 'HTTP '+res.status}`)
         }
+        console.error('[pushToJournal] backend rejected:', d?.error || res.status, JSON.stringify(t))
       }
     } catch (e) {
-      console.warn('[pushToJournal] backend save failed:', e.message)
+      setTrades(p => p.filter(x => x.id !== localId))
+      setPaperToast(`❌ ${t.ticker} not saved: ${e.message}`)
+      console.error('[pushToJournal] request failed:', e.message)
     }
+    setTimeout(()=>setPaperToast(''), 4000)
   }
 
   // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────

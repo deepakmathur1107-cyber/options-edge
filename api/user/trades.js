@@ -50,9 +50,18 @@ module.exports = async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 
+  // Note: the frontend route is already wrapped in SubscriptionGate, so reaching
+  // this endpoint normally implies an active subscription. This check exists only
+  // to catch the edge case where a subscription expired/was canceled between page
+  // load and this request (Stripe webhook lag, browser tab left open past expiry, etc).
   if (!ADMIN_IDS.includes(clerkId)) {
     const active = await hasActiveSub(clerkId, supabase)
-    if (!active) return res.status(402).json({ error: 'Subscription required' })
+    if (!active) {
+      return res.status(402).json({
+        error: 'Your subscription has expired or was canceled. Please renew to continue using the trade journal.',
+        code: 'SUBSCRIPTION_EXPIRED',
+      })
+    }
   }
 
   // ── GET ────────────────────────────────────────────────────────────────────
