@@ -680,8 +680,6 @@ export default function App(props={}) {
   const [feedbackSent,    setFeedbackSent]    = useState(false)
   const [feedbackErr,     setFeedbackErr]     = useState('')
   const [adminFeedback,   setAdminFeedback]   = useState([])
-  const [adminStats,      setAdminStats]      = useState(null)
-  const [adminStatsLoading, setAdminStatsLoading] = useState(false)
   const [adminFbLoading,  setAdminFbLoading]  = useState(false)
   const [adminFbErr,      setAdminFbErr]      = useState('')
 
@@ -770,23 +768,6 @@ export default function App(props={}) {
       setFeedbackSent(true); setFeedbackText(''); setTimeout(()=>setFeedbackSent(false),4000)
     } catch(e){ setFeedbackErr(e.message) }
     finally { setFeedbackSending(false) }
-  }
-
-  const loadAdminStats = async() => {
-    setAdminStatsLoading(true)
-    try {
-      const token = await getAuthToken()
-      const r = await fetch('/api/feedback?stats=1', {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      const d = await r.json()
-      setAdminFeedback(d.feedback || [])
-      setAdminStats(d.stats || null)
-    } catch(e) {
-      setAdminFbErr(e.message)
-    } finally {
-      setAdminStatsLoading(false)
-    }
   }
 
   const loadAdminFeedback = async()=>{
@@ -1190,11 +1171,20 @@ useEffect(() => {
 
       // Strike activity
       if(!isMorningNoise&&(best.volume||0)>500){score+=5;reasons.push(`${best.volume} contracts on strike`)}
+      else if(!isMorningNoise&&(best.volume||0)<50){score-=5;warnings.push(`Only ${best.volume||0} contracts on strike — thin liquidity, use limit orders`)}
 
       // Trend
-      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
-      else if(pos52>0.65){score+=4}
-      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+      if(optType==='call'||scanType?.toLowerCase().includes('call')||scanType==='Any') {
+        // Call: near 52w high = tailwind, near 52w low = headwind
+        if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend tailwind')}
+        else if(pos52>0.65){score+=4}
+        else if(pos52<0.20){score-=8;warnings.push('Near 52w low — calls against trend, avoid')}
+      } else {
+        // Put: near 52w low = tailwind (already falling), near 52w high = headwind
+        if(pos52<0.20){score+=8;reasons.push('Near 52w low — downtrend tailwind for puts')}
+        else if(pos52<0.35){score+=4}
+        else if(pos52>0.80){score-=8;warnings.push('Near 52w high — puts against trend, trading in uptrend')}
+      }
 
       // ── DTE / IV incompatibility ─────────────────────────────────────────
       if(dte<14&&iv>0.45&&!isSpread){score-=12;warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)}
@@ -1218,16 +1208,24 @@ useEffect(() => {
       }
       if(!isSpread && tradeData && tradeData.mid>0){
         const strike_ = parseFloat(tradeData.primaryStrike||0)
-        const beReq_  = ((strike_ + tradeData.mid) / price - 1) * 100
-        if(beReq_>5.0){
+        const isPut_  = (scanType||'').toLowerCase().includes('put')
+        // For calls: BE = strike + premium (need price to rise)
+        // For puts:  BE = strike - premium (need price to fall)
+        const bePrice_  = isPut_ ? (strike_ - tradeData.mid) : (strike_ + tradeData.mid)
+        const beReq_    = isPut_
+          ? ((bePrice_ / price) - 1) * 100          // negative = stock must fall
+          : ((bePrice_ / price) - 1) * 100           // positive = stock must rise
+        const beReqAbs_ = Math.abs(beReq_)
+        const beDir_    = isPut_ ? 'down' : 'up'
+        if(beReqAbs_>5.0){
           score-=14
-          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — bottom 20% probability. Only enter with strong specific catalyst.`)
-        } else if(beReq_>3.5){
+          warnings.push(`Break-even requires ${isPut_?'-':'+'}${beReqAbs_.toFixed(1)}% move ${beDir_} — low probability`)
+        } else if(beReqAbs_>3.5){
           score-=7
-          warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs a real catalyst to be viable`)
-        } else if(beReq_>0 && beReq_<=2.0){
+          warnings.push(`Break-even requires ${isPut_?'-':'+'}${beReqAbs_.toFixed(1)}% move ${beDir_} — needs catalyst`)
+        } else if(beReqAbs_>0 && beReqAbs_<=2.5){
           score+=5
-          reasons.push(`Break-even only +${beReq_.toFixed(1)}% away — realistic target`)
+          reasons.push(`Break-even only ${isPut_?'-':'+'}${beReqAbs_.toFixed(1)}% away — realistic target`)
         }
       }
 
@@ -1329,7 +1327,7 @@ useEffect(() => {
         volRatio:volRatio.toFixed(1)+'x',
         reasons,warnings,hardBlocks,
         dte, ivPct:ivPct.toFixed(1),
-        breakeven:(parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid).toFixed(2),
+        breakeven:(()=>{const s=parseFloat(tradeData.primaryStrike||best.strike);const isPutD=(scanType||'').toLowerCase().includes('put');return(isPutD?s-tradeData.mid:s+tradeData.mid).toFixed(2)})(),
         breakevenPct:(((parseFloat(tradeData.primaryStrike||best.strike)+tradeData.mid)/price-1)*100).toFixed(1),
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
         source:'',
@@ -1645,25 +1643,37 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
       // Strike activity
       if(!isMorning2&&(td.volume||0)>500){score+=5;reasons.push(`${td.volume} contracts on strike`)}
+      else if(!isMorning2&&(td.volume||0)<50){score-=5;warnings.push(`Only ${td.volume||0} contracts on strike — thin liquidity`)}
 
       // 52-week position (matches manual scanner)
-      if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend')}
-      else if(pos52>0.65){score+=4}
-      else if(pos52<0.20){score-=5;warnings.push('Near 52w low — avoid longs')}
+      if(optType==='call') {
+        if(pos52>0.80){score+=8;reasons.push('Near 52w high — uptrend tailwind')}
+        else if(pos52>0.65){score+=4}
+        else if(pos52<0.20){score-=8;warnings.push('Near 52w low — calls against trend')}
+      } else {
+        if(pos52<0.20){score+=8;reasons.push('Near 52w low — downtrend tailwind for puts')}
+        else if(pos52<0.35){score+=4}
+        else if(pos52>0.80){score-=8;warnings.push('Near 52w high — puts against uptrend')}
+      }
 
       // DTE / IV incompatibility
       if(dte2<14&&iv>0.45){score-=12;warnings.push(`DTE ${dte2} + IV ${ivPct2.toFixed(0)}% crush risk`)}
       else if(dte2>=21&&dte2<=60){score+=5;reasons.push(`${dte2} DTE`)}
 
-      // Break-even reality check (matches manual scanner)
+      // Break-even reality check — direction-aware
       if(td && td.mid>0){
         const strike_ = parseFloat(td.primaryStrike||0)
         if(strike_>0){
-          const beReq_ = ((strike_ + td.mid) / price - 1) * 100
-          if(beReq_>5.0){score-=14;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — low probability`)}
-          else if(beReq_>3.5){score-=7;warnings.push(`Break-even requires +${beReq_.toFixed(1)}% move — needs catalyst`)}
-          else if(beReq_>0&&beReq_<=2.0){score+=5;reasons.push(`Break-even only +${beReq_.toFixed(1)}% away`)}
+          const isPutA  = optType==='put'
+          const bePrice_a = isPutA ? (strike_ - td.mid) : (strike_ + td.mid)
+          const beReq_a   = ((bePrice_a / price) - 1) * 100
+          const beAbs_a   = Math.abs(beReq_a)
+          const beDir_a   = isPutA ? 'down' : 'up'
+          if(beAbs_a>5.0){score-=14;warnings.push(`Break-even needs ${isPutA?'-':'+'}${beAbs_a.toFixed(1)}% move ${beDir_a} — low probability`)}
+          else if(beAbs_a>3.5){score-=7;warnings.push(`Break-even needs ${isPutA?'-':'+'}${beAbs_a.toFixed(1)}% move ${beDir_a} — needs catalyst`)}
+          else if(beAbs_a<=2.5&&beAbs_a>0){score+=5;reasons.push(`Break-even only ${isPutA?'-':'+'}${beAbs_a.toFixed(1)}% away`)}
         }
+      }
       }
 
       // Fundamentals bonus — sector momentum, earnings proximity
@@ -1695,7 +1705,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       // Breakeven for Telegram alert
-      const breakeven2 = td.primaryStrike ? (parseFloat(td.primaryStrike) + td.mid).toFixed(2) : null
+      const isPutReturn = optType === 'put'
+      const breakeven2 = td.primaryStrike
+        ? (isPutReturn ? parseFloat(td.primaryStrike) - td.mid : parseFloat(td.primaryStrike) + td.mid).toFixed(2)
+        : null
       const breakevenPct2 = td.primaryStrike && price > 0
         ? (((parseFloat(td.primaryStrike) + td.mid) / price - 1) * 100).toFixed(1)
         : null
@@ -3125,7 +3138,47 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   ═══════════════════════════════════════════════ */}
                   {isAdmin&&(<>
 
-                    {/* Feedback moved to ADMIN tab — see ★ ADMIN nav */}
+                    {/* Feedback Viewer */}
+                    <Card C={C} style={{marginBottom:12}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                        <Lbl C={C} color={C.purple}>💬 USER FEEDBACK</Lbl>
+                        <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{
+                          background:`${C.purple}18`,border:`1px solid ${C.purple}40`,color:C.purple,
+                          padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5
+                        }}>{adminFbLoading?'Loading…':'↺ LOAD'}</button>
+                      </div>
+                      {adminFbErr&&(
+                        <div style={{fontSize:11,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}30`,borderRadius:4,padding:'8px 10px',marginBottom:8}}>
+                          Error: {adminFbErr}
+                        </div>
+                      )}
+                      {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&(
+                        <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click LOAD to fetch feedback</div>
+                      )}
+                      {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&adminFeedback!==null&&(
+                        <div style={{display:'none'}}/>
+                      )}
+                      {adminFeedback.map((fb,i)=>(
+                        <div key={i} style={{
+                          background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:'10px 12px',marginBottom:8
+                        }}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:4}}>
+                            <span style={{
+                              fontSize:10,fontWeight:700,letterSpacing:.5,
+                              color:fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple,
+                              background:fb.type==='bug'?`${C.red}15`:fb.type==='praise'?`${C.green}15`:`${C.purple}15`,
+                              border:`1px solid ${fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple}40`,
+                              padding:'2px 7px',borderRadius:3,fontFamily:"'IBM Plex Mono',monospace"
+                            }}>{fb.type?.toUpperCase()}</span>
+                            <span style={{fontSize:10,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>
+                              {fb.email||'anonymous'} · {fb.created_at?new Date(fb.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}
+                            </span>
+                          </div>
+                          <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
+                        </div>
+                      ))}
+                    </Card>
 
                     {/* Telegram Bot */}
                     <Card C={C} style={{marginBottom:12}}>
@@ -3616,104 +3669,25 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
         {/* ── ADMIN TAB ────────────────────────────────────────────────── */}
         {tab==='admin' && isAdmin && (
-          <div className="si" style={{maxWidth:760,margin:'0 auto',padding:'0 16px 40px'}}>
-
-            {/* Header */}
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2,color:C.green}}>★ ADMIN DASHBOARD</div>
-              <button className="hv" onClick={loadAdminStats} disabled={adminStatsLoading} style={{
-                background:`${C.green}15`,border:`1px solid ${C.green}40`,color:C.green,
-                padding:'6px 14px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5,fontWeight:700
-              }}>{adminStatsLoading?'Loading…':'↺ REFRESH'}</button>
-            </div>
-
-            {/* App Health */}
-            {adminStats && (
-              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-                <div style={{fontSize:11,color:C.green,letterSpacing:1.5,fontWeight:700,marginBottom:12,textTransform:'uppercase'}}>⚡ App Health</div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
-                  {[
-                    {label:'Tradier',value:adminStats.health.tradierMode.toUpperCase()},
-                    {label:'Redis',value:adminStats.health.redis},
-                    {label:'Finnhub',value:adminStats.health.finnhub},
-                    {label:'API Ninjas',value:adminStats.health.apiNinjas},
-                  ].map(({label,value})=>(
-                    <div key={label} style={{background:C.bgDeep,borderRadius:6,padding:'10px 12px',border:`1px solid ${value.includes('✅')||value==='PRODUCTION'?C.green+'40':C.border}`}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:4,letterSpacing:.5}}>{label}</div>
-                      <div style={{fontSize:11,fontWeight:700,color:value.includes('✅')||value==='PRODUCTION'?C.green:C.orange,fontFamily:"'IBM Plex Mono',monospace"}}>{value}</div>
-                    </div>
-                  ))}
-                </div>
-                {adminStats.lastBrief && (
-                  <div style={{fontSize:11,color:C.dim,marginTop:10}}>
-                    📰 Last brief: {new Date(adminStats.lastBrief).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'America/Chicago'})} CT
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* User Stats */}
-            {adminStats && (
-              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-                <div style={{fontSize:11,color:C.blue,letterSpacing:1.5,fontWeight:700,marginBottom:12,textTransform:'uppercase'}}>👥 Subscribers</div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
-                  {[
-                    {label:'Total',value:adminStats.subscriptions.total,color:C.text},
-                    {label:'Active',value:adminStats.subscriptions.active,color:C.green},
-                    {label:'Trialing',value:adminStats.subscriptions.trialing,color:C.blue},
-                    {label:'Past Due',value:adminStats.subscriptions.past_due,color:C.orange},
-                    {label:'Cancelled',value:adminStats.subscriptions.canceled,color:C.red},
-                    {label:'New This Week',value:adminStats.subscriptions.newThisWeek,color:C.green},
-                  ].map(({label,value,color})=>(
-                    <div key={label} style={{background:C.bgDeep,borderRadius:6,padding:'10px 14px',border:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:4,letterSpacing:.5}}>{label}</div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color,letterSpacing:1,lineHeight:1}}>{value}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{fontSize:11,color:C.dim}}>
-                  📊 Trades logged: <span style={{color:C.text,fontWeight:700}}>{adminStats.trades.total.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Feedback Stats */}
-            {adminStats && (
-              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'14px 20px',marginBottom:12,boxShadow:C.shadow}}>
-                <div style={{fontSize:11,color:C.purple,letterSpacing:1.5,fontWeight:700,marginBottom:10,textTransform:'uppercase'}}>💬 Feedback Summary</div>
-                <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                  {Object.entries(adminStats.feedback.byType||{}).map(([type,count])=>(
-                    <div key={type} style={{background:C.bgDeep,border:`1px solid ${type==='bug'?C.red:type==='praise'?C.green:C.purple}40`,borderRadius:6,padding:'6px 14px',display:'flex',alignItems:'center',gap:8}}>
-                      <span style={{fontSize:10,fontWeight:700,color:type==='bug'?C.red:type==='praise'?C.green:C.purple,textTransform:'uppercase'}}>{type}</span>
-                      <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:14,fontWeight:700,color:C.text}}>{count}</span>
-                    </div>
-                  ))}
-                  <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'6px 14px',display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{fontSize:10,color:C.dim,textTransform:'uppercase'}}>TOTAL</span>
-                    <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:14,fontWeight:700,color:C.text}}>{adminStats.feedback.total}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!adminStats && !adminStatsLoading && (
-              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'24px',marginBottom:12,textAlign:'center',color:C.dim,fontSize:13}}>
-                Click REFRESH to load stats and feedback
-              </div>
-            )}
+          <div className="si" style={{maxWidth:700,margin:'0 auto',padding:'0 16px'}}>
 
             {/* Feedback Viewer */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',boxShadow:C.shadow}}>
-              <div style={{fontSize:11,color:C.purple,letterSpacing:1.5,fontWeight:700,marginBottom:12,textTransform:'uppercase'}}>💬 User Feedback</div>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <span style={{fontSize:12,color:C.purple,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>💬 User Feedback</span>
+                <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{background:`${C.purple}18`,border:`1px solid ${C.purple}40`,color:C.purple,padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5}}>
+                  {adminFbLoading?'Loading…':'↺ LOAD'}
+                </button>
+              </div>
               {adminFbErr&&<div style={{fontSize:11,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}30`,borderRadius:4,padding:'8px 10px',marginBottom:8}}>Error: {adminFbErr}</div>}
-              {adminFeedback.length===0&&!adminFbLoading&&(
-                <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click REFRESH above to load</div>
+              {adminFeedback.length===0&&!adminFbLoading&&!adminFbErr&&(
+                <div style={{fontSize:12,color:C.dim,textAlign:'center',padding:'12px 0'}}>Click LOAD to fetch feedback</div>
               )}
               {adminFeedback.map((fb,i)=>(
                 <div key={i} style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',marginBottom:8}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:4}}>
-                    <span style={{fontSize:10,fontWeight:700,letterSpacing:.5,color:fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple,background:fb.type==='bug'?`${C.red}15`:fb.type==='praise'?`${C.green}15`:`${C.purple}15`,border:`1px solid ${fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple}40`,padding:'2px 7px',borderRadius:3,fontFamily:"'IBM Plex Mono',monospace"}}>{fb.type?.toUpperCase()}</span>
-                    <span style={{fontSize:10,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{fb.email||'anonymous'} · {fb.created_at?new Date(fb.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}</span>
+                    <span style={{fontSize:10,fontWeight:700,letterSpacing:.5,color:fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple,background:fb.type==='bug'?`${C.red}15`:fb.type==='praise'?`${C.green}15`:`${C.purple}15`,border:`1px solid ${fb.type==='bug'?C.red:fb.type==='praise'?C.green:C.purple}40`,padding:'2px 7px',borderRadius:3}}>{fb.type?.toUpperCase()}</span>
+                    <span style={{fontSize:10,color:C.dim}}>{fb.email||'anonymous'} · {fb.created_at?new Date(fb.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}</span>
                   </div>
                   <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
                 </div>
