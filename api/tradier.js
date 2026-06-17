@@ -121,31 +121,47 @@ module.exports = async function handler(req, res) {
           .eq('ticker', ticker)
           .maybeSingle()
 
-        // 2. Call api-ninjas directly
-        let ninjasRaw = null, ninjasStatus = null
+        // 2. Call all 3 api-ninjas endpoints directly for diagnosis
+        const H = process.env.API_NINJAS_KEY ? { 'X-Api-Key': process.env.API_NINJAS_KEY } : {}
+        let tickerRaw = null, tickerStatus = null
+        let earningsRaw = null, earningsStatus = null
+        let sp500Raw = null, sp500Status = null
+
         if (process.env.API_NINJAS_KEY) {
-          const nr = await fetch(`https://api.api-ninjas.com/v1/stock?ticker=${ticker}`, {
-            headers: { 'X-Api-Key': process.env.API_NINJAS_KEY }
-          })
-          ninjasStatus = nr.status
-          ninjasRaw = await nr.json().catch(() => null)
+          try {
+            const r1 = await fetch(`https://api.api-ninjas.com/v1/ticker?ticker=${ticker}`, { headers: H })
+            tickerStatus = r1.status; tickerRaw = await r1.json().catch(() => null)
+          } catch(e) { tickerStatus = 'fetch_error:' + e.message }
+
+          try {
+            const r2 = await fetch(`https://api.api-ninjas.com/v1/upcomingearnings?ticker=${ticker}`, { headers: H })
+            earningsStatus = r2.status; earningsRaw = await r2.json().catch(() => null)
+          } catch(e) { earningsStatus = 'fetch_error:' + e.message }
+
+          try {
+            const r3 = await fetch(`https://api.api-ninjas.com/v1/sp500?ticker=${ticker}`, { headers: H })
+            sp500Status = r3.status; sp500Raw = await r3.json().catch(() => null)
+          } catch(e) { sp500Status = 'fetch_error:' + e.message }
         }
+
+        const ninjasWorking = tickerStatus === 200 && tickerRaw?.ticker
 
         return res.status(200).json({
           ticker,
           test: true,
           supabase: {
-            hasRow:     !!sbRow,
-            row:        sbRow || null,
-            ageHours:   sbRow ? ((Date.now() - new Date(sbRow.updated_at).getTime()) / 3600000).toFixed(1) : null,
-            isStale:    sbRow ? (Date.now() - new Date(sbRow.updated_at).getTime()) > 7*24*3600*1000 : true,
+            hasRow:   !!sbRow,
+            row:      sbRow || null,
+            ageHours: sbRow ? ((Date.now() - new Date(sbRow.updated_at).getTime()) / 3600000).toFixed(1) : null,
+            isStale:  sbRow ? (Date.now() - new Date(sbRow.updated_at).getTime()) > 7*24*3600*1000 : true,
           },
           api_ninjas: {
-            keyConfigured: !!process.env.API_NINJAS_KEY,
-            httpStatus:    ninjasStatus,
-            rawResponse:   ninjasRaw,
+            keyConfigured:  !!process.env.API_NINJAS_KEY,
+            ticker:         { status: tickerStatus,   data: tickerRaw },
+            upcomingEarnings: { status: earningsStatus, data: earningsRaw },
+            sp500:          { status: sp500Status,    data: sp500Raw },
           },
-          verdict: sbRow ? 'SUPABASE_HIT' : (ninjasRaw?.ticker ? 'NINJAS_HIT' : 'BOTH_MISS'),
+          verdict: sbRow ? 'SUPABASE_HIT' : (ninjasWorking ? 'NINJAS_HIT' : 'BOTH_MISS'),
         })
       }
 

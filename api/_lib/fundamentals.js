@@ -57,37 +57,81 @@ async function redisSet(key, value, ttl) {
 }
 
 // ── api-ninjas fetch ──────────────────────────────────────────────────────────
+// Uses THREE endpoints (verified against api-ninjas docs):
+//   /v1/ticker          → market_cap, latest_earnings {year,quarter}
+//   /v1/upcomingearnings → next earnings date (date field, YYYY-MM-DD)
+//   /v1/sp500           → sector, sub_industry (SP500 stocks only)
+// Each call counts as 1 hit against the 3000/month limit.
+// Total: up to 3 hits per new ticker, ~0 after Supabase caches it for 7 days.
 async function fetchFromNinjas(ticker) {
   if (!NINJAS_KEY) return null
+  const H = { 'X-Api-Key': NINJAS_KEY }
+
   try {
-    // /v1/stockprice gives us market cap, P/E, earnings date, sector, industry
-    const url = `https://api.api-ninjas.com/v1/stock?ticker=${encodeURIComponent(ticker)}`
-    const res = await fetch(url, {
-      headers: { 'X-Api-Key': NINJAS_KEY },
-    })
-    if (!res.ok) {
-      console.warn(`[fundamentals] api-ninjas ${res.status} for ${ticker}`)
+    // ── 1. /v1/ticker — market cap + company profile ──────────────────────
+    const tickerRes = await fetch(
+      `https://api.api-ninjas.com/v1/ticker?ticker=${encodeURIComponent(ticker)}`,
+      { headers: H }
+    )
+    if (!tickerRes.ok) {
+      console.warn(`[fundamentals] /v1/ticker ${tickerRes.status} for ${ticker}`)
       return null
     }
-    const data = await res.json()
-    // Log raw response for debugging (first call per ticker)
-    console.log(`[fundamentals] api-ninjas raw for ${ticker}:`, JSON.stringify(data).slice(0, 300))
-    if (!data || !data.ticker) return null
+    const tickerData = await tickerRes.json()
+    console.log(`[fundamentals] /v1/ticker raw for ${ticker}:`, JSON.stringify(tickerData).slice(0, 300))
+    if (!tickerData || !tickerData.ticker) return null
 
-    // Normalize to our schema
-    // api-ninjas /v1/stock field reference (verified against their docs):
-    //   market_cap, pe_ratio, sector, industry, earnings_announcement, 52_week_high, 52_week_low
+    // ── 2. /v1/upcomingearnings — next earnings date ───────────────────────
+    // Returns array; pick the first upcoming date for this ticker
+    let earningsDate = null
+    try {
+      const earnRes = await fetch(
+        `https://api.api-ninjas.com/v1/upcomingearnings?ticker=${encodeURIComponent(ticker)}`,
+        { headers: H }
+      )
+      if (earnRes.ok) {
+        const earnData = await earnRes.json()
+        console.log(`[fundamentals] /v1/upcomingearnings for ${ticker}:`, JSON.stringify(earnData).slice(0, 200))
+        // Response is array of { ticker, date, ... }
+        if (Array.isArray(earnData) && earnData.length > 0) {
+          earningsDate = earnData[0].date || null  // YYYY-MM-DD
+        }
+      }
+    } catch (e) {
+      console.warn(`[fundamentals] upcomingearnings error for ${ticker}:`, e.message)
+    }
+
+    // ── 3. /v1/sp500 — sector + sub-industry (SP500 stocks only) ──────────
+    let sector = null, industry = null
+    try {
+      const spRes = await fetch(
+        `https://api.api-ninjas.com/v1/sp500?ticker=${encodeURIComponent(ticker)}`,
+        { headers: H }
+      )
+      if (spRes.ok) {
+        const spData = await spRes.json()
+        console.log(`[fundamentals] /v1/sp500 for ${ticker}:`, JSON.stringify(spData).slice(0, 200))
+        // Response is array; first element has sector + sub_industry
+        if (Array.isArray(spData) && spData.length > 0) {
+          sector   = spData[0].sector       || null
+          industry = spData[0].sub_industry || null
+        }
+      }
+    } catch (e) {
+      console.warn(`[fundamentals] sp500 error for ${ticker}:`, e.message)
+    }
+
     return {
-      ticker:        data.ticker                                  || ticker,
-      market_cap:    data.market_cap                             || null,
-      pe_ratio:      data.pe_ratio      || data.p_e_ratio        || null,  // handle both variants
-      sector:        data.sector                                  || null,
-      industry:      data.industry                               || null,
-      earnings_date: data.earnings_announcement                  || null,  // ISO string e.g. "2025-11-20"
+      ticker:        tickerData.ticker || ticker,
+      market_cap:    tickerData.latest_market_cap || null,
+      pe_ratio:      null,  // not available in free tier /v1/ticker
+      sector,
+      industry,
+      earnings_date: earningsDate,
       updated_at:    new Date().toISOString(),
     }
   } catch (e) {
-    console.warn(`[fundamentals] ninja fetch error for ${ticker}:`, e.message)
+    console.warn(`[fundamentals] fetchFromNinjas error for ${ticker}:`, e.message)
     return null
   }
 }
