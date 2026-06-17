@@ -7,10 +7,11 @@
 // At ~100 unique tickers in rotation: worst case ~400 api-ninjas calls/month vs 3000 limit.
 // CommonJS only — lives in _lib, does NOT count as a Vercel function.
 
-const { createClient } = require('@supabase/supabase-js')
+// @supabase/supabase-js is required lazily inside functions (not at module level)
+// This prevents a require() failure from crashing the parent tradier.js module
 
 const NINJAS_KEY    = process.env.API_NINJAS_KEY    || ''
-const FINNHUB_KEY   = process.env.FINNHUB_API_KEY    || ''  // same key used by newsData.js
+const FINNHUB_KEY   = process.env.FINNHUB_API_KEY   || ''  // reuses existing key from newsData.js
 const REDIS_URL     = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN   = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const SUPABASE_URL  = process.env.SUPABASE_URL              || ''
@@ -20,10 +21,17 @@ const REDIS_TTL_SECS  = 60 * 60        // 1 hour in Redis
 const SUPABASE_TTL_MS = 7 * 24 * 3600 * 1000  // 7 days in Supabase
 
 // ── Supabase client (lazy singleton) ─────────────────────────────────────────
+// Required lazily to avoid crashing tradier.js if the module fails to load
 let _sb = null
 function sb() {
   if (!_sb && SUPABASE_URL && SUPABASE_KEY) {
-    _sb = createClient(SUPABASE_URL, SUPABASE_KEY)
+    try {
+      const { createClient } = require('@supabase/supabase-js')
+      _sb = createClient(SUPABASE_URL, SUPABASE_KEY)
+    } catch (e) {
+      console.warn('[fundamentals] supabase require failed:', e.message)
+      return null
+    }
   }
   return _sb
 }
@@ -57,32 +65,20 @@ async function redisSet(key, value, ttl) {
   } catch {}
 }
 
-// ── Finnhub earnings fetch ────────────────────────────────────────────────────
-// Free tier: 60 calls/min, no credit card required.
-// Endpoint: GET /v1/calendar/earnings?symbol=TICKER&from=TODAY&to=TODAY+90d
-// Returns array of earnings events; we take the first upcoming one.
+// ── Finnhub earnings fetch (free tier) ───────────────────────────────────────
 async function fetchEarningsFromFinnhub(ticker) {
   if (!FINNHUB_KEY) return null
   try {
-    const today = new Date()
-    const from  = today.toISOString().slice(0, 10)                         // YYYY-MM-DD
-    const to    = new Date(today.getTime() + 90*24*3600*1000)
-                    .toISOString().slice(0, 10)
-    const url   = `https://finnhub.io/api/v1/calendar/earnings?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${FINNHUB_KEY}`
-    const res   = await fetch(url)
-    if (!res.ok) {
-      console.warn(`[fundamentals] Finnhub earnings ${res.status} for ${ticker}`)
-      return null
-    }
-    const data = await res.json()
-    // Response: { earningsCalendar: [ { date, symbol, epsEstimate, ... }, ... ] }
-    const events = data?.earningsCalendar || []
-    const upcoming = events
-      .filter(e => e.date >= from)          // only future dates
+    const from = new Date().toISOString().slice(0, 10)
+    const to   = new Date(Date.now() + 90*24*3600*1000).toISOString().slice(0, 10)
+    const url  = `https://finnhub.io/api/v1/calendar/earnings?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${FINNHUB_KEY}`
+    const res  = await fetch(url)
+    if (!res.ok) return null
+    const data   = await res.json()
+    const events = (data?.earningsCalendar || [])
+      .filter(e => e.date >= from)
       .sort((a, b) => a.date.localeCompare(b.date))
-    if (!upcoming.length) return null
-    console.log(`[fundamentals] Finnhub earnings for ${ticker}: ${upcoming[0].date}`)
-    return upcoming[0].date  // YYYY-MM-DD
+    return events[0]?.date || null  // YYYY-MM-DD or null
   } catch (e) {
     console.warn(`[fundamentals] Finnhub error for ${ticker}:`, e.message)
     return null
@@ -143,16 +139,16 @@ async function fetchFromNinjas(ticker) {
     const rawMcap = tickerData.latest_market_cap
     const market_cap = (typeof rawMcap === 'number') ? rawMcap : null
 
-    // ── 3. Finnhub — upcoming earnings date (free tier) ─────────────────────
-    const earningsDate = await fetchEarningsFromFinnhub(ticker)
+    // ── 3. Finnhub — upcoming earnings date (free, reuses existing key) ─────
+    const earnings_date = await fetchEarningsFromFinnhub(ticker)
 
     return {
       ticker:        tickerData.ticker || ticker,
-      market_cap,                          // null on free tier (api-ninjas premium)
-      pe_ratio:      null,                 // not available on free tier
-      sector,                              // from sp500, null for non-SP500
+      market_cap,
+      pe_ratio:      null,
+      sector,
       industry,
-      earnings_date: earningsDate,         // from Finnhub free tier, YYYY-MM-DD
+      earnings_date,   // YYYY-MM-DD from Finnhub, or null
       updated_at:    new Date().toISOString(),
     }
   } catch (e) {
