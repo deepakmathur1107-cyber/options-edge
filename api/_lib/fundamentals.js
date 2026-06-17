@@ -57,18 +57,23 @@ async function redisSet(key, value, ttl) {
 }
 
 // ── api-ninjas fetch ──────────────────────────────────────────────────────────
-// Uses THREE endpoints (verified against api-ninjas docs):
-//   /v1/ticker          → market_cap, latest_earnings {year,quarter}
-//   /v1/upcomingearnings → next earnings date (date field, YYYY-MM-DD)
-//   /v1/sp500           → sector, sub_industry (SP500 stocks only)
-// Each call counts as 1 hit against the 3000/month limit.
-// Total: up to 3 hits per new ticker, ~0 after Supabase caches it for 7 days.
+// Free tier available endpoints (verified):
+//   /v1/ticker  → company name, exchange (market_cap is premium-only)
+//   /v1/sp500   → sector, sub_industry (SP500 constituents only)
+//   /v1/upcomingearnings → PREMIUM ONLY (400 on free tier)
+//
+// Each call = 1 hit against 3000/month limit.
+// Total: 2 hits per new ticker, 0 after Supabase caches for 7 days.
+//
+// Earnings date strategy: inferred from Tradier IV term-structure in App.jsx
+// (significant IV spike on a specific expiry = earnings likely in that window).
+// We store a placeholder null here; the scanner reads it as "unknown" gracefully.
 async function fetchFromNinjas(ticker) {
   if (!NINJAS_KEY) return null
   const H = { 'X-Api-Key': NINJAS_KEY }
 
   try {
-    // ── 1. /v1/ticker — market cap + company profile ──────────────────────
+    // ── 1. /v1/ticker — company profile ──────────────────────────────────
     const tickerRes = await fetch(
       `https://api.api-ninjas.com/v1/ticker?ticker=${encodeURIComponent(ticker)}`,
       { headers: H }
@@ -78,30 +83,11 @@ async function fetchFromNinjas(ticker) {
       return null
     }
     const tickerData = await tickerRes.json()
-    console.log(`[fundamentals] /v1/ticker raw for ${ticker}:`, JSON.stringify(tickerData).slice(0, 300))
     if (!tickerData || !tickerData.ticker) return null
+    console.log(`[fundamentals] /v1/ticker OK for ${ticker}: exchange=${tickerData.exchange}`)
 
-    // ── 2. /v1/upcomingearnings — next earnings date ───────────────────────
-    // Returns array; pick the first upcoming date for this ticker
-    let earningsDate = null
-    try {
-      const earnRes = await fetch(
-        `https://api.api-ninjas.com/v1/upcomingearnings?ticker=${encodeURIComponent(ticker)}`,
-        { headers: H }
-      )
-      if (earnRes.ok) {
-        const earnData = await earnRes.json()
-        console.log(`[fundamentals] /v1/upcomingearnings for ${ticker}:`, JSON.stringify(earnData).slice(0, 200))
-        // Response is array of { ticker, date, ... }
-        if (Array.isArray(earnData) && earnData.length > 0) {
-          earningsDate = earnData[0].date || null  // YYYY-MM-DD
-        }
-      }
-    } catch (e) {
-      console.warn(`[fundamentals] upcomingearnings error for ${ticker}:`, e.message)
-    }
-
-    // ── 3. /v1/sp500 — sector + sub-industry (SP500 stocks only) ──────────
+    // ── 2. /v1/sp500 — sector + sub-industry (SP500 stocks only) ─────────
+    // Non-SP500 stocks return empty array — that's fine, sector stays null
     let sector = null, industry = null
     try {
       const spRes = await fetch(
@@ -110,24 +96,27 @@ async function fetchFromNinjas(ticker) {
       )
       if (spRes.ok) {
         const spData = await spRes.json()
-        console.log(`[fundamentals] /v1/sp500 for ${ticker}:`, JSON.stringify(spData).slice(0, 200))
-        // Response is array; first element has sector + sub_industry
         if (Array.isArray(spData) && spData.length > 0) {
-          sector   = spData[0].sector       || null
-          industry = spData[0].sub_industry || null
+          sector   = spData[0].sector       || null  // e.g. "Information Technology"
+          industry = spData[0].sub_industry || null  // e.g. "Semiconductors"
+          console.log(`[fundamentals] /v1/sp500 OK for ${ticker}: ${sector} / ${industry}`)
         }
       }
     } catch (e) {
       console.warn(`[fundamentals] sp500 error for ${ticker}:`, e.message)
     }
 
+    // market_cap: free tier returns a premium-only string — treat as null
+    const rawMcap = tickerData.latest_market_cap
+    const market_cap = (typeof rawMcap === 'number') ? rawMcap : null
+
     return {
       ticker:        tickerData.ticker || ticker,
-      market_cap:    tickerData.latest_market_cap || null,
-      pe_ratio:      null,  // not available in free tier /v1/ticker
-      sector,
+      market_cap,                          // null on free tier
+      pe_ratio:      null,                 // not available on free tier
+      sector,                              // from sp500 endpoint, null for non-SP500
       industry,
-      earnings_date: earningsDate,
+      earnings_date: null,                 // premium-only; inferred via IV term-structure
       updated_at:    new Date().toISOString(),
     }
   } catch (e) {

@@ -133,10 +133,9 @@ module.exports = async function handler(req, res) {
             tickerStatus = r1.status; tickerRaw = await r1.json().catch(() => null)
           } catch(e) { tickerStatus = 'fetch_error:' + e.message }
 
-          try {
-            const r2 = await fetch(`https://api.api-ninjas.com/v1/upcomingearnings?ticker=${ticker}`, { headers: H })
-            earningsStatus = r2.status; earningsRaw = await r2.json().catch(() => null)
-          } catch(e) { earningsStatus = 'fetch_error:' + e.message }
+          // upcomingearnings is PREMIUM ONLY on free tier — skip to avoid 400 noise
+          earningsStatus = 'skipped_premium_endpoint'
+          earningsRaw = null
 
           try {
             const r3 = await fetch(`https://api.api-ninjas.com/v1/sp500?ticker=${ticker}`, { headers: H })
