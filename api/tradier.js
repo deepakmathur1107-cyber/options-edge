@@ -160,25 +160,7 @@ module.exports = async function handler(req, res) {
             upcomingEarnings: { status: earningsStatus, data: earningsRaw },
             sp500:          { status: sp500Status,    data: sp500Raw },
           },
-          // Finnhub earnings test
-          let finnhubEarnings = null, finnhubStatus = null
-          if (process.env.FINNHUB_API_KEY) {
-            try {
-              const today = new Date().toISOString().slice(0,10)
-              const to90  = new Date(Date.now()+90*864e5).toISOString().slice(0,10)
-              const fr = await fetch(`https://finnhub.io/api/v1/calendar/earnings?symbol=${ticker}&from=${today}&to=${to90}&token=${process.env.FINNHUB_API_KEY}`)
-              finnhubStatus = fr.status
-              const fd = await fr.json().catch(()=>null)
-              finnhubEarnings = fd?.earningsCalendar?.[0]?.date || null
-            } catch(e) { finnhubStatus = 'error:'+e.message }
-          }
-
           verdict: sbRow ? 'SUPABASE_HIT' : (ninjasWorking ? 'NINJAS_HIT' : 'BOTH_MISS'),
-          finnhub: {
-            keyConfigured: !!process.env.FINNHUB_API_KEY,
-            status: finnhubStatus,
-            nextEarningsDate: finnhubEarnings,
-          },
         })
       }
 
