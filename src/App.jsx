@@ -1718,6 +1718,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     const tickers=list.length?list:shuffle(SP500)
     const ts=new Date().toLocaleTimeString()
     setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
+
+    // Prefetch fundamentals for watchlist tickers in the background (non-blocking)
+    // Populates Supabase ticker_fundamentals regardless of score threshold
+    // Capped at 20 tickers to stay within api-ninjas limits
+    const prefetchList = tickers.slice(0, 20)
+    getAuthToken().then(authTok => {
+      prefetchList.forEach(t => {
+        fetch(`/api/tradier?fundamentals=${t}`, {
+          headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
+        }).catch(() => {})
+      })
+    }).catch(() => {})
+
     for (const ticker of tickers) {
       if (stopRef.current) break   // ← exit immediately when STOP pressed
       const r=await scanOneTicker(ticker, activeTF)
