@@ -1827,7 +1827,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const pushToJournal = async r => {
     const localId = Date.now()+''
     const strikeNum  = parseStrikeNum(r.strikeStr)
-    const entryNum   = parseFloat(r.mid ?? r.entry)
+    // r.mid and r.entry are formatted strings like "$4.10" or "$3.89 – $4.30"
+    // parseFloat("$4.10") = NaN — must strip the $ first
+    const parsePrice = (v) => { if (!v) return NaN; const m = String(v).match(/[\d.]+/); return m ? parseFloat(m[0]) : NaN }
+    const entryNum   = parsePrice(r.mid) || parsePrice(r.entry)
     const optionType = (r.tradeType||'Call').toLowerCase().includes('put') ? 'put' : 'call'
 
     const t = {
