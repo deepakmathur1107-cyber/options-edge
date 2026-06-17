@@ -1731,7 +1731,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
       // Always fetch fundamentals inline — populates Supabase for every scanned ticker
       // Uses await so it's sequential (no race conditions, no timeouts from parallel calls)
-      const authTokFund = await getAuthToken().catch(()=>null)
+      const authTokFund = await getAuthToken().catch(()=>null) || await window?.Clerk?.session?.getToken?.().catch(()=>null)
       const fundData = await fetch(`/api/tradier?fundamentals=${ticker}`, {
         headers: authTokFund ? { Authorization: `Bearer ${authTokFund}` } : {}
       }).then(r=>r.ok?r.json():null).catch(()=>null)
@@ -3020,12 +3020,12 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {/* Panel sub-tabs */}
             <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel}}>
               {[
-                {id:'settings',l:'Settings'},
-                {id:'alert',   l:'Alert'},
-                {id:'checklist',l:'Checklist'},
-                {id:'strategy',l:'Strategy'},
-                {id:'exit',    l:'Exit Rules'},
-                {id:'futures', l:'Futures'},
+                {id:'settings',  l:'Settings'},
+                ...(isAdmin ? [{id:'alert', l:'Alert'}] : []),
+                {id:'checklist', l:'Checklist'},
+                {id:'strategy',  l:'Strategy'},
+                {id:'exit',      l:'Exit Rules'},
+                {id:'futures',   l:'Futures'},
               ].map(t=>(
                 <button key={t.id} onClick={()=>setToolsTab(t.id)} style={{
                   padding:'6px 16px',borderRadius:6,fontSize:11,letterSpacing:0,cursor:'pointer',
