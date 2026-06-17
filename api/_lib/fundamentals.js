@@ -70,16 +70,20 @@ async function fetchFromNinjas(ticker) {
       return null
     }
     const data = await res.json()
+    // Log raw response for debugging (first call per ticker)
+    console.log(`[fundamentals] api-ninjas raw for ${ticker}:`, JSON.stringify(data).slice(0, 300))
     if (!data || !data.ticker) return null
 
     // Normalize to our schema
+    // api-ninjas /v1/stock field reference (verified against their docs):
+    //   market_cap, pe_ratio, sector, industry, earnings_announcement, 52_week_high, 52_week_low
     return {
-      ticker:        data.ticker || ticker,
-      market_cap:    data.market_cap     || null,   // integer, e.g. 2800000000000
-      pe_ratio:      data.p_e_ratio      || null,   // float
-      sector:        data.sector         || null,   // e.g. "Technology"
-      industry:      data.industry       || null,   // e.g. "Semiconductors"
-      earnings_date: data.earnings_announcement || null, // ISO string or null
+      ticker:        data.ticker                                  || ticker,
+      market_cap:    data.market_cap                             || null,
+      pe_ratio:      data.pe_ratio      || data.p_e_ratio        || null,  // handle both variants
+      sector:        data.sector                                  || null,
+      industry:      data.industry                               || null,
+      earnings_date: data.earnings_announcement                  || null,  // ISO string e.g. "2025-11-20"
       updated_at:    new Date().toISOString(),
     }
   } catch (e) {

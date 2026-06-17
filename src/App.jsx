@@ -1096,8 +1096,8 @@ useEffect(() => {
         // But surface a clear contextual warning so the user can make an informed call.
         warnings.push('🔔 MARKET OPEN — First 30 min are volatile. Spreads are wider, volume signals are unreliable, and IV is inflated. If conviction is high, size smaller than normal and use a limit order at mid or better.')
       }
-      if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — chasing inflated premium. Wait for pullback.`);score=Math.min(score,42)}
-      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`);score=Math.min(score,48)}
+      if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — buying into this move means paying inflated premium. ✅ Fix: set a limit alert 1–2% below current price and enter on the pullback, or reduce size to 25% of normal.`);score=Math.min(score,42)}
+      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% elevated — buying premium is expensive right now. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`);score=Math.min(score,48)}
 
       // ── Earnings gap handling ────────────────────────────────────────────
       // >5% gap = earnings/news catalyst, not intraday drift
@@ -1194,7 +1194,7 @@ useEffect(() => {
       // ── Break-even reality: feeds directly into score ────────────────────
       // Re-evaluate isHighIV with the actual contract's IV (may differ from best)
       if(!isSpread && ivFinal > 0.55 && !hardBlocks.some(b=>b.includes('IV'))) {
-        hardBlocks.push(`🔥 IV ${(ivFinal*100).toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`)
+        hardBlocks.push(`🔥 IV ${(ivFinal*100).toFixed(0)}% elevated on selected strike — buying premium is expensive. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`)
         score = Math.min(score, 48)
       }
       if(!isSpread && tradeData && tradeData.mid>0){
@@ -2315,8 +2315,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                         </div>
                       </div>
                     ))}
-                    <div style={{fontSize:11,color:C.subtext,padding:'4px 8px',borderRadius:3,background:C.bgDeep,border:`1px solid ${C.red}30`}}>
-                      Hard blocks cap conviction at 48% regardless of other signals. Fix the issue above before entering.
+                    <div style={{fontSize:11,color:C.subtext,padding:'5px 10px',borderRadius:3,background:C.bgDeep,border:`1px solid ${C.red}30`,lineHeight:1.6}}>
+                      ⚠️ Score capped at 48% until resolved. Each flag above has a suggested fix — address it before sizing in.
                     </div>
                   </div>
                 )}

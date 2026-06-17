@@ -98,6 +98,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
 
   // ── GET ?fundamentals=TICKER — serve cached fundamentals (Supabase → Redis → api-ninjas) ──
+  // Add &test=1 for a full diagnostic: shows which cache layer was hit + raw data
   if (req.query.fundamentals) {
     const { clerkId: fClerkId } = await getAuth(req)
     if (!fClerkId) return res.status(401).json({ error: 'Unauthorized' })
@@ -105,13 +106,55 @@ module.exports = async function handler(req, res) {
     if (!ticker || !/^[A-Z]{1,5}$/.test(ticker)) {
       return res.status(400).json({ error: 'Invalid ticker' })
     }
+    const isTest = req.query.test === '1'
     try {
+      if (isTest) {
+        // Diagnostic mode — bypass Redis/Supabase cache, call api-ninjas directly
+        // and show exactly what each layer sees
+        const { createClient } = require('@supabase/supabase-js')
+        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+
+        // 1. Check Supabase
+        const { data: sbRow } = await sb
+          .from('ticker_fundamentals')
+          .select('*')
+          .eq('ticker', ticker)
+          .maybeSingle()
+
+        // 2. Call api-ninjas directly
+        let ninjasRaw = null, ninjasStatus = null
+        if (process.env.API_NINJAS_KEY) {
+          const nr = await fetch(`https://api.api-ninjas.com/v1/stock?ticker=${ticker}`, {
+            headers: { 'X-Api-Key': process.env.API_NINJAS_KEY }
+          })
+          ninjasStatus = nr.status
+          ninjasRaw = await nr.json().catch(() => null)
+        }
+
+        return res.status(200).json({
+          ticker,
+          test: true,
+          supabase: {
+            hasRow:     !!sbRow,
+            row:        sbRow || null,
+            ageHours:   sbRow ? ((Date.now() - new Date(sbRow.updated_at).getTime()) / 3600000).toFixed(1) : null,
+            isStale:    sbRow ? (Date.now() - new Date(sbRow.updated_at).getTime()) > 7*24*3600*1000 : true,
+          },
+          api_ninjas: {
+            keyConfigured: !!process.env.API_NINJAS_KEY,
+            httpStatus:    ninjasStatus,
+            rawResponse:   ninjasRaw,
+          },
+          verdict: sbRow ? 'SUPABASE_HIT' : (ninjasRaw?.ticker ? 'NINJAS_HIT' : 'BOTH_MISS'),
+        })
+      }
+
       const data = await getFundamentals(ticker)
       if (!data) return res.status(200).json({ ticker, available: false })
       return res.status(200).json({ ticker, available: true, ...data })
     } catch (e) {
       console.error('[tradier/fundamentals] error:', e.message)
-      return res.status(500).json({ error: 'Failed to fetch fundamentals' })
+      return res.status(500).json({ error: 'Failed to fetch fundamentals', detail: e.message })
     }
   }
 
