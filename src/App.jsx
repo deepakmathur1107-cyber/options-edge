@@ -23,6 +23,23 @@ const safe   = v => v==null?'—':typeof v==='object'?JSON.stringify(v):String(v
 // ─── Module-level constants ───────────────────────────────────────────────────
 const PRESET_SYMS = ['SPY','QQQ','IWM','AAPL','TSLA','NVDA','AMZN','META']
 
+// ─── ET-aware time helpers ───────────────────────────────────────────────────
+// Always use Eastern Time for market-hour checks — users may be in any timezone
+function getETHour() {
+  const now = new Date()
+  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false })
+  const [h, m] = etStr.split(':').map(Number)
+  return h + m / 60
+}
+function isMarketOpen() {
+  const h = getETHour()
+  const now = new Date()
+  const dayET = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+  if (['Sat', 'Sun'].includes(dayET)) return false
+  return h >= 9.5 && h < 16
+}
+function isOpeningWindow() { return getETHour() < 10.0 }  // first 30 min ET
+
 const TF_CONFIG = {
   'Quick (5–14 DTE)': {
     minDTE:5,   maxDTE:14,  strikePct:1.02, profitTarget:0.50, stopLoss:0.50,
@@ -1050,8 +1067,7 @@ useEffect(() => {
       const volRatio=vol/(avgVol||1)
       const ivPct=iv*100
       const now=new Date()
-      const etHour=now.getHours()+(now.getMinutes()/60)
-      const isMorningNoise=etHour<10.0
+      const isMorningNoise=isOpeningWindow()  // ET-aware: first 30 min ET
       const isHighIV=iv>0.55&&!isSpread
 
       // Chasing vs earnings gap distinction:
@@ -1169,8 +1185,18 @@ useEffect(() => {
         ? buildSpreadResult(chain, price, step, scanType, tfCfg)
         : buildNakedResult (chain, price, step, optType, tfCfg)
       if (!tradeData) throw new Error('Could not find liquid contracts for this structure')
+      // IMPORTANT: override iv/delta/theta with values from the ACTUAL selected contract
+      // (buildNakedResult may pick a different strike than `best`)
+      const ivFinal    = tradeData.iv    || iv
+      const deltaFinal = tradeData.delta || delta
+      const thetaFinal = tradeData.theta || theta
 
       // ── Break-even reality: feeds directly into score ────────────────────
+      // Re-evaluate isHighIV with the actual contract's IV (may differ from best)
+      if(!isSpread && ivFinal > 0.55 && !hardBlocks.some(b=>b.includes('IV'))) {
+        hardBlocks.push(`🔥 IV ${(ivFinal*100).toFixed(0)}% is high — buying here is expensive. Consider credit spread or wait for IV to compress.`)
+        score = Math.min(score, 48)
+      }
       if(!isSpread && tradeData && tradeData.mid>0){
         const strike_ = parseFloat(tradeData.primaryStrike||0)
         const beReq_  = ((strike_ + tradeData.mid) / price - 1) * 100
@@ -1195,8 +1221,7 @@ useEffect(() => {
       }
 
       if(hardBlocks.length>0) score=Math.min(score,48)
-      score=Math.min(95,Math.max(20,score))
-      dbg(`   ✓ Conviction: ${score}%`)
+      // Note: final score clamp applied AFTER fundamentals fetch below
       dbg(`✅ Scan complete`)
       // Fetch fundamentals (Supabase → Redis → api-ninjas)
       let fund = null
@@ -1224,9 +1249,13 @@ useEffect(() => {
             warnings.push(`Earnings in ${earnDays}d — factor into DTE choice`)
           }
         }
-        score=Math.min(95,Math.max(20,score))
         dbg(`   ✓ Fundamentals: ${fund.sector||'—'} | MCap: ${fund.market_cap?'$'+(fund.market_cap/1e9).toFixed(0)+'B':'N/A'} | Earnings: ${fund.earnings_date||'N/A'}`)
       }
+
+      // Final score clamp (after fundamentals adjustments)
+      if(hardBlocks.length>0) score=Math.min(score,48)
+      score=Math.min(95,Math.max(20,score))
+      dbg(`   ✓ Conviction: ${score}%`)
 
       // Fetch S/R levels + AI brief in background (non-blocking)
       setSrData(null); setTickerBrief(null); setSrLoading(true)
@@ -1272,9 +1301,9 @@ useEffect(() => {
         confidence:score>=80?'High':score>=65?'Medium':'Low',
         price:fmtP(price),
         bid:fmtP(tradeData.bid), ask:fmtP(tradeData.ask), mid:fmtP(tradeData.mid),
-        iv:fmtPct(tradeData.iv||iv),ivRaw:tradeData.iv||iv,
-        delta:(tradeData.delta||delta)?((tradeData.delta||delta)).toFixed(3):'—',
-        theta:(tradeData.theta||theta)?((tradeData.theta||theta)).toFixed(3):'—',
+        iv:fmtPct(ivFinal),ivRaw:ivFinal,
+        delta:deltaFinal?deltaFinal.toFixed(3):'—',
+        theta:thetaFinal?thetaFinal.toFixed(3):'—',
         volume:tradeData.volume||best.volume||0,
         oi:tradeData.oi||best.open_interest||0,
         chgPct:chgPct.toFixed(2)+'%',
@@ -1485,7 +1514,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       if (!chain.length) return null
 
       const chgPct=parseFloat(quote.change_percentage||0)
-      const optType=chgPct>=0?'call':'put'
+      // When flat (chgPct=0), use market regime to pick direction
+      const spxDir = esBar?.chgPct||0
+      const optType = chgPct > 0.1 ? 'call'
+                    : chgPct < -0.1 ? 'put'
+                    : spxDir >= 0 ? 'call' : 'put'  // flat stock: follow market
       const step=autoStep(price)
       const side=chain.filter(o=>o.option_type===optType)
       if (!side.length) return null
@@ -1499,8 +1532,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const volRatio=vol/(avg||1)
       const ivPct2=iv*100
       const now2=new Date()
-      const etHour2=now2.getHours()+(now2.getMinutes()/60)
-      const isMorning2=etHour2<10.0
+      const isMorning2=isOpeningWindow()  // ET-aware: first 30 min ET
       const isIntraChasing2 = Math.abs(chgPct)>2.0 && Math.abs(chgPct)<=5.0
       const isEarningsGap2  = Math.abs(chgPct)>5.0
       const isChasing2      = isIntraChasing2
@@ -1643,6 +1675,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       score=Math.min(95,Math.max(20,score))
 
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      // Breakeven for Telegram alert
+      const breakeven2 = td.primaryStrike ? (parseFloat(td.primaryStrike) + td.mid).toFixed(2) : null
+      const breakevenPct2 = td.primaryStrike && price > 0
+        ? (((parseFloat(td.primaryStrike) + td.mid) / price - 1) * 100).toFixed(1)
+        : null
       return {
         ticker,score,
         tradeType: td.structureType,
@@ -1657,6 +1694,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
+        dte:          dte2,
+        breakeven:    breakeven2,
+        breakevenPct: breakevenPct2,
+        hi52:parseFloat(quote.week_52_high||price),
+        lo52:parseFloat(quote.week_52_low||price),
         // Fundamentals metadata (shown in expanded detail card)
         sector:     fund?.sector     || null,
         industry:   fund?.industry   || null,
@@ -1684,8 +1726,47 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
       if (r.score>=minScore) {
-        // Threshold hit — now enrich with fundamentals (Supabase-cached, safe to call)
-        const rEnriched = await scanOneTicker(ticker, activeTF, true) || r
+        // Threshold hit — fetch fundamentals (Supabase → Redis → api-ninjas, never hot)
+        let rEnriched = r
+        try {
+          const authTok = await getAuthToken().catch(()=>null)
+          const fRes = await fetch(`/api/tradier?fundamentals=${ticker}`, {
+            headers: authTok ? { Authorization: `Bearer ${authTok}` } : {}
+          })
+          if (fRes.ok) {
+            const fData = await fRes.json()
+            if (fData.available) {
+              // Apply earnings warning to score if near earnings
+              let enrichedScore = r.score
+              const enrichedWarnings = [...(r.warnings||[])]
+              const enrichedReasons  = [...(r.reasons||[])]
+              if (fData.earnings_date) {
+                const earnDays = Math.round((new Date(fData.earnings_date) - new Date()) / (1000*60*60*24))
+                if (earnDays >= 0 && earnDays <= 7) {
+                  enrichedWarnings.push(`⚠️ Earnings in ${earnDays}d — IV crush risk after event`)
+                  enrichedScore = Math.min(enrichedScore, enrichedScore - 10)
+                } else if (earnDays > 7 && earnDays <= 21) {
+                  enrichedWarnings.push(`Earnings in ${earnDays}d — factor into DTE choice`)
+                }
+              }
+              if (fData.market_cap && fData.market_cap > 100_000_000_000) {
+                enrichedReasons.push(`Large-cap (${fData.sector||'—'})`)
+                enrichedScore = Math.min(95, enrichedScore + 3)
+              }
+              rEnriched = {
+                ...r,
+                score:        Math.min(95, Math.max(20, enrichedScore)),
+                warnings:     enrichedWarnings,
+                reasons:      enrichedReasons,
+                sector:       fData.sector       || null,
+                industry:     fData.industry     || null,
+                marketCap:    fData.market_cap   || null,
+                peRatio:      fData.pe_ratio     || null,
+                earningsDate: fData.earnings_date || null,
+              }
+            }
+          }
+        } catch {}
         setLastAlert(rEnriched)
         setAlertHistory(p=>[{...rEnriched, alertedAt: ts2}, ...p.slice(0,9)])
         if (tgToken&&tgChatId) {
