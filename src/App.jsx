@@ -953,13 +953,13 @@ export default function App(props={}) {
       }
     }
 
-    // Try symbols in order — first success wins
+    // Try index first, ETF as fallback (SPX preferred over SPY, NDX over QQQ)
     let es = null, nq = null
-    for (const sym of ['SPY','SPX','$SPX.X']) {
+    for (const sym of ['SPX','$SPX.X','SPY']) {
       es = await directQuote(sym)
       if (es) break
     }
-    for (const sym of ['QQQ','NDX','$NDX.X']) {
+    for (const sym of ['NDX','$NDX.X','QQQ']) {
       nq = await directQuote(sym)
       if (nq) break
     }
@@ -2114,7 +2114,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             {/* ── Market Conviction ── */}
             <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION</div>
+                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET CONVICTION <span style={{fontWeight:400,fontSize:10,letterSpacing:0,textTransform:'none',color:C.subtext}}>· based on price action</span></div>
                 <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
                   style={{fontSize:11,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}50`,padding:'5px 12px',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontWeight:600}}>
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}

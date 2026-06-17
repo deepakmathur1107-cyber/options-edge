@@ -205,6 +205,7 @@ export default function MorningBrief({ getToken, theme, isAdmin }) {
       <div style={{padding:'11px 18px',background:cardAlt,borderBottom:`1px solid ${border}`,display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:6}}>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <span style={{fontSize:12,fontWeight:700,letterSpacing:2,color:textColor,fontFamily:'IBM Plex Mono,monospace'}}>📊 MARKET READOUT</span>
+          <span style={{fontSize:10,fontWeight:400,color:dimColor,fontFamily:'IBM Plex Mono,monospace',letterSpacing:0}}>· news sentiment</span>
           {isOldBrief && <span style={{fontSize:10,fontWeight:700,color:'#f59e0b',background:'#f59e0b18',border:'1px solid #f59e0b40',borderRadius:3,padding:'2px 7px',fontFamily:'IBM Plex Mono,monospace'}}>PREV DAY</span>}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
