@@ -10,6 +10,7 @@
 const { createClient } = require('@supabase/supabase-js')
 
 const NINJAS_KEY    = process.env.API_NINJAS_KEY    || ''
+const FINNHUB_KEY   = process.env.FINNHUB_API_KEY    || ''  // same key used by newsData.js
 const REDIS_URL     = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN   = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const SUPABASE_URL  = process.env.SUPABASE_URL              || ''
@@ -54,6 +55,38 @@ async function redisSet(key, value, ttl) {
       body: JSON.stringify([['SET', key, JSON.stringify(value), 'EX', ttl]]),
     })
   } catch {}
+}
+
+// ── Finnhub earnings fetch ────────────────────────────────────────────────────
+// Free tier: 60 calls/min, no credit card required.
+// Endpoint: GET /v1/calendar/earnings?symbol=TICKER&from=TODAY&to=TODAY+90d
+// Returns array of earnings events; we take the first upcoming one.
+async function fetchEarningsFromFinnhub(ticker) {
+  if (!FINNHUB_KEY) return null
+  try {
+    const today = new Date()
+    const from  = today.toISOString().slice(0, 10)                         // YYYY-MM-DD
+    const to    = new Date(today.getTime() + 90*24*3600*1000)
+                    .toISOString().slice(0, 10)
+    const url   = `https://finnhub.io/api/v1/calendar/earnings?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${FINNHUB_KEY}`
+    const res   = await fetch(url)
+    if (!res.ok) {
+      console.warn(`[fundamentals] Finnhub earnings ${res.status} for ${ticker}`)
+      return null
+    }
+    const data = await res.json()
+    // Response: { earningsCalendar: [ { date, symbol, epsEstimate, ... }, ... ] }
+    const events = data?.earningsCalendar || []
+    const upcoming = events
+      .filter(e => e.date >= from)          // only future dates
+      .sort((a, b) => a.date.localeCompare(b.date))
+    if (!upcoming.length) return null
+    console.log(`[fundamentals] Finnhub earnings for ${ticker}: ${upcoming[0].date}`)
+    return upcoming[0].date  // YYYY-MM-DD
+  } catch (e) {
+    console.warn(`[fundamentals] Finnhub error for ${ticker}:`, e.message)
+    return null
+  }
 }
 
 // ── api-ninjas fetch ──────────────────────────────────────────────────────────
@@ -110,13 +143,16 @@ async function fetchFromNinjas(ticker) {
     const rawMcap = tickerData.latest_market_cap
     const market_cap = (typeof rawMcap === 'number') ? rawMcap : null
 
+    // ── 3. Finnhub — upcoming earnings date (free tier) ─────────────────────
+    const earningsDate = await fetchEarningsFromFinnhub(ticker)
+
     return {
       ticker:        tickerData.ticker || ticker,
-      market_cap,                          // null on free tier
+      market_cap,                          // null on free tier (api-ninjas premium)
       pe_ratio:      null,                 // not available on free tier
-      sector,                              // from sp500 endpoint, null for non-SP500
+      sector,                              // from sp500, null for non-SP500
       industry,
-      earnings_date: null,                 // premium-only; inferred via IV term-structure
+      earnings_date: earningsDate,         // from Finnhub free tier, YYYY-MM-DD
       updated_at:    new Date().toISOString(),
     }
   } catch (e) {
