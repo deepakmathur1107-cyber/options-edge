@@ -1019,6 +1019,46 @@ useEffect(() => {
     const log=[]; const dbg=m=>{log.push(m);setDebugLog([...log])}
     setScanning(true);setScanResult(null);setScanErr('');setDebugLog([])
     const ticker=scanTicker.toUpperCase()
+
+    // ── Check the cron-populated cache first ────────────────────────────────
+    // If a fresh (<20min old) result already exists for this exact ticker+
+    // timeframe, use it instantly instead of re-running the full live-fetch
+    // sequence below. Falls through to the live path on any cache miss/error —
+    // same scoring either way, since the cron runs the identical scanTicker
+    // logic (api/_lib/scanLogic.js, ported from this same function).
+    const SPREAD_TYPES_CHECK = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
+    if (!SPREAD_TYPES_CHECK.includes(scanType)) {
+      try {
+        dbg(`0. Checking cached scan results...`)
+        const cacheRes = await fetch(`/api/scan-cache?ticker=${ticker}&tf=${encodeURIComponent(scanTF)}`)
+        const cacheData = await cacheRes.json()
+        if (cacheData?.cached && cacheData.result) {
+          const row = cacheData.result
+          dbg(`✓ Cache hit — scanned ${Math.round((Date.now()-new Date(row.scanned_at).getTime())/60000)}m ago`)
+          setScanResult({
+            ticker: row.ticker, tradeType: row.trade_type, score: row.score,
+            expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
+            entry: row.entry, target: row.target, stop: row.stop,
+            isSpread: false, legsList: [],
+            grade: row.grade, confidence: row.score>=80?'High':row.score>=65?'Medium':'Low',
+            bid: row.bid, ask: row.ask, mid: row.mid,
+            iv: row.iv, delta: row.delta,
+            volume: row.volume, oi: row.oi,
+            chgPct: row.chg_pct,
+            reasons: row.reasons||[], warnings: row.warnings||[], hardBlocks: row.hard_blocks||[],
+            dte: row.dte,
+            breakeven: row.breakeven, breakevenPct: row.breakeven_pct,
+            sector: row.sector, industry: row.industry, marketCap: row.market_cap,
+            earningsDate: row.earnings_date,
+            fromCache: true, cachedAt: row.scanned_at,
+          })
+          setScanning(false)
+          return
+        }
+        dbg(`· No fresh cache — running live scan`)
+      } catch (e) { dbg(`· Cache check failed (${e.message}) — running live scan`) }
+    }
+
     try {
       dbg(`1. Fetching live quote for $${ticker}...`)
       const quote=await getQuote(ticker)
@@ -2387,9 +2427,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:C.text,letterSpacing:2}}>${scanResult.ticker}</div>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:13,color:gradeCol(scanResult.grade),letterSpacing:1.5,marginBottom:1}}>{scanResult.tradeType}</div>
                       <div style={{fontSize:11,color:C.dim}}>Conviction: <span style={{color:scanResult.score>=80?C.green:C.orange,fontWeight:600}}>{scanResult.score}%</span> · {scanResult.confidence}</div>
-                      <div style={{display:'inline-flex',alignItems:'center',gap:5,marginTop:3,padding:'2px 6px',borderRadius:3,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
-                        <span style={{fontSize:12}}>{scanResult.tfBadge}</span>
-                        <span style={{fontSize:11,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3,flexWrap:'wrap'}}>
+                        <div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'2px 6px',borderRadius:3,background:`${scanResult.tfColor}18`,border:`1px solid ${scanResult.tfColor}40`}}>
+                          <span style={{fontSize:12}}>{scanResult.tfBadge}</span>
+                          <span style={{fontSize:11,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
+                        </div>
+                        {scanResult.fromCache ? (
+                          <span style={{fontSize:10,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:3,padding:'2px 6px',letterSpacing:0.5}}>
+                            ⚡ Cached · {Math.max(0,Math.round((Date.now()-new Date(scanResult.cachedAt).getTime())/60000))}m ago
+                          </span>
+                        ) : (
+                          <span style={{fontSize:10,color:C.green,background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:3,padding:'2px 6px',letterSpacing:0.5}}>
+                            🔴 Live
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
