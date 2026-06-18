@@ -39,15 +39,72 @@ function sb() {
   return _sb
 }
 
-async function tFetch(path) {
+// ─── Tradier rate-limit health check ───────────────────────────────────────
+// Temporary diagnostic instrumentation (see README-health-check.md for the
+// plan this is part of). Tradier sends X-Ratelimit-* headers on every market-
+// data response: Allowed, Used, Available, Expiry (docs.tradier.com/docs/rate-limiting).
+// Production limit is 120/min, enforced per-token. This module never throttles
+// or changes behavior — it only OBSERVES and logs, so it's safe to ship and
+// leave running without any risk to existing scan behavior.
+//
+// Tracker is passed explicitly through every call (not module-scope) because
+// Fluid Compute can route concurrent invocations to the same warm instance —
+// module-scope state would let two overlapping runs corrupt each other's counts.
+function newRateTracker() {
+  return {
+    calls: 0,                  // total Tradier calls this invocation
+    statusCounts: {},           // e.g. {200: 1020, 429: 6}
+    minAvailable: null,         // lowest X-Ratelimit-Available seen — closest we got to the wall
+    minAvailableAt: null,       // ISO timestamp of that low point, for correlating with batch position
+    firstAllowed: null,         // X-Ratelimit-Allowed, sanity-check against the documented 120
+    sawRetryAfter: null,        // Retry-After value if any 429 included one
+  }
+}
+function recordRateHeaders(tracker, r) {
+  if (!tracker) return
+  tracker.calls++
+  tracker.statusCounts[r.status] = (tracker.statusCounts[r.status] || 0) + 1
+  const allowed   = parseInt(r.headers.get('x-ratelimit-allowed'), 10)
+  const available = parseInt(r.headers.get('x-ratelimit-available'), 10)
+  if (!isNaN(allowed) && tracker.firstAllowed === null) tracker.firstAllowed = allowed
+  if (!isNaN(available) && (tracker.minAvailable === null || available < tracker.minAvailable)) {
+    tracker.minAvailable = available
+    tracker.minAvailableAt = new Date().toISOString()
+  }
+  if (r.status === 429) {
+    const retryAfter = r.headers.get('retry-after')
+    if (retryAfter) tracker.sawRetryAfter = retryAfter
+  }
+}
+function logRateSummary(tf, tracker, durationMs) {
+  if (!tracker) return
+  const wasThrottled = (tracker.statusCounts[429] || 0) > 0
+  console.log(`[rate-check] tf=${tf} calls=${tracker.calls} durationMs=${durationMs} ` +
+    `statusCounts=${JSON.stringify(tracker.statusCounts)} ` +
+    `allowed=${tracker.firstAllowed ?? 'n/a'} minAvailable=${tracker.minAvailable ?? 'n/a'} ` +
+    `minAvailableAt=${tracker.minAvailableAt ?? 'n/a'} ` +
+    `throttled429=${wasThrottled}${tracker.sawRetryAfter ? ` retryAfter=${tracker.sawRetryAfter}` : ''}`)
+  if (wasThrottled) {
+    console.warn(`[rate-check] ⚠️ THROTTLED — tf=${tf} hit ${tracker.statusCounts[429]} HTTP 429(s) ` +
+      `from Tradier this run. These were previously silently treated as "no data" for those ` +
+      `tickers — same root cause as a missed quote, just now visible.`)
+  } else if (tracker.minAvailable !== null && tracker.minAvailable <= 10) {
+    console.warn(`[rate-check] ⚠️ CLOSE TO LIMIT — tf=${tf} minAvailable=${tracker.minAvailable} ` +
+      `(out of ${tracker.firstAllowed ?? 120}) at ${tracker.minAvailableAt} — no 429 yet this run, ` +
+      `but headroom was thin.`)
+  }
+}
+
+async function tFetch(path, tracker) {
   const url = `${TRADIER_BASE}${path}`
   const r = await fetch(url, { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } })
+  recordRateHeaders(tracker, r)
   if (!r.ok) return null
   try { return await r.json() } catch { return null }
 }
-const getQuote    = async sym => { const d = await tFetch(`/markets/quotes?symbols=${sym}&greeks=false`); return d?.quotes?.quote || null }
-const getExpiries = async sym => { const d = await tFetch(`/markets/options/expirations?symbol=${sym}&includeAllRoots=false`); return d?.expirations?.date || [] }
-const getChain     = async (sym, exp) => { const d = await tFetch(`/markets/options/chains?symbol=${sym}&expiration=${exp}&greeks=true`); return d?.options?.option || [] }
+const getQuote    = async (sym, tracker) => { const d = await tFetch(`/markets/quotes?symbols=${sym}&greeks=false`, tracker); return d?.quotes?.quote || null }
+const getExpiries = async (sym, tracker) => { const d = await tFetch(`/markets/options/expirations?symbol=${sym}&includeAllRoots=false`, tracker); return d?.expirations?.date || [] }
+const getChain     = async (sym, exp, tracker) => { const d = await tFetch(`/markets/options/chains?symbol=${sym}&expiration=${exp}&greeks=true`, tracker); return d?.options?.option || [] }
 
 // Batched concurrency helper — runs `worker` over `items`, `batchSize` at a time.
 async function runBatched(items, batchSize, worker) {
@@ -90,12 +147,13 @@ module.exports = async function handler(req, res) {
   const MAX_MS = 280_000   // leave 20s headroom under the 300s Pro maxDuration
   const MIN_WRITE_SCORE = 60   // only persist results worth surfacing — raise this
                                // (e.g. to 65 or 70) if the table still feels noisy
+  const rateTracker = newRateTracker()   // local to this invocation — see note above on why not module-scope
 
   // Market regime — fetched once per run, shared across all tickers (mirrors
   // esBar/nqBar in the frontend, which are also fetched once and reused).
   let spxChg = 0, ndxChg = 0
   try {
-    const [spxQ, ndxQ] = await Promise.all([getQuote('SPX'), getQuote('NDX')])
+    const [spxQ, ndxQ] = await Promise.all([getQuote('SPX', rateTracker), getQuote('NDX', rateTracker)])
     spxChg = safeChgPct(spxQ).pct
     ndxChg = safeChgPct(ndxQ).pct
   } catch (e) { console.error('[cron/scan] market regime fetch failed:', e.message) }
@@ -107,12 +165,12 @@ module.exports = async function handler(req, res) {
     if (Date.now() - startedAt > MAX_MS) return null   // time budget guard
 
     try {
-      const [quote, expDates] = await Promise.all([getQuote(ticker), getExpiries(ticker)])
+      const [quote, expDates] = await Promise.all([getQuote(ticker, rateTracker), getExpiries(ticker, rateTracker)])
       if (!quote || !expDates.length) { scanned++; return null }
       const price = parseFloat(quote.last || quote.prevclose || 0)
       if (!price) { scanned++; return null }
       const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
-      const chain = await getChain(ticker, expiryRaw)
+      const chain = await getChain(ticker, expiryRaw, rateTracker)
       if (!chain.length) { scanned++; return null }
 
       const r = scanTicker({ ticker, quote, expDates, chain, tf, fund: null, spxChg, ndxChg })
@@ -165,9 +223,17 @@ module.exports = async function handler(req, res) {
 
   const durationMs = Date.now() - startedAt
   console.log(`[cron/scan] tf=${tf} scanned=${scanned} qualified=${qualified} errors=${errors} duration=${durationMs}ms`)
+  logRateSummary(tf, rateTracker, durationMs)
 
   return res.status(200).json({
     timeframe: tf, scanned, qualified, errors, durationMs,
     truncated: durationMs > MAX_MS,
+    rateHealth: {
+      tradierCalls: rateTracker.calls,
+      statusCounts: rateTracker.statusCounts,
+      allowed: rateTracker.firstAllowed,
+      minAvailable: rateTracker.minAvailable,
+      throttled429: (rateTracker.statusCounts[429] || 0) > 0,
+    },
   })
 }
