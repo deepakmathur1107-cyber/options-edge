@@ -1863,6 +1863,31 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     }
   },[tradierToken,tradierMode,watchlist,minScore,tgToken,tgChatId,scanOneTicker])
 
+  // Loads pre-scanned results from the cron-populated cache instantly,
+  // instead of running scanOneTicker live one ticker at a time.
+  const [loadingCache, setLoadingCache] = useState(false)
+  const loadCachedAlerts = async () => {
+    setLoadingCache(true)
+    try {
+      const res = await fetch(`/api/scan-cache?tf=${encodeURIComponent(scanTF)}&minScore=${minScore}`)
+      const data = await res.json()
+      const rows = data?.results || []
+      setAlertHistory(rows.map(row => ({
+        ticker: row.ticker, tradeType: row.trade_type, score: row.score,
+        expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
+        entry: row.entry, target: row.target, stop: row.stop,
+        bid: row.bid, ask: row.ask, mid: row.mid, iv: row.iv, delta: row.delta,
+        volume: row.volume, oi: row.oi, chgPct: row.chg_pct, dte: row.dte,
+        breakeven: row.breakeven, breakevenPct: row.breakeven_pct,
+        breakevenIsPut: (row.trade_type||'').toLowerCase().includes('put'),
+        reasons: row.reasons||[], warnings: row.warnings||[], hardBlocks: row.hard_blocks||[],
+        tfLabel: scanTF, alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
+        grade: row.grade,
+      })))
+    } catch (e) { console.error('loadCachedAlerts failed:', e.message) }
+    setLoadingCache(false)
+  }
+
   const toggleAuto=()=>{
     if (autoOn) {
       stopRef.current = true   // signals the running loop to break immediately
@@ -2733,11 +2758,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     Every {scanFreq} min · {minScore}%+ conviction · {watchlist?watchlist.split(',').map(t=>t.trim()).filter(Boolean).join(', '):'Full S&P 500'}
                   </div>
                 </div>
-                <button className="hv" onClick={toggleAuto} style={{
-                  background: autoOn ? C.red : C.green, border:'none', color:'#000',
-                  fontWeight:700, padding:'8px 18px', borderRadius:4, fontSize:12,
-                  letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
-                }}>{autoOn?'⏹ STOP':'▶ START'}</button>
+                <div style={{display:'flex',gap:8}}>
+                  <button className="hv" onClick={loadCachedAlerts} disabled={loadingCache} style={{
+                    background: C.blue, border:'none', color:'#000',
+                    fontWeight:700, padding:'8px 14px', borderRadius:4, fontSize:12,
+                    letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
+                    opacity:loadingCache?0.6:1,
+                  }}>{loadingCache?'…':'⚡ LOAD CACHED'}</button>
+                  <button className="hv" onClick={toggleAuto} style={{
+                    background: autoOn ? C.red : C.green, border:'none', color:'#000',
+                    fontWeight:700, padding:'8px 18px', borderRadius:4, fontSize:12,
+                    letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
+                  }}>{autoOn?'⏹ STOP':'▶ START'}</button>
+                </div>
               </div>
 
               {/* Watchlist + Frequency */}

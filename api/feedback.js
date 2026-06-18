@@ -99,6 +99,8 @@ module.exports = async function handler(req, res) {
       const hasRedis    = !!(process.env.UPSTASH_REDIS_REST_URL)
       const hasFinnhub  = !!(process.env.FINNHUB_API_KEY)
       const hasNinjas   = !!(process.env.API_NINJAS_KEY)
+      const { getNinjasUsage } = require('./_lib/fundamentals')
+      const ninjasUsage = await getNinjasUsage().catch(() => ({ today: 0, month: 0, last7Days: [] }))
 
       return res.status(200).json({
         feedback:  feedbackData.slice(0, 200),
@@ -112,7 +114,8 @@ module.exports = async function handler(req, res) {
             redis:    hasRedis   ? '✅ configured' : '❌ missing',
             finnhub:  hasFinnhub ? '✅ configured' : '❌ missing',
             apiNinjas: hasNinjas ? '✅ configured' : '❌ missing',
-          }
+          },
+          apiNinjasUsage: ninjasUsage,
         }
       })
     }

@@ -65,6 +65,57 @@ async function redisSet(key, value, ttl) {
   } catch {}
 }
 
+// ── api-ninjas usage counter ──────────────────────────────────────────────────
+// Tracks real api-ninjas calls (not cache hits) so usage can be watched against
+// the 3000/month free-tier cap. Two keys: a daily counter (30-day TTL, gives a
+// per-day trend) and a running monthly counter keyed by calendar month (reset
+// is manual — see ADMIN tab) since api-ninjas' own reset date isn't exposed to us.
+async function incrNinjasUsage() {
+  if (!REDIS_URL || !REDIS_TOKEN) return
+  try {
+    const today = new Date().toISOString().slice(0, 10)        // YYYY-MM-DD
+    const month = today.slice(0, 7)                            // YYYY-MM
+    const dayKey   = `ninjas_usage:day:${today}`
+    const monthKey = `ninjas_usage:month:${month}`
+    await Promise.all([
+      fetch(`${REDIS_URL}/incr/${encodeURIComponent(dayKey)}`,   { method: 'POST', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }),
+      fetch(`${REDIS_URL}/incr/${encodeURIComponent(monthKey)}`, { method: 'POST', headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }),
+      fetch(`${REDIS_URL}/expire/${encodeURIComponent(dayKey)}`,   { method: 'POST', headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify([30*24*3600]) }),
+      fetch(`${REDIS_URL}/expire/${encodeURIComponent(monthKey)}`, { method: 'POST', headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify([62*24*3600]) }),
+    ])
+  } catch (e) { console.warn('[fundamentals] usage counter failed:', e.message) }
+}
+
+// ── Read usage stats (for admin dashboard) ────────────────────────────────────
+async function getNinjasUsage() {
+  if (!REDIS_URL || !REDIS_TOKEN) return { today: 0, month: 0, last7Days: [] }
+  try {
+    const today = new Date()
+    const monthKey = today.toISOString().slice(0, 7)
+    const dayKeys = []
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today.getTime() - i * 24 * 3600 * 1000)
+      dayKeys.push(d.toISOString().slice(0, 10))
+    }
+    const fetchCount = async (key) => {
+      try {
+        const r = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } })
+        const d = await r.json()
+        return parseInt(d?.result || '0', 10) || 0
+      } catch { return 0 }
+    }
+    const [monthTotal, ...dayTotals] = await Promise.all([
+      fetchCount(`ninjas_usage:month:${monthKey}`),
+      ...dayKeys.map(d => fetchCount(`ninjas_usage:day:${d}`)),
+    ])
+    return {
+      today: dayTotals[0] || 0,
+      month: monthTotal,
+      last7Days: dayKeys.map((d, i) => ({ date: d, count: dayTotals[i] || 0 })),
+    }
+  } catch { return { today: 0, month: 0, last7Days: [] } }
+}
+
 // ── Finnhub earnings fetch (free tier) ───────────────────────────────────────
 async function fetchEarningsFromFinnhub(ticker) {
   if (!FINNHUB_KEY) return null
@@ -103,6 +154,7 @@ async function fetchFromNinjas(ticker) {
 
   try {
     // ── 1. /v1/ticker — company profile ──────────────────────────────────
+    await incrNinjasUsage()   // count the real hit regardless of outcome below
     const tickerRes = await fetch(
       `https://api.api-ninjas.com/v1/ticker?ticker=${encodeURIComponent(ticker)}`,
       { headers: H }
@@ -241,4 +293,4 @@ async function prefetchFundamentals(tickers, maxNinjasCalls = 20) {
   console.log(`[fundamentals] prefetch done — ${ninjasCalled} api-ninjas calls`)
 }
 
-module.exports = { getFundamentals, prefetchFundamentals }
+module.exports = { getFundamentals, prefetchFundamentals, getNinjasUsage }
