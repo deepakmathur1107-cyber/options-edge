@@ -14,7 +14,7 @@
 // This file orchestrates; api/_lib/scanLogic.js holds the actual scoring math
 // (ported from src/App.jsx's scanOneTicker so behaviour matches exactly).
 
-const { TF_CONFIG, pickExpiry, scanTicker } = require('../_lib/scanLogic')
+const { TF_CONFIG, pickExpiry, scanTicker, safeChgPct } = require('../_lib/scanLogic')
 const { getFundamentals } = require('../_lib/fundamentals')
 const { SP500 } = require('../_lib/sp500')
 
@@ -96,8 +96,8 @@ module.exports = async function handler(req, res) {
   let spxChg = 0, ndxChg = 0
   try {
     const [spxQ, ndxQ] = await Promise.all([getQuote('SPX'), getQuote('NDX')])
-    spxChg = parseFloat(spxQ?.change_percentage || 0)
-    ndxChg = parseFloat(ndxQ?.change_percentage || 0)
+    spxChg = safeChgPct(spxQ).pct
+    ndxChg = safeChgPct(ndxQ).pct
   } catch (e) { console.error('[cron/scan] market regime fetch failed:', e.message) }
 
   const tickers = SP500

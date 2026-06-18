@@ -20,6 +20,35 @@ function getETHour() {
   return et.getHours() + et.getMinutes()/60;
 }
 function isOpeningWindow() { return getETHour() < 10.0; } // first 30 min ET
+function isPreMarket() {
+  const now = new Date();
+  const dayET = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+  if (['Sat', 'Sun'].includes(dayET)) return false;
+  const h = getETHour();
+  return h >= 4.0 && h < 9.5;
+}
+
+// safeChgPct: Tradier's change_percentage (and change/last) only update from the
+// regular-session tape — they stay frozen at 0 vs prevclose before 9:30 AM ET no
+// matter how far the stock has actually moved in pre-market. NBBO bid/ask, unlike
+// last/change, does update pre-market (wider spreads, but live), so when we're in
+// the pre-market window AND the standard field reads exactly 0, derive an estimate
+// from the bid/ask midpoint vs prevclose instead of trusting the flat 0. Mirrors
+// the same fix applied to src/App.jsx — keep both in sync per the note above.
+function safeChgPct(q) {
+  const reported = parseFloat(q && q.change_percentage);
+  const validReported = !isNaN(reported) ? reported : 0;
+  if (validReported !== 0 || !isPreMarket()) return { pct: validReported, estimated: false };
+  const bid  = parseFloat(q && q.bid);
+  const ask  = parseFloat(q && q.ask);
+  const prev = parseFloat(q && q.prevclose);
+  if (isNaN(bid) || isNaN(ask) || bid<=0 || ask<=0 || isNaN(prev) || prev<=0) {
+    return { pct: 0, estimated: false };
+  }
+  const mid = (bid+ask)/2;
+  const pct = ((mid-prev)/prev)*100;
+  return { pct, estimated: true };
+}
 
 const TF_CONFIG = {
   'Quick (5–14 DTE)': {
@@ -169,7 +198,9 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
     const expiryRaw = pickExpiry(expDates, tfCfg2.minDTE, tfCfg2.maxDTE);
     if (!chain.length) return null;
 
-    const chgPct = parseFloat(quote.change_percentage||0);
+    const chgInfo = safeChgPct(quote);
+    const chgPct = chgInfo.pct;
+    const chgPctEstimated = chgInfo.estimated;
     const spxDir = spxChg||0;
     const optType = chgPct > 0.1 ? 'call'
                   : chgPct < -0.1 ? 'put'
@@ -206,6 +237,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
     let score=50; const reasons=[],warnings=[],hardBlocks2=[];
 
     if (isMorning2) warnings.push('Market open — volatile first 30 min, size smaller');
+    if (chgPctEstimated) warnings.push(`Pre-market estimate — change% (${chgPct>0?'+':''}${chgPct.toFixed(1)}%) derived from bid/ask vs prior close, not a confirmed trade yet`);
 
     if (isChasing2){hardBlocks2.push(`Chasing ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday`);score=Math.min(score,42);}
     if (isHighIV2){hardBlocks2.push(`High IV ${ivPct2.toFixed(0)}%`);score=Math.min(score,48);}
@@ -342,4 +374,4 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
   } catch { return null; }
 }
 
-module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, scanTicker, autoStep, isOpeningWindow };
+module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, scanTicker, autoStep, isOpeningWindow, isPreMarket, safeChgPct };

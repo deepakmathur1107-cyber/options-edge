@@ -40,6 +40,13 @@ function isMarketOpen() {
   return h >= 9.5 && h < 16
 }
 function isOpeningWindow() { return getETHour() < 10.0 }  // first 30 min ET
+function isPreMarket() {
+  const h = getETHour()
+  const now = new Date()
+  const dayET = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+  if (['Sat', 'Sun'].includes(dayET)) return false
+  return h >= 4.0 && h < 9.5
+}
 
 const TF_CONFIG = {
   'Quick (5–14 DTE)': {
@@ -102,6 +109,44 @@ const spreadWidth = p => p>=3000?100 : p>=500?25 : p>=200?10 : p>=50?5 : 2.5
 // findLeg: contract in arr closest to target strike
 const findLeg = (arr, tgt) =>
   arr.length ? arr.reduce((a,b)=>Math.abs(b.strike-tgt)<Math.abs(a.strike-tgt)?b:a) : null
+
+// safeIV: Tradier occasionally returns mid_iv as the literal string 'NaN' when its
+// IV solver fails to converge (stale/zero/crossed bid-ask, common pre-market). That
+// string is truthy, so a plain '||0' fallback never catches it — must validate the
+// parsed number explicitly. fallback defaults to 0 (display fields) but approxGEX
+// passes 0.3 so a broken IV doesn't zero out its gamma-proxy math.
+const safeIV = (o, fallback=0) => {
+  const a = parseFloat(o?.greeks?.mid_iv)
+  if (!isNaN(a) && a>0) return a
+  const b = parseFloat(o?.implied_volatility)
+  if (!isNaN(b) && b>0) return b
+  return fallback
+}
+
+// safeChgPct: Tradier's change_percentage (and change/last) only update from the
+// regular-session tape — they stay frozen at 0 vs prevclose before 9:30 AM ET no
+// matter how far the stock has actually moved in pre-market trading. Unlike the
+// mid_iv 'NaN'-string bug, this isn't a bad value to filter out — it's a real "0"
+// that just doesn't mean what it normally means. NBBO bid/ask, unlike last/change,
+// does update pre-market (wider spreads, but live), so when we're in the pre-market
+// window AND the standard field reads exactly 0, derive an estimate from the
+// bid/ask midpoint vs prevclose instead of trusting the flat 0.
+// Returns { pct, estimated } so callers can flag the value as a pre-market estimate
+// rather than presenting it with regular-session confidence.
+const safeChgPct = (q) => {
+  const reported = parseFloat(q?.change_percentage)
+  const validReported = !isNaN(reported) ? reported : 0
+  if (validReported !== 0 || !isPreMarket()) return { pct: validReported, estimated: false }
+  const bid  = parseFloat(q?.bid)
+  const ask  = parseFloat(q?.ask)
+  const prev = parseFloat(q?.prevclose)
+  if (isNaN(bid) || isNaN(ask) || bid<=0 || ask<=0 || isNaN(prev) || prev<=0) {
+    return { pct: 0, estimated: false }  // no usable bid/ask — be honest that we don't know
+  }
+  const mid = (bid+ask)/2
+  const pct = ((mid-prev)/prev)*100
+  return { pct, estimated: true }
+}
 
 // approxGEX: proxy Gamma Exposure from chain data.
 // Real GEX = gamma × OI × 100 × price². We don't have gamma directly from
@@ -292,7 +337,7 @@ const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
         `SELL $${shortLeg.strike}C   bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))} / mid $${f2(M(shortLeg))}`,
         `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract  ·  max loss $${(nd*100).toFixed(0)}/contract`,
       ],
-      iv:longLeg.greeks?.mid_iv||0, delta:longLeg.greeks?.delta||null,
+      iv:safeIV(longLeg), delta:longLeg.greeks?.delta||null,
       theta:longLeg.greeks?.theta||null,
       volume:longLeg.volume||0, oi:longLeg.open_interest||0, primaryStrike:longLeg.strike,
     }
@@ -324,7 +369,7 @@ const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
         `SELL $${shortLeg.strike}P   bid $${f2(B(shortLeg))} / ask $${f2(A(shortLeg))} / mid $${f2(M(shortLeg))}`,
         `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract  ·  max loss $${(nd*100).toFixed(0)}/contract`,
       ],
-      iv:longLeg.greeks?.mid_iv||0, delta:longLeg.greeks?.delta||null,
+      iv:safeIV(longLeg), delta:longLeg.greeks?.delta||null,
       theta:longLeg.greeks?.theta||null,
       volume:longLeg.volume||0, oi:longLeg.open_interest||0, primaryStrike:longLeg.strike,
     }
@@ -352,7 +397,7 @@ const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
         `BUY  $${cl.strike}C   bid $${f2(B(cl))} / ask $${f2(A(cl))}`,
         `TOTAL CREDIT $${f2(tc)}  ($${(tc*100).toFixed(0)}/contract)  ·  max loss = spread width − credit`,
       ],
-      iv:cs.greeks?.mid_iv||0, delta:cs.greeks?.delta||null,
+      iv:safeIV(cs), delta:cs.greeks?.delta||null,
       theta:null, volume:cs.volume||0, oi:cs.open_interest||0, primaryStrike:cs.strike,
     }
   }
@@ -377,7 +422,7 @@ const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
         `BUY  1× $${hi.strike}C    bid $${f2(B(hi))} / ask $${f2(A(hi))}`,
         `NET DEBIT $${f2(nd)}  ·  max profit $${(mp*100).toFixed(0)}/contract if stock pins $${mid_.strike} at expiry`,
       ],
-      iv:mid_.greeks?.mid_iv||0, delta:mid_.greeks?.delta||null,
+      iv:safeIV(mid_), delta:mid_.greeks?.delta||null,
       theta:mid_.greeks?.theta||null,
       volume:mid_.volume||0, oi:mid_.open_interest||0, primaryStrike:mid_.strike,
     }
@@ -400,7 +445,7 @@ const buildSpreadResult = (chain, price, step, scanType, tfCfg) => {
         `BUY $${cLeg.strike}C   bid $${f2(B(cLeg))} / ask $${f2(A(cLeg))} / mid $${f2(M(cLeg))}`,
         `TOTAL DEBIT $${f2(td)}  ($${(td*100).toFixed(0)}/contract)`,
       ],
-      iv:cLeg.greeks?.mid_iv||0, delta:null,
+      iv:safeIV(cLeg), delta:null,
       theta:cLeg.greeks?.theta||null,
       volume:cLeg.volume||0, oi:cLeg.open_interest||0, primaryStrike:cLeg.strike,
     }
@@ -952,7 +997,8 @@ export default function App(props={}) {
         // Fall back to close, then prevclose
         const p = (last > 0 && last !== prev) ? last : (close > 0 ? close : prev)
         if (p <= 0) { console.warn(`Quote ${sym}: price is 0`, q); return null }
-        return { price:p, chgPct:parseFloat(q.change_percentage||0), chg:parseFloat(q.change||0), sym, q }
+        const cp = safeChgPct(q)
+        return { price:p, chgPct:cp.pct, chgEstimated:cp.estimated, chg:parseFloat(q.change||0), sym, q }
       } catch(e) {
         console.warn(`Quote ${sym} failed:`, e.message)
         return null
@@ -1075,7 +1121,8 @@ useEffect(() => {
       if (!quote) throw new Error('No quote — check ticker and token')
       const price=parseFloat(quote.last||quote.prevclose||0)
       if (!price) throw new Error('Price is $0 — market may be closed')
-      dbg(`   ✓ $${ticker} = $${price.toFixed(2)} | chg: ${parseFloat(quote.change_percentage||0).toFixed(2)}%`)
+      const chgInfo=safeChgPct(quote)
+      dbg(`   ✓ $${ticker} = $${price.toFixed(2)} | chg: ${chgInfo.pct.toFixed(2)}%${chgInfo.estimated?' (pre-market est. from bid/ask)':''}`)
 
       dbg('2. Fetching expiry dates...')
       const expDates=await getExpiries(ticker)
@@ -1090,7 +1137,8 @@ useEffect(() => {
       if (!chain.length) throw new Error('Empty options chain')
       dbg(`   ✓ ${chain.length} contracts`)
 
-      const chgPct=parseFloat(quote.change_percentage||0)
+      const chgPct=chgInfo.pct
+      const chgPctEstimated=chgInfo.estimated
       const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
       const isSpread     = SPREAD_TYPES.includes(scanType)
       const bearish=scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
@@ -1107,7 +1155,11 @@ useEffect(() => {
       const ask=parseFloat(best.ask||0)
       const mid=(bid+ask)/2
       if (mid===0) throw new Error('Bid/ask both $0 — no liquidity')
-      const iv=best.greeks?.mid_iv||best.implied_volatility||0
+      // Tradier occasionally returns mid_iv as the literal string 'NaN' when its IV
+      // solver fails to converge (stale/zero/crossed bid-ask, common pre-market).
+      // That string is truthy, so ||0 never catches it — must validate the parsed
+      // number explicitly. Same pattern already fixed in buildNakedResult/approxGEX.
+      const iv=safeIV(best)
       const delta=best.greeks?.delta||null
       const theta=best.greeks?.theta||null
       dbg(`   ✓ Strike: $${best.strike}${optType==='call'?'C':'P'} | Bid: ${fmtP(bid)} | Ask: ${fmtP(ask)} | Mid: ${fmtP(mid)}`)
@@ -1145,6 +1197,9 @@ useEffect(() => {
         // No score penalty — a genuinely strong setup is still valid at open.
         // But surface a clear contextual warning so the user can make an informed call.
         warnings.push('🔔 MARKET OPEN — First 30 min are volatile. Spreads are wider, volume signals are unreliable, and IV is inflated. If conviction is high, size smaller than normal and use a limit order at mid or better.')
+      }
+      if(chgPctEstimated){
+        warnings.push(`🌅 PRE-MARKET ESTIMATE — Tradier's official change% isn't live yet before the bell, so the ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move (and the direction/chasing checks based on it) is estimated from the current bid/ask vs. yesterday's close, not a confirmed trade. Pre-market spreads are wide — treat this as directional context, not a precise number, until regular trading begins.`)
       }
       if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — buying into this move means paying inflated premium. ✅ Fix: set a limit alert 1–2% below current price and enter on the pullback, or reduce size to 25% of normal.`);score=Math.min(score,42)}
       if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% elevated — buying premium is expensive right now. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`);score=Math.min(score,48)}
@@ -1455,7 +1510,7 @@ useEffect(() => {
           delta:o.greeks?.delta?o.greeks.delta.toFixed(3):'—',
         }))
         const expiryDisplay=new Date(expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-        const chgPct_=parseFloat(quote.change_percentage||0)
+        const chgPct_=safeChgPct(quote).pct
         const bias_=chgPct_>0.3?'bull':chgPct_<-0.3?'bear':'neutral'
         const step_=autoStep(price)
         const bestCall_=topCalls[0]?chain.filter(o=>o.option_type==='call').reduce((a,b)=>Math.abs(b.strike-Math.round(price*1.01/step_)*step_)<Math.abs(a.strike-Math.round(price*1.01/step_)*step_)?b:a):null
@@ -1482,7 +1537,7 @@ useEffect(() => {
         }
       }
 
-      const chgPct=parseFloat(quote.change_percentage||0)
+      const chgPct=safeChgPct(quote).pct
       const chg=parseFloat(quote.change||0)
       const hi=parseFloat(quote.high||price)
       const lo=parseFloat(quote.low||price)
@@ -1594,7 +1649,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const chain=await getChain(ticker,expiryRaw)
       if (!chain.length) return null
 
-      const chgPct=parseFloat(quote.change_percentage||0)
+      const chgPct=safeChgPct(quote).pct
       // When flat (chgPct=0), use market regime to pick direction
       const spxDir = esBar?.chgPct||0
       const optType = chgPct > 0.1 ? 'call'
@@ -2054,7 +2109,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         if (!price) continue
         const expDates = await getExpiries(sym)
         if (!expDates.length) continue
-        const chgPct = parseFloat(quote.change_percentage||0)
+        const chgPct = safeChgPct(quote).pct
 
         for (const [tfKey, tfCfg] of Object.entries(TF_CONFIG)) {
           try {
