@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import AppNav from './components/AppNav'
 import MorningBrief from './components/MorningBrief'
+import AdminDashboard from './components/AdminDashboard'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
@@ -691,7 +692,7 @@ export default function App(props={}) {
   const [tgSaving,     setTgSaving]     = useState(false)
   const [tgSaveStatus, setTgSaveStatus] = useState('')
   const [watchlist,    setWatchlist]    = useState(()=>ls('watchlist','NVDA,AAPL,MSFT,SPY,TSLA'))
-  const [minScore,     setMinScore]     = useState(()=>Number(ls('minScore','80')))
+  const [minScore,     setMinScore]     = useState(()=>Number(ls('minScore','70')))
   const [scanFreq,     setScanFreq]     = useState(()=>Number(ls('scanFreq','5')))
   const [tgStatus,     setTgStatus]     = useState('')
 
@@ -1885,7 +1886,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         tfLabel: TF_CONFIG[tfNow]?.label||tfNow, alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
         grade: row.grade,
       })))
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScore}%+ threshold`,...p.slice(0,99)])
+      const note = rows.length===0
+        ? ` — try lowering Min Edge Score (currently ${minScore}%+); a high bar can legitimately mean zero matches right now`
+        : ''
+      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScore}%+ threshold${note}`,...p.slice(0,99)])
     } catch (e) {
       setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
       runAutoScan()
@@ -3779,6 +3783,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         {/* ── ADMIN TAB ────────────────────────────────────────────────── */}
         {tab==='admin' && isAdmin && (
           <div className="si" style={{maxWidth:700,margin:'0 auto',padding:'0 16px'}}>
+
+            {/* Full admin dashboard — KPIs, signups, feature usage, health.
+                Manages its own data fetch/loading/error state internally. */}
+            <AdminDashboard getToken={getAuthToken} />
 
             {/* Feedback Viewer */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
