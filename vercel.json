@@ -10,19 +10,23 @@
     },
     {
       "path": "/api/cron/scan?tf=Quick (5–14 DTE)",
-      "schedule": "*/15 13-20 * * 1-5"
+      "schedule": "*/15 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=Swing (21–45 DTE)",
-      "schedule": "*/15 13-20 * * 1-5"
+      "schedule": "*/15 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=LEAP (90–180 DTE)",
-      "schedule": "0 13-20 * * 1-5"
+      "schedule": "0 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=Deep LEAP (180–365 DTE)",
-      "schedule": "0 13-20 * * 1-5"
+      "schedule": "0 10-22 * * 1-5"
+    },
+    {
+      "path": "/api/cron/watchdog",
+      "schedule": "*/30 10-22 * * 1-5"
     }
   ],
   "functions": {
