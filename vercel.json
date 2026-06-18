@@ -26,10 +26,16 @@
     }
   ],
   "functions": {
-    "api/**/*.js": {
+    "api/*.js": {
       "maxDuration": 30
     },
-    "api/cron/scan.js": {
+    "api/user/*.js": {
+      "maxDuration": 30
+    },
+    "api/alerts/*.js": {
+      "maxDuration": 30
+    },
+    "api/cron/*.js": {
       "maxDuration": 280
     }
   },
