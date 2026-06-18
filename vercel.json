@@ -26,7 +26,7 @@
     },
     {
       "path": "/api/cron/watchdog",
-      "schedule": "*/30 10-22 * * 1-5"
+      "schedule": "*/10 10-22 * * 1-5"
     }
   ],
   "functions": {

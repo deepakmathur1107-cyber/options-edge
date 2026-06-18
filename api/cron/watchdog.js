@@ -67,10 +67,38 @@ module.exports = async function handler(req, res) {
     }
   }
 
+  const fixed = [], failed = []
+
   if (stale.length > 0) {
-    const lines = stale.map(s => `• ${s.timeframe}: last scan ${s.ageMin}min ago`).join('\n')
-    await notifyTelegram(`⚠️ Scan cron watchdog — stale data detected:\n${lines}\n\nCheck Vercel → Cron Jobs → View Logs.`)
+    const host = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://www.optionsedgeflow.com'
+
+    // Self-heal: trigger each stale timeframe directly, same as a normal cron
+    // tick would, before deciding whether to bother the person about it.
+    for (const s of stale) {
+      try {
+        const r = await fetch(`${host}/api/cron/scan?tf=${encodeURIComponent(s.timeframe)}`, {
+          headers: { Authorization: `Bearer ${process.env.CRON_SECRET || ''}` },
+        })
+        const j = await r.json().catch(() => null)
+        if (r.ok && j && !j.error) fixed.push({ ...s, result: j })
+        else failed.push({ ...s, error: j?.error || `HTTP ${r.status}` })
+      } catch (e) {
+        failed.push({ ...s, error: e.message })
+      }
+    }
+
+    // Only notify if something genuinely needed a person — a clean self-heal
+    // is exactly the kind of thing that shouldn't interrupt anyone's day.
+    if (failed.length > 0) {
+      const fixedLines  = fixed.length  ? `\n\n✅ Auto-recovered:\n${fixed.map(f=>`• ${f.timeframe} (was ${f.ageMin}min stale)`).join('\n')}` : ''
+      const failedLines = `\n\n❌ Could not auto-recover:\n${failed.map(f=>`• ${f.timeframe}: ${f.error}`).join('\n')}`
+      await notifyTelegram(`⚠️ Scan watchdog needs you — some timeframes wouldn't self-heal.${fixedLines}${failedLines}\n\nCheck Vercel → Cron Jobs → View Logs, or trigger manually.`)
+    }
   }
 
-  return res.status(200).json({ checked: Object.keys(EXPECTED_MAX_AGE_MIN).length, stale })
+  return res.status(200).json({
+    checked: Object.keys(EXPECTED_MAX_AGE_MIN).length,
+    stale: stale.length, fixed: fixed.length, failed: failed.length,
+    details: { fixed, failed },
+  })
 }
