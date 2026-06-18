@@ -102,9 +102,61 @@ async function tFetch(path, tracker) {
   if (!r.ok) return null
   try { return await r.json() } catch { return null }
 }
+// POST variant — Tradier documents POST /markets/quotes specifically for "a larger
+// list of symbols" (docs.tradier.com/reference/brokerage-api-markets-post-quotes),
+// separate from the GET form used for single/few-symbol lookups. Using POST avoids
+// any URL-length concern from a long comma-joined symbol list in a query string.
+async function tFetchPost(path, body, tracker) {
+  const url = `${TRADIER_BASE}${path}`
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${TRADIER_TOKEN}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+  recordRateHeaders(tracker, r)
+  if (!r.ok) return null
+  try { return await r.json() } catch { return null }
+}
 const getQuote    = async (sym, tracker) => { const d = await tFetch(`/markets/quotes?symbols=${sym}&greeks=false`, tracker); return d?.quotes?.quote || null }
 const getExpiries = async (sym, tracker) => { const d = await tFetch(`/markets/options/expirations?symbol=${sym}&includeAllRoots=false`, tracker); return d?.expirations?.date || [] }
 const getChain     = async (sym, exp, tracker) => { const d = await tFetch(`/markets/options/chains?symbol=${sym}&expiration=${exp}&greeks=true`, tracker); return d?.options?.option || [] }
+
+// BATCH_SIZE: conservative choice. Tradier's own docs don't publish a documented
+// max-symbols-per-call number for /markets/quotes (only third-party sources claim
+// "100" — not confirmed against Tradier's own documentation), so this stays well
+// under any plausible limit rather than assuming one. Tune up later once observed
+// to work reliably in production (check rate-check logs for any 400s on this call).
+const QUOTE_BATCH_SIZE = 50
+
+// getQuotesBatch: fetches quotes for MANY symbols in ONE Tradier call instead of
+// one call per symbol. This is the fix for the rate-limit headroom problem
+// confirmed via the rate-check instrumentation (minAvailable hit 0/120 during a
+// normal scheduled run) — quote calls were 1/3 of total Tradier traffic (one per
+// ticker) and collapse to ~7 calls for the full 342-ticker universe instead of 342.
+//
+// IMPORTANT: Tradier's JSON is produced via an XML->JSON translation with a known
+// quirk (docs.tradier.com/docs/response-format) — a single-result list can come
+// back as a bare object instead of an array. This function normalizes that so
+// callers always get a Map, regardless of how many symbols matched.
+async function getQuotesBatch(symbols, tracker) {
+  const map = new Map()
+  for (let i = 0; i < symbols.length; i += QUOTE_BATCH_SIZE) {
+    const slice = symbols.slice(i, i + QUOTE_BATCH_SIZE)
+    const body = `symbols=${encodeURIComponent(slice.join(','))}&greeks=false`
+    const d = await tFetchPost('/markets/quotes', body, tracker)
+    let quotes = d?.quotes?.quote
+    if (!quotes) continue
+    if (!Array.isArray(quotes)) quotes = [quotes]   // normalize single-object case
+    for (const q of quotes) {
+      if (q && q.symbol) map.set(q.symbol, q)
+    }
+  }
+  return map
+}
 
 // Batched concurrency helper — runs `worker` over `items`, `batchSize` at a time.
 async function runBatched(items, batchSize, worker) {
@@ -161,11 +213,23 @@ module.exports = async function handler(req, res) {
   const tickers = SP500
   let scanned = 0, qualified = 0, errors = 0
 
+  // Fetch all quotes up front, batched (≤QUOTE_BATCH_SIZE symbols per Tradier call)
+  // instead of one Tradier call per ticker inside the loop below. This is the fix
+  // for the rate-limit headroom problem the rate-check instrumentation confirmed
+  // live (minAvailable hit 0/120 on a normal run) — quotes were 342 of the ~1,015
+  // Tradier calls in a full run; this collapses that to ~7 calls.
+  let quoteMap = new Map()
+  try {
+    quoteMap = await getQuotesBatch(tickers, rateTracker)
+    console.log(`[cron/scan] batch quotes: resolved ${quoteMap.size}/${tickers.length} tickers in ${Math.ceil(tickers.length/QUOTE_BATCH_SIZE)} Tradier call(s)`)
+  } catch (e) { console.error('[cron/scan] batch quote fetch failed:', e.message) }
+
   await runBatched(tickers, 8, async (ticker) => {
     if (Date.now() - startedAt > MAX_MS) return null   // time budget guard
 
     try {
-      const [quote, expDates] = await Promise.all([getQuote(ticker, rateTracker), getExpiries(ticker, rateTracker)])
+      const quote = quoteMap.get(ticker)
+      const expDates = await getExpiries(ticker, rateTracker)
       if (!quote || !expDates.length) { scanned++; return null }
       const price = parseFloat(quote.last || quote.prevclose || 0)
       if (!price) { scanned++; return null }

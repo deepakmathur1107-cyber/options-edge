@@ -1202,7 +1202,7 @@ useEffect(() => {
         warnings.push(`🌅 PRE-MARKET ESTIMATE — Tradier's official change% isn't live yet before the bell, so the ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move (and the direction/chasing checks based on it) is estimated from the current bid/ask vs. yesterday's close, not a confirmed trade. Pre-market spreads are wide — treat this as directional context, not a precise number, until regular trading begins.`)
       }
       if(isChasing){hardBlocks.push(`🚨 Already ${chgPct>0?'+':''}${chgPct.toFixed(1)}% today — buying into this move means paying inflated premium. ✅ Fix: set a limit alert 1–2% below current price and enter on the pullback, or reduce size to 25% of normal.`);score=Math.min(score,42)}
-      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% elevated — buying premium is expensive right now. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`);score=Math.min(score,48)}
+      if(isHighIV){hardBlocks.push(`🔥 IV ${ivPct.toFixed(0)}% elevated — buying premium is expensive right now. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`)}
 
       // ── Earnings gap handling ────────────────────────────────────────────
       // >5% gap = earnings/news catalyst, not intraday drift
@@ -1306,10 +1306,28 @@ useEffect(() => {
       const thetaFinal = tradeData.theta || theta
 
       // ── Break-even reality: feeds directly into score ────────────────────
-      // Re-evaluate isHighIV with the actual contract's IV (may differ from best)
-      if(!isSpread && ivFinal > 0.55 && !hardBlocks.some(b=>b.includes('IV'))) {
-        hardBlocks.push(`🔥 IV ${(ivFinal*100).toFixed(0)}% elevated on selected strike — buying premium is expensive. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`)
-        score = Math.min(score, 48)
+      // Re-evaluate isHighIV with the actual contract's IV (may differ from best).
+      // If an IV hard-block was already pushed using the initial `best`-strike IV,
+      // don't add a second one — but DO correct its text to the actual selected
+      // contract's IV, so the number shown in the "skip this trade" banner matches
+      // what the AI Brief/warnings show elsewhere for this same trade. Previously
+      // this just skipped silently, leaving the stale initial-strike % on screen
+      // even when the actually-selected contract's IV (ivFinal) was different —
+      // e.g. INTC scan showed 85% in the hard-block banner but 83% everywhere else.
+      if(!isSpread) {
+        const existingIvBlockIdx = hardBlocks.findIndex(b=>b.includes('IV') && b.includes('elevated'))
+        if (ivFinal > 0.55) {
+          const correctedText = `🔥 IV ${(ivFinal*100).toFixed(0)}% elevated on selected strike — buying premium is expensive. ✅ Fix: switch to a Credit Spread or Iron Condor to sell the inflated IV instead, or wait for IV to drop below 45%.`
+          if (existingIvBlockIdx === -1) hardBlocks.push(correctedText)
+          else hardBlocks[existingIvBlockIdx] = correctedText
+        } else if (existingIvBlockIdx !== -1) {
+          // Initial best-strike IV looked elevated, but the actually-selected
+          // contract isn't — remove the stale block. Don't manually uncap score
+          // here: the existing 'if(hardBlocks.length>0) score=Math.min(score,48)'
+          // check further down already re-derives the cap from hardBlocks, so once
+          // this array is correct, score correctness follows automatically.
+          hardBlocks.splice(existingIvBlockIdx, 1)
+        }
       }
       if(!isSpread && tradeData && tradeData.mid>0){
         const strike_ = parseFloat(tradeData.primaryStrike||0)
