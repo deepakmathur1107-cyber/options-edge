@@ -1863,15 +1863,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
     }
   },[tradierToken,tradierMode,watchlist,minScore,tgToken,tgChatId,scanOneTicker])
 
-  // Loads pre-scanned results from the cron-populated cache instantly,
-  // instead of running scanOneTicker live one ticker at a time.
-  const [loadingCache, setLoadingCache] = useState(false)
-  const loadCachedAlerts = async () => {
-    setLoadingCache(true)
+  // Reads pre-scanned results directly — the cron keeps scan_results fresh
+  // on its own schedule, so this is a single fast Supabase read, never a live
+  // per-ticker loop. Falls back to the old live scan only if the read fails.
+  const loadOrRefreshAlerts = async () => {
+    const tfNow = scanTFRef.current
     try {
-      const res = await fetch(`/api/scan-cache?tf=${encodeURIComponent(scanTF)}&minScore=${minScore}`)
+      const res = await fetch(`/api/scan-cache?tf=${encodeURIComponent(tfNow)}&minScore=${minScore}`)
       const data = await res.json()
-      const rows = data?.results || []
+      if (!data?.cached) throw new Error(data?.reason||'lookup unavailable')
+      const rows = data.results || []
       setAlertHistory(rows.map(row => ({
         ticker: row.ticker, tradeType: row.trade_type, score: row.score,
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
@@ -1881,11 +1882,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         breakeven: row.breakeven, breakevenPct: row.breakeven_pct,
         breakevenIsPut: (row.trade_type||'').toLowerCase().includes('put'),
         reasons: row.reasons||[], warnings: row.warnings||[], hardBlocks: row.hard_blocks||[],
-        tfLabel: scanTF, alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
+        tfLabel: TF_CONFIG[tfNow]?.label||tfNow, alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
         grade: row.grade,
       })))
-    } catch (e) { console.error('loadCachedAlerts failed:', e.message) }
-    setLoadingCache(false)
+      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScore}%+ threshold`,...p.slice(0,99)])
+    } catch (e) {
+      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
+      runAutoScan()
+    }
   }
 
   const toggleAuto=()=>{
@@ -1905,8 +1909,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         `[${new Date().toLocaleTimeString()}] ▶ Started · ${tfCfgNow.badge} ${tfCfgNow.label}`,
         `[${new Date().toLocaleTimeString()}] DTE window: ${tfNow} · every ${scanFreq} min · ${minScore}%+ threshold`,
       ])
-      runAutoScan()
-      autoRef.current=setInterval(runAutoScan,scanFreq*60*1000)
+      loadOrRefreshAlerts()
+      autoRef.current=setInterval(loadOrRefreshAlerts,scanFreq*60*1000)
     }
   }
   useEffect(()=>()=>clearInterval(autoRef.current),[])
@@ -2461,15 +2465,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                           <span style={{fontSize:12}}>{scanResult.tfBadge}</span>
                           <span style={{fontSize:11,color:scanResult.tfColor,letterSpacing:1}}>{scanResult.tfLabel}</span>
                         </div>
-                        {scanResult.fromCache ? (
-                          <span style={{fontSize:10,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:3,padding:'2px 6px',letterSpacing:0.5}}>
-                            ⚡ Cached · {Math.max(0,Math.round((Date.now()-new Date(scanResult.cachedAt).getTime())/60000))}m ago
-                          </span>
-                        ) : (
-                          <span style={{fontSize:10,color:C.green,background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:3,padding:'2px 6px',letterSpacing:0.5}}>
-                            🔴 Live
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -2758,19 +2753,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     Every {scanFreq} min · {minScore}%+ conviction · {watchlist?watchlist.split(',').map(t=>t.trim()).filter(Boolean).join(', '):'Full S&P 500'}
                   </div>
                 </div>
-                <div style={{display:'flex',gap:8}}>
-                  <button className="hv" onClick={loadCachedAlerts} disabled={loadingCache} style={{
-                    background: C.blue, border:'none', color:'#000',
-                    fontWeight:700, padding:'8px 14px', borderRadius:4, fontSize:12,
-                    letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
-                    opacity:loadingCache?0.6:1,
-                  }}>{loadingCache?'…':'⚡ LOAD CACHED'}</button>
-                  <button className="hv" onClick={toggleAuto} style={{
-                    background: autoOn ? C.red : C.green, border:'none', color:'#000',
-                    fontWeight:700, padding:'8px 18px', borderRadius:4, fontSize:12,
-                    letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
-                  }}>{autoOn?'⏹ STOP':'▶ START'}</button>
-                </div>
+                <button className="hv" onClick={toggleAuto} style={{
+                  background: autoOn ? C.red : C.green, border:'none', color:'#000',
+                  fontWeight:700, padding:'8px 18px', borderRadius:4, fontSize:12,
+                  letterSpacing:1, cursor:'pointer', fontFamily:"'Bebas Neue',sans-serif",
+                }}>{autoOn?'⏹ STOP':'▶ START'}</button>
               </div>
 
               {/* Watchlist + Frequency */}

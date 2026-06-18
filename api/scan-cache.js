@@ -47,6 +47,9 @@ module.exports = async function handler(req, res) {
     }
 
     // List mode — all fresh rows above threshold, freshest/highest first.
+    // Single indexed query, no live scanning — the cron already refreshes
+    // this table every 15-60 min on its own schedule, so this is always
+    // at most one cycle stale and responds in well under a second.
     const threshold = parseInt(minScore || '60', 10)
     const { data, error } = await client
       .from('scan_results')
