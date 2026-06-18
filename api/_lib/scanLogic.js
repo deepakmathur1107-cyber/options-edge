@@ -58,7 +58,11 @@ const findLeg = (arr, tgt) =>
 
 const approxGEX = (o, price) => {
   const oi    = parseFloat(o.open_interest||0);
-  const iv    = parseFloat(o.greeks?.mid_iv||o.implied_volatility||0.3);
+  // Same 'NaN'-string-is-truthy trap as buildNakedResult's iv field — validate
+  // explicitly rather than relying on || to catch a non-numeric Tradier value.
+  const ivRaw = parseFloat(o.greeks?.mid_iv);
+  const ivRaw2 = parseFloat(o.implied_volatility);
+  const iv    = (!isNaN(ivRaw)&&ivRaw>0) ? ivRaw : (!isNaN(ivRaw2)&&ivRaw2>0) ? ivRaw2 : 0.3;
   const delta = Math.abs(parseFloat(o.greeks?.delta||0.5));
   if (!oi || iv===0) return 0;
   const gammaPx = delta*(1-delta) / (price * iv * Math.sqrt(30/365));
@@ -135,7 +139,11 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
     stop:          `$${f2(m*(1-tfCfg.stopLoss))}  (−${(tfCfg.stopLoss*100).toFixed(0)}%)`,
     structureType: optType==='call' ? 'Long Call' : 'Long Put',
     legs:          null,
-    iv:            best.greeks?.mid_iv||best.implied_volatility||0,
+    // Tradier occasionally returns mid_iv as the literal string 'NaN' when its
+    // IV solver fails to converge (common pre-market with stale/wide/zero bid-ask).
+    // A non-empty string is truthy in JS, so '||0' alone doesn't catch it — must
+    // explicitly validate the parsed number isn't NaN before trusting it.
+    iv:            (()=>{ const v=parseFloat(best.greeks?.mid_iv); if(!isNaN(v)&&v>0) return v; const v2=parseFloat(best.implied_volatility); return (!isNaN(v2)&&v2>0) ? v2 : 0 })(),
     delta:         best.greeks?.delta||null,
     theta:         best.greeks?.theta||null,
     volume:        best.volume||0,

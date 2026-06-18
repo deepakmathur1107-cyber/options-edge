@@ -111,7 +111,12 @@ const findLeg = (arr, tgt) =>
 // ranking across strikes is what matters, not the absolute value.
 const approxGEX = (o, price) => {
   const oi    = parseFloat(o.open_interest||0)
-  const iv    = parseFloat(o.greeks?.mid_iv||o.implied_volatility||0.3)
+  // Tradier occasionally returns mid_iv as the literal string 'NaN' when its IV
+  // solver fails to converge (stale/wide/zero bid-ask, common pre-market). A
+  // non-empty string is truthy, so '||0.3' alone won't catch it — validate explicitly.
+  const ivRaw  = parseFloat(o.greeks?.mid_iv)
+  const ivRaw2 = parseFloat(o.implied_volatility)
+  const iv     = (!isNaN(ivRaw)&&ivRaw>0) ? ivRaw : (!isNaN(ivRaw2)&&ivRaw2>0) ? ivRaw2 : 0.3
   const delta = Math.abs(parseFloat(o.greeks?.delta||0.5))
   if (!oi || iv===0) return 0
   // gamma proxy: bell-shaped, peaks at delta=0.5
@@ -233,7 +238,7 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
     stop:          `$${f2(m*(1-tfCfg.stopLoss))}  (−${(tfCfg.stopLoss*100).toFixed(0)}%)`,
     structureType: optType==='call' ? 'Long Call' : 'Long Put',
     legs:          null,
-    iv:            best.greeks?.mid_iv||best.implied_volatility||0,
+    iv:            (()=>{ const v=parseFloat(best.greeks?.mid_iv); if(!isNaN(v)&&v>0) return v; const v2=parseFloat(best.implied_volatility); return (!isNaN(v2)&&v2>0) ? v2 : 0 })(),
     delta:         best.greeks?.delta||null,
     theta:         best.greeks?.theta||null,
     volume:        best.volume||0,
@@ -2070,7 +2075,8 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             const best = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
             const bid=parseFloat(best.bid||0), ask=parseFloat(best.ask||0), mid=(bid+ask)/2
             if (mid===0) continue
-            const iv=best.greeks?.mid_iv||0, delta=best.greeks?.delta||null
+            const ivRaw3=parseFloat(best.greeks?.mid_iv)
+            const iv=(!isNaN(ivRaw3)&&ivRaw3>0)?ivRaw3:0, delta=best.greeks?.delta||null
 
             // Score — generous for indices (predictable trend vehicles)
             const vol=quote.volume||0, avg=quote.average_volume||vol
