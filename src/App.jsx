@@ -1740,6 +1740,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         grade:score>=80?'A':score>=65?'B':'C',
         chgPct:chgPct.toFixed(2)+'%',
         reasons,warnings,
+        hardBlocks: hardBlocks2,   // was missing entirely — TG alerts, paper-trade journal, and
+                                   // the SKIP-THIS-TRADE UI all read r.hardBlocks and silently
+                                   // got nothing for every auto-scanner result, regardless of
+                                   // whether a hard block actually capped the score.
         dte:          dte2,
         breakeven:    breakeven2,
         breakevenPct: breakevenPct2,
@@ -1795,7 +1799,10 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             else if (earnDays>7&&earnDays<=21){ enrichedWarnings.push(`Earnings in ${earnDays}d — factor into DTE`) }
           }
           if (fundData.market_cap && fundData.market_cap>100_000_000_000){ enrichedReasons.push(`Large-cap (${fundData.sector||'—'})`); enrichedScore=Math.min(95,enrichedScore+3) }
-          rEnriched = { ...r, score:Math.min(95,Math.max(20,enrichedScore)), warnings:enrichedWarnings, reasons:enrichedReasons,
+          // Hard blocks (e.g. chasing, high IV) cap conviction regardless of fundamentals —
+          // never let the enrichment step lift a score back above that ceiling.
+          const cappedScore = (r.hardBlocks?.length>0) ? Math.min(enrichedScore,48) : enrichedScore
+          rEnriched = { ...r, score:Math.min(95,Math.max(20,cappedScore)), warnings:enrichedWarnings, reasons:enrichedReasons,
             sector:fundData.sector||null, industry:fundData.industry||null, marketCap:fundData.market_cap||null, earningsDate:fundData.earnings_date||null }
         }
 
@@ -2777,6 +2784,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                               ))}
                             </div>
                             {al.tfLabel&&<div style={{fontSize:11,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
+                            {al.hardBlocks?.length>0&&(
+                              <div style={{marginBottom:10}}>
+                                {al.hardBlocks.map((b,bi)=>(
+                                  <div key={bi} style={{background:C.bgDeep,border:`1px solid ${C.red}60`,borderRadius:5,padding:'8px 12px',marginBottom:5,display:'flex',gap:8,alignItems:'flex-start'}}>
+                                    <span style={{fontSize:13,flexShrink:0}}>🚫</span>
+                                    <div>
+                                      <div style={{fontSize:10,color:C.red,letterSpacing:1.5,marginBottom:2}}>SKIP THIS TRADE</div>
+                                      <div style={{fontSize:11,color:C.red,lineHeight:1.5}}>{b}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                               <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
                                 background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
