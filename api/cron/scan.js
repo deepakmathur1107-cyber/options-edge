@@ -88,6 +88,8 @@ module.exports = async function handler(req, res) {
 
   const startedAt = Date.now()
   const MAX_MS = 280_000   // leave 20s headroom under the 300s Pro maxDuration
+  const MIN_WRITE_SCORE = 60   // only persist results worth surfacing — raise this
+                               // (e.g. to 65 or 70) if the table still feels noisy
 
   // Market regime — fetched once per run, shared across all tickers (mirrors
   // esBar/nqBar in the frontend, which are also fetched once and reused).
@@ -117,16 +119,19 @@ module.exports = async function handler(req, res) {
       scanned++
       if (!r) return null
 
+      // Below-threshold results are intentionally NOT written to scan_results —
+      // a previous version wrote every scored ticker regardless, which silently
+      // filled the table with ~70% C-grade noise (avg score 47) because this
+      // gate only wrapped the fundamentals fetch, not the write itself.
+      if (r.score < MIN_WRITE_SCORE) return null
+
       // Fundamentals only fetched for tickers worth showing — same rationale
       // as the earlier client-side fix: don't spend API budget on misses.
-      let fund = null
-      if (r.score >= 60) {
-        fund = await getFundamentals(ticker).catch(() => null)
-        if (fund) {
-          // Re-run with fundamentals to apply the large-cap/earnings adjustments
-          const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg })
-          if (r2) Object.assign(r, r2)
-        }
+      const fund = await getFundamentals(ticker).catch(() => null)
+      if (fund) {
+        // Re-run with fundamentals to apply the large-cap/earnings adjustments
+        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg })
+        if (r2) Object.assign(r, r2)
       }
 
       const scannedAt = new Date()
