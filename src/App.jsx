@@ -1048,6 +1048,10 @@ useEffect(() => {
             reasons: row.reasons||[], warnings: row.warnings||[], hardBlocks: row.hard_blocks||[],
             dte: row.dte,
             breakeven: row.breakeven, breakevenPct: row.breakeven_pct,
+            // Was missing entirely on the cache-hit path — the MOVE REQUIRED
+            // card always rendered "(UP) +X%" regardless of direction, since
+            // this field didn't exist yet when the cache-check code was written.
+            breakevenIsPut: (row.trade_type||'').toLowerCase().includes('put'),
             sector: row.sector, industry: row.industry, marketCap: row.market_cap,
             earningsDate: row.earnings_date,
             fromCache: true, cachedAt: row.scanned_at,
