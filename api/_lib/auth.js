@@ -18,12 +18,15 @@
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 
-// FIX: your actual Clerk instance issuer — confirmed from Clerk Dashboard →
-// Configure → API keys. Update this if you ever move to a custom Clerk domain.
-const CLERK_ISSUER = process.env.CLERK_ISSUER || 'https://relaxed-sloth-98.clerk.accounts.dev'
+// FIX: your actual Clerk instance issuer — confirmed directly from a decoded
+// production JWT (not the dashboard label, which showed the underlying
+// .accounts.dev instance domain rather than the custom domain actually
+// stamped into live tokens).
+const CLERK_ISSUER = process.env.CLERK_ISSUER || 'https://clerk.optionsedgeflow.com'
 
-// FIX: expected production origin, for the soft azp check.
-const EXPECTED_AZP = process.env.PUBLIC_APP_ORIGIN || 'https://optionsedgeflow.com'
+// FIX: expected production origin, for the soft azp check. Confirmed from a
+// live token that azp is the www subdomain.
+const EXPECTED_AZP = process.env.PUBLIC_APP_ORIGIN || 'https://www.optionsedgeflow.com'
 
 function base64urlDecode(str) {
   const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
