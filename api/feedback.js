@@ -8,6 +8,7 @@
  */
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
+const { rateLimit, clientIp } = require('./_lib/rateLimit')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -15,7 +16,12 @@ const supabase = createClient(
 )
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  // FIX: was '*'. Note: POST below intentionally allows anonymous (no Clerk
+  // token) submissions as a product decision — that's unrelated to CORS.
+  // This endpoint is still only ever called from this app's own frontend
+  // (relative /api/feedback path), so locking the origin doesn't affect
+  // anonymous-but-same-origin feedback submissions at all.
+  res.setHeader('Access-Control-Allow-Origin',  'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
@@ -24,6 +30,16 @@ module.exports = async function handler(req, res) {
   if (req.method === 'POST') {
     // Auth optional — allow anonymous but prefer authenticated
     const { clerkId } = await getAuth(req).catch(() => ({ clerkId: null }))
+
+    // FIX: basic abuse guard — this insert has no auth requirement, so
+    // without a limit a single client could spam the feedback table
+    // indefinitely. 5 submissions per 10 minutes is generous for a real
+    // person, restrictive for a script.
+    const rlKey = clerkId || `ip:${clientIp(req)}`
+    const { allowed } = await rateLimit(`feedback:${rlKey}`, 5, 600)
+    if (!allowed) {
+      return res.status(429).json({ error: 'Too many submissions — please wait a few minutes and try again.' })
+    }
 
     let body = req.body
     if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }

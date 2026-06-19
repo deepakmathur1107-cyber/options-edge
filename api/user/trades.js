@@ -12,6 +12,7 @@
 
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('../_lib/auth')
+const { rateLimit } = require('../_lib/rateLimit')
 
 async function hasActiveSub(clerkId, supabase) {
   if (ADMIN_IDS.includes(clerkId)) return true
@@ -37,7 +38,7 @@ function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
 
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
-  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
   if (req.method === 'OPTIONS') return res.status(200).end()
@@ -61,6 +62,16 @@ module.exports = async function handler(req, res) {
         error: 'Your subscription has expired or was canceled. Please renew to continue using the trade journal.',
         code: 'SUBSCRIPTION_EXPIRED',
       })
+    }
+  }
+
+  // FIX: basic abuse guard on writes only (GET reads are unthrottled).
+  // 30/min is generous for a real trader logging entries/exits, restrictive
+  // for a runaway script or retry loop.
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+    const { allowed } = await rateLimit(`trades:${clerkId}`, 30, 60)
+    if (!allowed) {
+      return res.status(429).json({ error: 'Too many requests — please slow down.' })
     }
   }
 

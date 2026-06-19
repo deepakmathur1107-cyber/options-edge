@@ -40,7 +40,7 @@ async function hasActiveSub(clerkId, supabase) {
 module.exports = async function handler(req, res) {
   // FIX: was '*' — this endpoint serves paid-tier data and must not be
   // readable from arbitrary origins.
-  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()

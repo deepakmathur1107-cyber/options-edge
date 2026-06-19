@@ -5,7 +5,7 @@
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-cron-secret, Authorization')
   if (req.method === 'OPTIONS') { res.status(200).end(); return }

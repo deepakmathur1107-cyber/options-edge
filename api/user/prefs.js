@@ -12,6 +12,7 @@
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 const { encryptSecret } = require('../_lib/secretCrypto')
+const { rateLimit } = require('../_lib/rateLimit')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -19,7 +20,7 @@ const supabase = createClient(
 )
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
@@ -32,6 +33,12 @@ module.exports = async function handler(req, res) {
   if (req.query.action === 'feedback') {
 
     if (req.method === 'POST') {
+      // FIX: same abuse guard as api/feedback.js, since this writes to the
+      // same table via a second code path.
+      const { allowed } = await rateLimit(`feedback:${clerkId}`, 5, 600)
+      if (!allowed) {
+        return res.status(429).json({ error: 'Too many submissions — please wait a few minutes and try again.' })
+      }
       let body = req.body
       if (typeof body === 'string') { try { body = JSON.parse(body) } catch { body = {} } }
       body = body || {}
@@ -95,6 +102,13 @@ module.exports = async function handler(req, res) {
 
   // ── POST ─────────────────────────────────────────────────────────────────
   if (req.method === 'POST') {
+    // FIX: basic abuse guard. 20/min is generous for a person actively
+    // adjusting settings, restrictive for a runaway script/retry loop.
+    const { allowed } = await rateLimit(`prefs:${clerkId}`, 20, 60)
+    if (!allowed) {
+      return res.status(429).json({ error: 'Too many requests — please slow down.' })
+    }
+
     const body = req.body || {}
 
     // Only active subscribers (or admins) can enable alert delivery

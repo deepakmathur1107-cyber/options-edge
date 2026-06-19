@@ -8,7 +8,7 @@ const supabase = createClient(
 
 module.exports = async (req, res) => {
   // FIX: was '*' — admin/revenue data must never be readable cross-origin.
-  res.setHeader('Access-Control-Allow-Origin', 'https://optionsedgeflow.com');
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();

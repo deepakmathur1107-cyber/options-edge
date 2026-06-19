@@ -143,7 +143,11 @@ function sameDay(isoA, isoB) {
 
 // ── Handler ──────────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  // FIX: was '*' — nothing in this app calls brief.js cross-origin (it's only
+  // ever fetched as a relative /api/brief path from this app's own frontend,
+  // confirmed: no iframe/embed usage anywhere). Locking this down is pure
+  // defense-in-depth with no functional change for legitimate traffic.
+  res.setHeader('Access-Control-Allow-Origin',  'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-cron-secret')
   if (req.method === 'OPTIONS') return res.status(204).end()

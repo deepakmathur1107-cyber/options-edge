@@ -120,7 +120,7 @@ async function getPlan(clerkId) {
 
 // ─── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
+  res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tradier-token, x-tradier-mode')
   if (req.method === 'OPTIONS') return res.status(200).end()
