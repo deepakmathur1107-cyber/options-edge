@@ -153,7 +153,22 @@ module.exports = async function handler(req, res) {
       // accidentally overwrite/clear the stored token with undefined).
       if (body.tg_token !== undefined) {
         const raw = (body.tg_token || '').trim()
-        payload.tg_token = raw ? encryptSecret(raw) : null
+        if (raw) {
+          try {
+            payload.tg_token = encryptSecret(raw)
+          } catch (e) {
+            // FIX: previously an uncaught throw here (e.g. missing
+            // SECRET_ENCRYPTION_KEY) produced a bare 500 with no useful
+            // message. Surface the real cause instead.
+            console.error('[prefs] encryptSecret failed:', e.message)
+            return res.status(500).json({
+              error: 'Server is not configured to store this securely (SECRET_ENCRYPTION_KEY missing or invalid). Contact admin.',
+              detail: e.message,
+            })
+          }
+        } else {
+          payload.tg_token = null
+        }
       }
       if (body.tg_chat_id !== undefined) payload.tg_chat_id = (body.tg_chat_id || '').trim() || null
     }
