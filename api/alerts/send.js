@@ -8,6 +8,7 @@
  */
 
 const { createClient } = require('@supabase/supabase-js')
+const { decryptSecret } = require('../_lib/secretCrypto')
 
 const TRADIER_BASE  = 'https://api.tradier.com/v1'
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN
@@ -348,7 +349,11 @@ module.exports = async function handler(req, res) {
       let notified = false
       if (user.email_alerts && user.alert_email) { const ok = await sendEmail(user.alert_email, subject, buildEmailHtml(userAlerts, marketCtx)); if (ok) { notified = true; console.log(`Email → ${user.alert_email}`) } }
       if (user.sms_on && user.phone_number)       { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx)); if (ok) notified = true }
-      if (user.tg_token && user.tg_chat_id)       { const ok = await sendTg(user.tg_token, user.tg_chat_id, buildTgText(userAlerts, marketCtx)); if (ok) notified = true }
+      if (user.tg_token && user.tg_chat_id) {
+        // FIX: tg_token is now stored encrypted — decrypt before use.
+        const tgToken = decryptSecret(user.tg_token)
+        if (tgToken) { const ok = await sendTg(tgToken, user.tg_chat_id, buildTgText(userAlerts, marketCtx)); if (ok) notified = true }
+      }
       if (notified) sent++
     }
 

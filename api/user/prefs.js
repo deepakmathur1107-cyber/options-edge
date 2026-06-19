@@ -11,6 +11,7 @@
 
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('../_lib/auth')
+const { encryptSecret } = require('../_lib/secretCrypto')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -83,7 +84,10 @@ module.exports = async function handler(req, res) {
         symbols:        symbolsArr,
         sms_alerts:     row.sms_on         ?? false,
         phone_number:   row.phone_number   ?? '',
-        tg_token:       row.tg_token       ?? null,
+        // FIX: tg_token is a live credential — never return its plaintext
+        // value once saved. The UI only needs to know whether one is set,
+        // same convention as never re-displaying a saved API key.
+        tg_token_set:   !!row.tg_token,
         tg_chat_id:     row.tg_chat_id     ?? null,
       },
     })
@@ -128,7 +132,15 @@ module.exports = async function handler(req, res) {
     }
     // Admin-only: save Telegram credentials
     if (ADMIN_IDS.includes(clerkId)) {
-      if (body.tg_token   !== undefined) payload.tg_token   = (body.tg_token   || '').trim() || null
+      // FIX: encrypt the bot token at rest — previously stored in plaintext.
+      // Only touch the column if the caller actually sent a new value
+      // (frontend sends tg_token_set, not tg_token, once it's already
+      // configured — see GET above — so an unrelated prefs save won't
+      // accidentally overwrite/clear the stored token with undefined).
+      if (body.tg_token !== undefined) {
+        const raw = (body.tg_token || '').trim()
+        payload.tg_token = raw ? encryptSecret(raw) : null
+      }
       if (body.tg_chat_id !== undefined) payload.tg_chat_id = (body.tg_chat_id || '').trim() || null
     }
 

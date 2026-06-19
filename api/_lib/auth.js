@@ -1,13 +1,60 @@
 // api/_lib/auth.js
 // Shared auth helper used by all API functions.
 // Returns { clerkId, isAdmin, plan, allowed }
+//
+// FIXES applied:
+// 1. Issuer (`iss`) claim is now validated against your actual Clerk
+//    instance — previously any correctly-signed JWT from ANY Clerk
+//    instance anywhere would pass, not just yours. This matters because
+//    signature verification alone only proves "Clerk signed this token
+//    for some app" — iss proves it was signed for *this* app.
+// 2. `azp` (authorized party) is checked as a soft signal — logged if it
+//    doesn't match your production origin, but not hard-rejected, since
+//    Clerk doesn't guarantee azp is present in every valid token shape.
+// 3. JWKS is now cached in-memory for 10 minutes instead of being fetched
+//    fresh from Clerk on every single authenticated request — this was an
+//    unnecessary external network round-trip (and a hard dependency on
+//    Clerk's JWKS endpoint being up/fast) on every API call.
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+
+// FIX: your actual Clerk instance issuer — confirmed from Clerk Dashboard →
+// Configure → API keys. Update this if you ever move to a custom Clerk domain.
+const CLERK_ISSUER = process.env.CLERK_ISSUER || 'https://relaxed-sloth-98.clerk.accounts.dev'
+
+// FIX: expected production origin, for the soft azp check.
+const EXPECTED_AZP = process.env.PUBLIC_APP_ORIGIN || 'https://optionsedgeflow.com'
 
 function base64urlDecode(str) {
   const b64 = str.replace(/-/g, '+').replace(/_/g, '/')
   const pad  = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : ''
   return Buffer.from(b64 + pad, 'base64')
+}
+
+// FIX: in-memory JWKS cache — module-scope, survives across warm invocations
+// on the same Vercel function instance. 10 minute TTL balances "pick up key
+// rotation reasonably fast" against "don't hit Clerk on every request."
+let _jwksCache = { keys: null, fetchedAt: 0 }
+const JWKS_TTL_MS = 10 * 60 * 1000
+
+async function getJWKS(clerkKey) {
+  const now = Date.now()
+  if (_jwksCache.keys && (now - _jwksCache.fetchedAt) < JWKS_TTL_MS) {
+    return _jwksCache.keys
+  }
+  const jwksRes = await fetch('https://api.clerk.com/v1/jwks', {
+    headers: { Authorization: 'Bearer ' + clerkKey }
+  })
+  if (!jwksRes.ok) {
+    // Serve stale cache rather than fail outright, if we have one — better
+    // to keep auth working through a transient Clerk hiccup than hard-fail
+    // every request in the building.
+    if (_jwksCache.keys) return _jwksCache.keys
+    throw new Error('JWKS fetch failed: ' + jwksRes.status)
+  }
+  const jwks = await jwksRes.json()
+  _jwksCache = { keys: jwks, fetchedAt: now }
+  return jwks
 }
 
 async function verifyClerkJWT(token) {
@@ -16,14 +63,25 @@ async function verifyClerkJWT(token) {
   const header  = JSON.parse(base64urlDecode(parts[0]).toString('utf8'))
   const payload = JSON.parse(base64urlDecode(parts[1]).toString('utf8'))
   if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired')
+
+  // FIX: reject tokens not issued by our own Clerk instance. Signature
+  // verification alone doesn't prove this — a validly-signed token from a
+  // different Clerk application would otherwise also pass.
+  if (payload.iss !== CLERK_ISSUER) {
+    throw new Error('Invalid issuer')
+  }
+
+  // FIX: soft check only — log a mismatch instead of rejecting, since not
+  // every valid Clerk token is guaranteed to carry azp (e.g. some non-browser
+  // contexts). This gives visibility without risking a false-positive lockout.
+  if (payload.azp && payload.azp !== EXPECTED_AZP) {
+    console.warn('[auth] unexpected azp on otherwise-valid token:', payload.azp)
+  }
+
   const clerkKey = process.env.CLERK_SECRET_KEY
   if (!clerkKey) throw new Error('CLERK_SECRET_KEY not set')
-  const jwksRes = await fetch('https://api.clerk.com/v1/jwks', {
-    headers: { Authorization: 'Bearer ' + clerkKey }
-  })
-  if (!jwksRes.ok) throw new Error('JWKS fetch failed: ' + jwksRes.status)
-  const jwks   = await jwksRes.json()
-  const jwkKey = jwks.keys?.find(k => k.kid === header.kid)
+  const jwks    = await getJWKS(clerkKey)
+  const jwkKey  = jwks.keys?.find(k => k.kid === header.kid)
   if (!jwkKey) throw new Error('No matching JWKS key')
   const crypto = require('crypto')
   const keyObj = crypto.createPublicKey({ key: jwkKey, format: 'jwk' })
