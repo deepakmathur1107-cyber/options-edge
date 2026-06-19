@@ -1,6 +1,18 @@
 // api/tradier.js
 // Fixed: cache returns correct data shape
 // Fixed: no-token requests use server TRADIER_TOKEN directly (no user auth needed for market data)
+//
+// SECURITY FIXES applied:
+// 1. tradierPath is now validated against an allowlist of known-safe Tradier
+//    endpoints (the only ones the frontend actually calls) instead of being
+//    forwarded verbatim — previously this was an open proxy to the entire
+//    Tradier API surface.
+// 2. Responses fetched using a caller-supplied x-tradier-token are never
+//    written to the shared Redis cache — previously a custom/legacy token's
+//    response could get cached and served to other users as if it were the
+//    canonical server-token result.
+// 3. ?test=1 and ?force=1 diagnostic modes now require admin, not just any
+//    authenticated user.
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
 const TRADIER_TOKEN = process.env.TRADIER_TOKEN  || ''
@@ -11,6 +23,23 @@ const TRADIER_BASE  = TRADIER_MODE === 'sandbox'
 const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const FREE_LIMIT  = 4
+
+// FIX: allowlist of Tradier endpoints this proxy is permitted to forward to.
+// Matches the only three paths the frontend actually calls (markets/quotes,
+// markets/options/expirations, markets/options/chains). Anything else is
+// rejected before we ever build the upstream URL.
+const ALLOWED_PATH_PATTERNS = [
+  /^\/markets\/quotes$/,
+  /^\/markets\/options\/expirations$/,
+  /^\/markets\/options\/chains$/,
+]
+
+function isAllowedPath(path) {
+  // path is the pathname only — query string is parsed separately by
+  // URLSearchParams below, so this check can't be bypassed with "?"-smuggling.
+  const pathnameOnly = path.split('?')[0]
+  return ALLOWED_PATH_PATTERNS.some(re => re.test(pathnameOnly))
+}
 
 // ─── Redis helpers ─────────────────────────────────────────────────────────────
 async function cacheGet(key) {
@@ -106,7 +135,18 @@ module.exports = async function handler(req, res) {
     if (!ticker || !/^[A-Z]{1,5}$/.test(ticker)) {
       return res.status(400).json({ error: 'Invalid ticker' })
     }
-    const isTest = req.query.test === '1'
+
+    // FIX: ?test=1 and ?force=1 leak internal cache state / raw upstream
+    // payloads and can bust the shared cache — previously gated only by
+    // "any logged-in user". Now admin-only.
+    const ADMIN_IDS_F = LIB_ADMIN_IDS || (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
+    const isAdminF = ADMIN_IDS_F.includes(fClerkId)
+    const isTest  = req.query.test  === '1' && isAdminF
+    const isForce = req.query.force === '1' && isAdminF
+    if ((req.query.test === '1' || req.query.force === '1') && !isAdminF) {
+      return res.status(403).json({ error: 'Admin only' })
+    }
+
     try {
       if (isTest) {
         // Diagnostic mode — bypass Redis/Supabase cache, call api-ninjas directly
@@ -165,7 +205,7 @@ module.exports = async function handler(req, res) {
       }
 
       // ?force=1 busts ALL cache layers (Redis + Supabase) then re-fetches fresh
-      if (req.query.force === '1') {
+      if (isForce) {
         // 1. Clear Redis
         const RURL = process.env.UPSTASH_REDIS_REST_URL
         const RTOK = process.env.UPSTASH_REDIS_REST_TOKEN
@@ -197,9 +237,23 @@ module.exports = async function handler(req, res) {
   const tradierPath = req.query.path
   if (!tradierPath) return res.status(400).json({ error: 'Missing ?path= param' })
 
+  // FIX: reject any path not on the allowlist before doing anything else —
+  // previously this was forwarded verbatim to Tradier, making this endpoint
+  // an open proxy to the entire Tradier API surface using your credential.
+  if (!isAllowedPath(tradierPath)) {
+    return res.status(400).json({ error: 'Path not permitted' })
+  }
+
   // ── Token resolution ────────────────────────────────────────────────────────
-  const legacyToken = req.headers['x-tradier-token'] || ''
-  const activeToken = legacyToken || TRADIER_TOKEN
+  // Legacy header lets a caller supply their own Tradier token (used for the
+  // sandbox-testing "Phase 1" flow). This is intentionally still supported,
+  // but see the cache-isolation fix below — custom-token responses must
+  // never be written to the shared cache.
+  const legacyToken  = req.headers['x-tradier-token'] || ''
+  const usingOwnToken = !!legacyToken
+  const activeToken  = legacyToken || TRADIER_TOKEN
+  const requestMode  = usingOwnToken ? ((req.headers['x-tradier-mode'] || 'sandbox') === 'sandbox' ? 'sandbox' : 'production') : TRADIER_MODE
+  const requestBase  = requestMode === 'sandbox' ? 'https://sandbox.tradier.com/v1' : 'https://api.tradier.com/v1'
   if (!activeToken) {
     return res.status(500).json({ error: 'No Tradier token configured. Set TRADIER_TOKEN in Vercel env vars.' })
   }
@@ -230,13 +284,18 @@ module.exports = async function handler(req, res) {
   const qs    = new URLSearchParams(req.query)
   qs.delete('path')
   const qsStr = qs.toString()
-  const url   = `${TRADIER_BASE}${tradierPath}${qsStr ? '?' + qsStr : ''}`
+  const url   = `${requestBase}${tradierPath}${qsStr ? '?' + qsStr : ''}`
 
-  // ── Cache check (skip for admin — always fresh) ─────────────────────────────
-  const cKey = ('tr:'+TRADIER_MODE+':'+tradierPath+(qsStr?'?'+qsStr:''))
+  // ── Cache check ──────────────────────────────────────────────────────────────
+  // FIX: cache key now includes whether a custom token was used, and custom-
+  // token requests are never read from or written to the shared cache —
+  // previously a caller-supplied token's response could be cached and served
+  // to other users as if it were the canonical server-token result.
+  const skipSharedCache = isAdmin || usingOwnToken
+  const cKey = ('tr:'+requestMode+':'+tradierPath+(qsStr?'?'+qsStr:''))
     .replace(/[^\w:._%-]/g,'_').slice(0,200)
 
-  if (!isAdmin) {
+  if (!skipSharedCache) {
     const cached = await cacheGet(cKey)
     if (cached) {
       res.setHeader('X-Cache', 'HIT')
@@ -258,7 +317,7 @@ module.exports = async function handler(req, res) {
     catch { return res.status(502).json({ error: 'Non-JSON from Tradier', raw: text.slice(0,200) }) }
 
     if (upstream.ok) {
-      if (!isAdmin) await cacheSet(cKey, data, getTTL(tradierPath))
+      if (!skipSharedCache) await cacheSet(cKey, data, getTTL(tradierPath))
       res.setHeader('X-Cache', 'MISS')
     } else {
       console.error(`[tradier] ${upstream.status}:`, JSON.stringify(data).slice(0,200))

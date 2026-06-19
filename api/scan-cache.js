@@ -5,6 +5,13 @@
 //   → all fresh rows above threshold for that timeframe, score desc
 //     (used by the SCAN tab's "view today's alerts" list, fed by the cron
 //     instead of requiring a live in-browser auto-scan)
+//
+// FIX: this endpoint previously had zero authentication and CORS open to '*',
+// meaning anyone — no account, no subscription — could read the scored scan
+// results that are the actual paid product. Now requires a verified Clerk
+// session with an active/trialing subscription (or admin).
+
+const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 
 let _sb = null
 function sb() {
@@ -17,15 +24,44 @@ function sb() {
   return _sb
 }
 
+async function hasActiveSub(clerkId, supabase) {
+  if (ADMIN_IDS.includes(clerkId)) return true
+  try {
+    const { data } = await supabase
+      .from('subscriptions')
+      .select('status')
+      .eq('clerk_id', clerkId)
+      .maybeSingle()
+    const s = data?.status || 'inactive'
+    return s === 'active' || s === 'trialing'
+  } catch { return false }
+}
+
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin',  '*')
+  // FIX: was '*' — this endpoint serves paid-tier data and must not be
+  // readable from arbitrary origins.
+  res.setHeader('Access-Control-Allow-Origin',  'https://optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
 
+  // FIX: was fully unauthenticated. Require a verified session + active plan.
+  const { clerkId, error: authErr } = await getAuth(req)
+  if (!clerkId) return res.status(401).json({ error: authErr || 'Unauthorized' })
+
   const client = sb()
   if (!client) return res.status(200).json({ cached: false, reason: 'cache_unavailable' })
+
+  if (!ADMIN_IDS.includes(clerkId)) {
+    const active = await hasActiveSub(clerkId, client)
+    if (!active) {
+      return res.status(402).json({
+        error: 'An active subscription is required to view scan results.',
+        code: 'SUBSCRIPTION_EXPIRED',
+      })
+    }
+  }
 
   const { ticker, tf, minScore } = req.query
   if (!tf) return res.status(400).json({ error: 'tf required' })

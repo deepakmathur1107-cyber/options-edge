@@ -1082,7 +1082,11 @@ useEffect(() => {
     if (!SPREAD_TYPES_CHECK.includes(scanType)) {
       try {
         dbg(`0. Checking cached scan results...`)
-        const cacheRes = await fetch(`/api/scan-cache?ticker=${ticker}&tf=${encodeURIComponent(scanTF)}`)
+        // FIX: scan-cache now requires auth (it serves the paid scan results) — send the token.
+        const cacheTok = await getAuthToken().catch(()=>null)
+        const cacheRes = await fetch(`/api/scan-cache?ticker=${ticker}&tf=${encodeURIComponent(scanTF)}`, {
+          headers: cacheTok ? { Authorization: `Bearer ${cacheTok}` } : {}
+        })
         const cacheData = await cacheRes.json()
         if (cacheData?.cached && cacheData.result) {
           const row = cacheData.result
@@ -1948,7 +1952,11 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   const loadOrRefreshAlerts = async () => {
     const tfNow = scanTFRef.current
     try {
-      const res = await fetch(`/api/scan-cache?tf=${encodeURIComponent(tfNow)}&minScore=${minScore}`)
+      // FIX: scan-cache now requires auth (it serves the paid scan results) — send the token.
+      const alertsTok = await getAuthToken().catch(()=>null)
+      const res = await fetch(`/api/scan-cache?tf=${encodeURIComponent(tfNow)}&minScore=${minScore}`, {
+        headers: alertsTok ? { Authorization: `Bearer ${alertsTok}` } : {}
+      })
       const data = await res.json()
       if (!data?.cached) throw new Error(data?.reason||'lookup unavailable')
       const rows = data.results || []
