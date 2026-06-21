@@ -41,7 +41,11 @@ export default function AppNav({
     padding: '7px 18px', borderRadius: 7,
     fontWeight: 700, fontSize: 12, letterSpacing: 0.4,
     background: active ? C.green : 'transparent',
-    color:      active ? '#000'  : C.dim,
+    // Deliberately a fixed dark value, not a theme token — this text sits on
+    // the green active-tab fill (C.green), which is roughly the same
+    // brightness in both themes. C.bg/C.text flip between near-white and
+    // near-black by design, which would break contrast here in light mode.
+    color:      active ? '#1c1916' : C.dim,
     border:     active ? 'none'  : `1px solid transparent`,
     boxShadow:  active ? `0 2px 10px ${C.green}55` : 'none',
   })
@@ -108,8 +112,8 @@ export default function AppNav({
           {/* Logo */}
           <div style={{ display:'flex', alignItems:'baseline', gap:6, marginRight:14, flexShrink:0 }}>
             <span style={{
-              fontFamily: "'Bebas Neue', sans-serif",
-              fontSize: 22, letterSpacing: 4,
+              fontFamily: "'Fraunces',serif",
+              fontSize: 22, letterSpacing:0.3,
               color: C.green, lineHeight: 1,
             }}>OPTIONS EDGE</span>
             <span style={{ fontSize: 8, color: C.dim, letterSpacing: 2 }}>v3.0</span>
@@ -144,7 +148,7 @@ export default function AppNav({
               {isAdmin && (
                 <button className="oe-navbtn oe-toptab"
                   onClick={() => setTab('admin')}
-                  style={{...topTab(tab === 'admin'), color: tab === 'admin' ? '#000' : '#00ff88', borderColor: '#00ff8840'}}>
+                  style={{...topTab(tab === 'admin'), color: tab === 'admin' ? '#1c1916' : C.green, borderColor: `${C.green}40`}}>
                   ★&nbsp;ADMIN
                 </button>
               )}

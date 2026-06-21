@@ -310,8 +310,8 @@ export default function TradeLog(props) {
         {/* ── Page header ── */}
         <div style={{marginBottom:28}}>
           <h1 style={{
-            fontFamily:"'Bebas Neue', sans-serif",
-            fontSize:36, letterSpacing:4, color:C.green,
+            fontFamily:"'Fraunces',serif",
+            fontSize:36, letterSpacing:0.3, color:C.green,
             margin:0, lineHeight:1,
           }}>TRADE LOG</h1>
           <p style={{
@@ -349,8 +349,8 @@ export default function TradeLog(props) {
                 textTransform:'uppercase',
               }}>{s.label}</div>
               <div style={{
-                fontFamily:"'Bebas Neue', sans-serif",
-                fontSize:30, color:s.color, letterSpacing:1, lineHeight:1,
+                fontFamily:"'Fraunces',serif",
+                fontSize:30, color:s.color, letterSpacing:0.3, lineHeight:1,
               }}>{s.value}</div>
             </div>
           ))}
@@ -639,7 +639,7 @@ export default function TradeLog(props) {
                         </span>
 
                         <span style={{
-                          fontFamily:"'Bebas Neue',sans-serif",
+                          fontFamily:"'Fraunces',serif",
                           fontSize:16, color:pnlColor, letterSpacing:0.5,
                         }}>
                           {pnl!==null
@@ -702,8 +702,8 @@ export default function TradeLog(props) {
                               <div style={{paddingBottom:6}}>
                                 <div style={{fontSize:11,color:C.dim,marginBottom:2,fontFamily:"'Inter',sans-serif"}}>EST. P&L</div>
                                 <div style={{
-                                  fontFamily:"'Bebas Neue',sans-serif",
-                                  fontSize:24, color:p>=0?C.green:C.red, letterSpacing:1,
+                                  fontFamily:"'Fraunces',serif",
+                                  fontSize:24, color:p>=0?C.green:C.red, letterSpacing:0.3,
                                 }}>
                                   {p>=0?'+':'-'}${Math.abs(p).toFixed(0)}
                                 </div>
@@ -764,7 +764,7 @@ export default function TradeLog(props) {
                     boxShadow:shadow,
                   }}>
                     <div style={{fontSize:10,color:C.dim,fontWeight:600,letterSpacing:0.5,marginBottom:6,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>{s.label}</div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:s.color,letterSpacing:0.5}}>{s.value}</div>
+                    <div style={{fontFamily:"'Fraunces',serif",fontSize:22,color:s.color,letterSpacing:0.5}}>{s.value}</div>
                   </div>
                 ))}
               </div>
@@ -801,7 +801,7 @@ export default function TradeLog(props) {
                   ].map((s,i) => (
                     <div key={i} style={statCard(s.color)}>
                       <div style={{fontSize:11,color:C.dim,fontWeight:600,letterSpacing:0.5,marginBottom:8,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>{s.label}</div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:s.color,letterSpacing:0.5}}>{s.value}</div>
+                      <div style={{fontFamily:"'Fraunces',serif",fontSize:24,color:s.color,letterSpacing:0.5}}>{s.value}</div>
                     </div>
                   ))}
                 </div>
@@ -836,7 +836,7 @@ export default function TradeLog(props) {
                           borderRadius:8, padding:'16px',
                         }}>
                           <div style={{fontSize:11,color:b.color,fontWeight:700,letterSpacing:0.5,marginBottom:10,fontFamily:"'Inter',sans-serif"}}>{b.icon} {b.label}</div>
-                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:b.color,marginBottom:4}}>{b.arr.length}</div>
+                          <div style={{fontFamily:"'Fraunces',serif",fontSize:32,color:b.color,marginBottom:4}}>{b.arr.length}</div>
                           <div style={{fontSize:12,color:C.dim,fontFamily:"'Inter',sans-serif",marginBottom:6}}>trades</div>
                           {wr(b.arr)!==null && <div style={{fontSize:13,color:b.color,fontWeight:600,fontFamily:"'Inter',sans-serif"}}>Win rate: {wr(b.arr)}%</div>}
                           <div style={{fontSize:12,color:C.dim,fontFamily:"'Inter',sans-serif",marginTop:4}}>
@@ -877,7 +877,7 @@ export default function TradeLog(props) {
                             </div>
                           </div>
                           <div style={{textAlign:'right',flexShrink:0}}>
-                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,color:bWr>=60?C.green:bWr>=45?C.orange:C.red,lineHeight:1}}>{bWr}%</div>
+                            <div style={{fontFamily:"'Fraunces',serif",fontSize:30,color:bWr>=60?C.green:bWr>=45?C.orange:C.red,lineHeight:1}}>{bWr}%</div>
                             <div style={{fontSize:10,color:C.dim,fontFamily:"'Inter',sans-serif"}}>win rate</div>
                           </div>
                         </div>
@@ -910,7 +910,7 @@ export default function TradeLog(props) {
                             <div style={{fontSize:12,color:b.color,fontWeight:600,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>{b.label}</div>
                             <div style={{fontSize:12,color:C.dim,fontFamily:"'Inter',sans-serif"}}>{b.arr.length} trades · {w}W / {b.arr.length-w}L · <span style={{color:totPL(b.arr)>=0?C.green:C.red,fontWeight:600}}>${Math.abs(totPL(b.arr)).toFixed(0)}</span></div>
                           </div>
-                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
+                          <div style={{fontFamily:"'Fraunces',serif",fontSize:28,color:bWr>=60?C.green:bWr>=45?C.orange:C.red}}>{bWr}%</div>
                         </div>
                       )
                     })}
@@ -957,7 +957,7 @@ export default function TradeLog(props) {
                           {bl&&<span style={{fontSize:11,color:C.red,border:`1px solid ${C.red}30`,padding:'2px 6px',borderRadius:4,fontFamily:"'Inter',sans-serif"}}>🚫 BLOCKED</span>}
                         </div>
                         <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                          {p!==0&&<span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:isWin?C.green:C.red}}>{p>=0?'+':'-'}${Math.abs(p).toFixed(0)}</span>}
+                          {p!==0&&<span style={{fontFamily:"'Fraunces',serif",fontSize:20,color:isWin?C.green:C.red}}>{p>=0?'+':'-'}${Math.abs(p).toFixed(0)}</span>}
                           {(t.status??'open').toLowerCase()==='open'&&<span style={{fontSize:11,color:C.orange,border:`1px solid ${C.orange}40`,padding:'2px 6px',borderRadius:4,fontFamily:"'Inter',sans-serif"}}>PAPER</span>}
                         </div>
                       </div>
