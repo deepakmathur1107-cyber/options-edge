@@ -2391,7 +2391,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               <>
                 <span style={{fontFamily:"'Fraunces',serif",fontSize:17,letterSpacing:0.3,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                 <span style={{fontSize:13,color,fontWeight:700}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
-                <span style={{fontSize:12,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
+                {/* FIX: removed the parenthetical absolute-change value
+                    (e.g. "(-27.79)") — confirmed real horizontal overflow on
+                    mobile at this bar specifically: at a 390px viewport this
+                    row's scrollWidth (546px) exceeded its clientWidth
+                    (481px), clipping NDX's change value mid-digit. Removed
+                    on ALL screen sizes per explicit decision (simplest fix,
+                    no breakpoint to maintain) rather than only hiding it
+                    below a width threshold. The %-change already conveys
+                    the move; the absolute dollar/point change was the least
+                    essential of the four fields this row was trying to fit. */}
               </>
             ) : (
               <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
