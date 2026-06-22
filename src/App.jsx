@@ -1723,18 +1723,23 @@ useEffect(() => {
   }
 
   // buildScanAlert: shared content builder for both the TG-button send (real
-  // Telegram markdown, rendered bold by Telegram's API) and the COPY button
-  // (plain text pasted manually — Telegram's app does NOT reformat already-
-  // typed asterisks, so markdown syntax there just shows as literal '*'
-  // characters; confirmed live). Trimmed to essentials per explicit
-  // decision: direction/conviction, strike+expiry+entry, target/stop, top
-  // 2-3 reasons — break-even, the full reasons list, and the chain-stats
-  // line were cut as too much detail for a phone notification.
+  // Telegram markdown, rendered bold/italic by Telegram's API) and the COPY
+  // button (plain text pasted manually — Telegram's app does NOT reformat
+  // already-typed asterisks, so markdown syntax there shows as literal '*'
+  // characters; confirmed live). Field order and content finalized after
+  // direct feedback on a real sent message (see conversation): header alone
+  // first, then what/where/when (trade type, strike, expiry), then price to
+  // act on (entry range+mid), then target/stop, then IV and reasoning
+  // de-emphasized in italics (Telegram has no real font-size control —
+  // italic is the closest available visual de-emphasis vs. the bold
+  // headline fields), then a closing app link so a forwarded/shared message
+  // is traceable back to the source even without app context.
   //
   // forCopy=true returns the plain-text variant (no asterisks) for the
   // COPY button; forCopy=false (default) returns the markdown variant for
   // the TG-button send. Both built from the same fields so they can't drift
   // apart on substance, only on formatting syntax.
+  const APP_LINK = 'optionsedgeflow.com'
   const buildScanAlert = (r, forCopy = false) => {
   const sym    = r.ticker||r.sym||'—'
   const isBear = (r.tradeType||'').toLowerCase().includes('put')||
@@ -1753,34 +1758,38 @@ useEffect(() => {
     : r.priceApprox
       ? `${r.priceApprox} option (${r.chgPct||'—'} today)`
       : (r.chgPct || '—') + ' today'
-  const topReasons = (r.reasons||[]).slice(0, 3)
-  const blockWarn = r.hardBlocks?.length
-    ? (forCopy
-        ? `\nFlags: ${r.hardBlocks.length} (see app for details)`
-        : `\n🚫 *${r.hardBlocks.length} skip flag(s)* — see app for details`)
-    : ''
+  // Filters out any reason that just restates the dedicated IV line above
+  // it (e.g. "IV 54% — moderate") — confirmed live duplication on a real
+  // $ORCL alert showing "IV 54%" then "IV 54% — moderate" two lines later,
+  // wasting one of only 3 reason slots on a fact already stated.
+  const topReasons = (r.reasons||[]).filter(x => !/^IV\s+\d/i.test(x)).slice(0, 3)
+  const flagLine = r.hardBlocks?.length
+    ? `${r.hardBlocks.length} skip flag(s) — see app for details`
+    : null
 
   if (forCopy) {
     return `${isBear?'PUT':'CALL'} - ${sym}
-Conviction ${r.score}% (${r.grade||'—'})
-${priceLine}
-Strike ${r.strikeStr} | Exp ${r.expiryDisplay}
+Strike ${r.strikeStr} · Exp ${r.expiryDisplay}
 Entry ${r.entry}
 Target ${r.target} | Stop ${r.stop}
-IV ${ivPct}${blockWarn}
+
+IV ${ivPct}${flagLine ? ' · ' + flagLine : ''}
 ${topReasons.length ? topReasons.map(x=>'- '+x).join('\n') : ''}
-Options Edge - not financial advice`
+
+${APP_LINK} · Not financial advice`
   }
 
   return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
-🎯 *${r.score}%* (${r.grade||'—'})  💰 ${priceLine}
-📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
-📊 Entry ${r.entry}
-🎯 Tgt ${r.target} · 🛑 Stop ${r.stop}
-📡 IV ${ivPct}${blockWarn}
-${topReasons.length ? '✅ ' + topReasons.join(' · ') : ''}
 
-_Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
+📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
+💰 ${priceLine}
+📊 Entry: ${r.entry}
+🎯 Target: ${r.target}  🛑 Stop: ${r.stop}
+
+_IV ${ivPct}${flagLine ? ' · ' + flagLine : ''}_
+${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
+
+🔗 ${APP_LINK} · _Not financial advice_`
 }
 
 
