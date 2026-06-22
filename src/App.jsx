@@ -1748,14 +1748,6 @@ useEffect(() => {
                  (r.tradeType||'').toLowerCase().includes('bear')
   const em     = isBear?'🔴📉':'🟢📈'
   const ivPct  = normalizeIvPct(r.iv)
-  // priceApprox (alertHistory rows only) is the OPTION's own mid price, not
-  // the underlying stock — scan_results has no stock-price column at all.
-  // Labeled explicitly as "option" rather than left ambiguous so it's never
-  // confused with the underlying's price. r.price (set by scanOneTicker/
-  // runScan's live paths) IS the real stock price where available — prefer
-  // that, fall back to the labeled option-price approximation, never show
-  // a bare "undefined" the way the original template did.
-  const priceLine = r.price || (r.priceApprox ? `${r.priceApprox} option` : '—')
   // Filters out any reason that just restates the dedicated IV line above
   // it (e.g. "IV 54% — moderate") — confirmed live duplication on a real
   // $ORCL alert showing "IV 54%" then "IV 54% — moderate" two lines later,
@@ -1765,10 +1757,17 @@ useEffect(() => {
     ? `${r.hardBlocks.length} skip flag(s) — see app for details`
     : null
 
+  // NOTE: a price line (real stock price r.price, or a labeled option-mid
+  // approximation r.priceApprox for alertHistory rows) used to appear here.
+  // Removed entirely per explicit decision — the $2.08-labeled-"option"
+  // fallback in particular read as confusing (easy to mistake for the
+  // underlying's price even with the "option" label), and rather than
+  // keep it only for the r.price case and drop it only for r.priceApprox,
+  // the decision was to drop price from this message ENTIRELY, no
+  // exceptions, for both the real-price and approximated-price cases.
   const msg = `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
 📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
-💰 ${priceLine}
 📊 Entry: ${r.entry}
 🎯 Target: ${r.target}  🛑 Stop: ${r.stop}
 
