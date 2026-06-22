@@ -2013,8 +2013,20 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
         entry: row.entry, target: row.target, stop: row.stop,
         bid: row.bid, ask: row.ask, mid: row.mid, delta: row.delta,
-        // Same NaN-guard as the manual-scan-cache read above.
-        iv: (()=>{ const v=parseFloat(row.iv); return !isNaN(v) ? v : 0 })(),
+        // FIX: row.iv is a formatted percent string from scan_results
+        // (scanTicker's `iv: fmtPct(iv)` → "40.2%"), not a raw decimal.
+        // The original guard here (`parseFloat(row.iv)`) correctly avoided
+        // NaN but didn't account for the value still being percent-scaled —
+        // parseFloat("40.2%") = 40.2, which is a real number but NOT the
+        // decimal (0.402) every downstream consumer of al.iv expects (e.g.
+        // the alert-row detail panel's `(al.iv*100).toFixed(0)+'%'` display,
+        // and the S/R-fetch call's `iv: String(al.iv||0)` sent to
+        // /api/brief). Confirmed live: an NFLX alert displayed "IV 4020%"
+        // and its S/R fetch sent iv=40.2 in the request — both are this same
+        // 40.2-instead-of-0.402 value propagating downstream uncorrected.
+        // Same fix shape as the cache-hit brief-fetch bug found earlier this
+        // session (fetchSrAndBrief) — strip formatting, divide by 100.
+        iv: (()=>{ const v=parseFloat(String(row.iv||'0').replace(/[^0-9.\-]/g,'')); return !isNaN(v) ? v/100 : 0 })(),
         volume: row.volume, oi: row.oi, chgPct: row.chg_pct, dte: row.dte,
         breakeven: row.breakeven, breakevenPct: row.breakeven_pct,
         breakevenIsPut: (row.trade_type||'').toLowerCase().includes('put'),
@@ -3107,10 +3119,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             setAlertSR(p=>({...p,[next]:{loading:true,data:null}}))
                             getAuthToken().then(authTok=>{
                               const headers = authTok ? { Authorization: `Bearer ${authTok}` } : {}
+                              // FIX: al.mid and al.chgPct are pre-formatted display strings
+                              // ("$1.25", "-5.82%") from loadOrRefreshAlerts/scan_results —
+                              // same root cause as the al.iv bug just fixed above. /api/brief
+                              // expects raw numbers for price/chgPct (it does its own
+                              // parseFloat with a 0 fallback, so this degraded gracefully
+                              // rather than crashing, but still sent wrong values). Also
+                              // fixed the price-inclusion condition itself, which checked
+                              // al.chgPct as a guard for whether to send al.mid — those are
+                              // unrelated fields; the real condition is just "do we have a mid".
                               const qp = new URLSearchParams({
                                 ticker: al.ticker, skipBrief: '1',
-                                price: String(al.chgPct!=null && al.mid ? al.mid : ''),
-                                chgPct: String(al.chgPct||0),
+                                price: String(parseFloat(String(al.mid||'').replace(/[^0-9.\-]/g,'')) || ''),
+                                chgPct: String(parseFloat(String(al.chgPct||'0').replace(/[^0-9.\-]/g,'')) || 0),
                                 iv: String(al.iv||0), dte: String(al.dte||30),
                                 score: String(al.score||50), tradeType: al.tradeType||'Call',
                               })
