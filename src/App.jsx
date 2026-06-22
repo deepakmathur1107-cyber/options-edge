@@ -1707,39 +1707,82 @@ useEffect(() => {
     setFutLoading(false)
   }
 
-  const buildScanAlert = r => {
+  // normalizeIvPct: r.iv arrives in two different shapes depending on which
+  // caller built the source object — a formatted string like "40.2%"
+  // (scanOneTicker/scanResult/indexAlerts, all via fmtPct) or a raw decimal
+  // like 0.402 (alertHistory, fixed earlier this session). Detects which
+  // shape it actually got rather than assuming one, so this stays correct
+  // regardless of which of buildScanAlert's four call sites is using it —
+  // confirmed by checking all four before writing this rather than guessing.
+  const normalizeIvPct = (iv) => {
+    if (iv == null || iv === '') return '—'
+    if (typeof iv === 'string' && iv.includes('%')) return iv   // already formatted, e.g. "40.2%"
+    const n = parseFloat(iv)
+    if (isNaN(n)) return '—'
+    return (n < 5 ? n * 100 : n).toFixed(0) + '%'   // <5 = raw decimal, else already percent-scale
+  }
+
+  // buildScanAlert: shared content builder for both the TG-button send (real
+  // Telegram markdown, rendered bold by Telegram's API) and the COPY button
+  // (plain text pasted manually — Telegram's app does NOT reformat already-
+  // typed asterisks, so markdown syntax there just shows as literal '*'
+  // characters; confirmed live). Trimmed to essentials per explicit
+  // decision: direction/conviction, strike+expiry+entry, target/stop, top
+  // 2-3 reasons — break-even, the full reasons list, and the chain-stats
+  // line were cut as too much detail for a phone notification.
+  //
+  // forCopy=true returns the plain-text variant (no asterisks) for the
+  // COPY button; forCopy=false (default) returns the markdown variant for
+  // the TG-button send. Both built from the same fields so they can't drift
+  // apart on substance, only on formatting syntax.
+  const buildScanAlert = (r, forCopy = false) => {
   const sym    = r.ticker||r.sym||'—'
   const isBear = (r.tradeType||'').toLowerCase().includes('put')||
                  (r.tradeType||'').toLowerCase().includes('bear')
   const em     = isBear?'🔴📉':'🟢📈'
-  const legsBlock = r.legsList?.length
-    ? `\n🔧 *Legs:*\n${r.legsList.map(l=>'  '+l).join('\n')}`
-    : ''
+  const ivPct  = normalizeIvPct(r.iv)
+  // priceApprox (alertHistory rows only) is the OPTION's own mid price, not
+  // the underlying stock — scan_results has no stock-price column at all.
+  // Labeled explicitly as "Option" rather than "Stock" so it's never
+  // confused with the underlying's price. r.price (set by scanOneTicker/
+  // runScan's live paths) IS the real stock price where available — prefer
+  // that, fall back to the labeled option-price approximation, never show
+  // a bare "undefined" the way the original template did.
+  const priceLine = r.price
+    ? `${r.price} (${r.chgPct||'—'} today)`
+    : r.priceApprox
+      ? `${r.priceApprox} option (${r.chgPct||'—'} today)`
+      : (r.chgPct || '—') + ' today'
+  const topReasons = (r.reasons||[]).slice(0, 3)
   const blockWarn = r.hardBlocks?.length
-    ? `\n🚫 *SKIP FLAGS:*\n${r.hardBlocks.map(b=>'  ⚠ '+b).join('\n')}`
+    ? (forCopy
+        ? `\nFlags: ${r.hardBlocks.length} (see app for details)`
+        : `\n🚫 *${r.hardBlocks.length} skip flag(s)* — see app for details`)
     : ''
-  const beSign  = r.breakevenIsPut || (r.tradeType||'').toLowerCase().includes('put') ? '−' : '+'
-  const beAbsPct = r.breakevenPct != null ? Math.abs(parseFloat(r.breakevenPct)).toFixed(1) : null
-  const beBlock = r.breakeven
-    ? `\n📊 *Break-even:* $${r.breakeven} (${beSign}${beAbsPct}% required) · DTE: ${r.dte}`
-    : ''
+
+  if (forCopy) {
+    return `${isBear?'PUT':'CALL'} - ${sym}
+Conviction ${r.score}% (${r.grade||'—'})
+${priceLine}
+Strike ${r.strikeStr} | Exp ${r.expiryDisplay}
+Entry ${r.entry}
+Target ${r.target} | Stop ${r.stop}
+IV ${ivPct}${blockWarn}
+${topReasons.length ? topReasons.map(x=>'- '+x).join('\n') : ''}
+Options Edge - not financial advice`
+  }
+
   return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
-
-🎯 *Conviction: ${r.score}%* | Grade: ${r.grade||'—'}
-💰 *Stock:* ${r.price} (${r.chgPct} today)
-📌 *Strike:* ${r.strikeStr} | Expiry: ${r.expiryDisplay}
-
-📊 *Entry:* ${r.entry}
-🎯 *Target:* ${r.target}
-🛑 *Stop:* ${r.stop}${beBlock}${legsBlock}${blockWarn}
-
-📡 *Chain:* IV: ${r.iv} | Δ ${r.delta} | Bid: ${r.bid} | Ask: ${r.ask}
-
-✅ *Why:*
-${(r.reasons||[]).map(x=>'• '+x).join('\n')||'• Momentum setup'}
+🎯 *${r.score}%* (${r.grade||'—'})  💰 ${priceLine}
+📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
+📊 Entry ${r.entry}
+🎯 Tgt ${r.target} · 🛑 Stop ${r.stop}
+📡 IV ${ivPct}${blockWarn}
+${topReasons.length ? '✅ ' + topReasons.join(' · ') : ''}
 
 _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 }
+
 
   // ─── Auto scanner ─────────────────────────────────────────────────────────
   // ── scanOneTicker — unified scoring with manual runScan ──────────────────────
@@ -2013,6 +2056,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
         entry: row.entry, target: row.target, stop: row.stop,
         bid: row.bid, ask: row.ask, mid: row.mid, delta: row.delta,
+        // FIX: this object never had a `price` field at all — scan_results
+        // doesn't store the underlying stock price, only the option's own
+        // bid/ask/mid (already formatted strings like "$7.20"). buildScanAlert
+        // reads r.price directly into the Telegram message's "Stock:" line,
+        // so with no field here it rendered literally as "undefined" —
+        // confirmed live via a copy-pasted $ORCL alert. row.mid (the OPTION
+        // price, not the stock price) is the only price-shaped data this
+        // object has access to; using it as a labeled approximation per
+        // explicit decision rather than leaving the field missing. The
+        // trimmed buildScanAlert template (see below) labels this clearly
+        // as the option price, not the stock price, to avoid the confusion
+        // a generic "Stock:" label would create with an option-price value.
+        priceApprox: row.mid,
         // FIX: row.iv is a formatted percent string from scan_results
         // (scanTicker's `iv: fmtPct(iv)` → "40.2%"), not a raw decimal.
         // The original guard here (`parseFloat(row.iv)`) correctly avoided
@@ -3275,7 +3331,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             )}
 
                             <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                              <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
+                              <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al, true));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
                                 background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>{alertCopied?'✅ COPIED':'📋 COPY'}</button>
