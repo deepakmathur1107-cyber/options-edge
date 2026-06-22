@@ -2391,15 +2391,23 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
           </div>
 
-          {/* ── Agree/disagree note — only renders once both reads have resolved ── */}
+          {/* ── Agree/disagree note — only renders once both reads have resolved ──
+               Reworded from the original ⚖/dashed-orange-border treatment, which
+               read as an error state on first glance (orange + dashed border is
+               the same visual language used elsewhere for warnings) even though
+               this is normal, expected, informational content — the two reads
+               are independent signals and disagreeing is a routine outcome, not
+               a fault condition. Tone and styling now match that: neutral blue,
+               solid border, phrased as a divergence observation rather than
+               something needing to be explained away as "not a bug." */}
           {bothKnown && (
             agree ? (
               <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.green,background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
                 <span>✓</span><span>Both reads agree — news sentiment and price action are pointing the same direction right now.</span>
               </div>
             ) : (
-              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.orange,background:`${C.orange}10`,border:`1px dashed ${C.orange}40`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
-                <span>⚖</span><span>These don't agree right now — that gap is real information, not a bug. Either price hasn't caught up to the narrative yet, or the narrative is ahead of what's actually trading.</span>
+              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.blue,background:`${C.blue}10`,border:`1px solid ${C.blue}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
+                <span>◐</span><span>News and price are reading differently right now — sentiment and recent price action don't always move together. Worth knowing before you size a trade off either one alone.</span>
               </div>
             )
           )}
@@ -2544,32 +2552,6 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
 
             {/* ── Market Readout ── */}
             <MorningBrief getToken={getAuthToken} theme={C} isAdmin={isAdmin} onBriefLoaded={setBriefData} />
-
-            {/* ── Verdict pointer — PREVIEW ONLY, not wired to real data.
-                 No hold/close verdict engine exists yet; this is purely to
-                 judge the visual before deciding whether to build it. ── */}
-            <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderRadius:8,background:`${C.red}10`,border:`1px dashed ${C.red}50`,marginBottom:12,fontSize:12,color:C.subtext}}>
-              <span>👀</span>
-              <span><b style={{color:C.red}}>1 of 4 open trades</b> may need a look — full reasoning would live in Trades</span>
-              <span style={{marginLeft:'auto',fontSize:9,fontWeight:700,color:C.red,background:`${C.red}15`,border:`1px solid ${C.red}40`,padding:'2px 7px',borderRadius:10,letterSpacing:.5,textTransform:'uppercase',flexShrink:0}}>PREVIEW — not real</span>
-            </div>
-
-            {/* ── Macro Pulse — PREVIEW ONLY, not wired to real data.
-                 Needs new Tradier futures/yield symbols + a scoped Claude
-                 reasoning call (same pattern as Market Readout) before this
-                 could be real. Shown only so the visual can be judged. ── */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow,opacity:.7}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MACRO PULSE</div>
-                <span style={{fontSize:9,fontWeight:700,color:C.red,background:`${C.red}15`,border:`1px solid ${C.red}40`,padding:'2px 7px',borderRadius:10,letterSpacing:.5,textTransform:'uppercase'}}>PREVIEW — not real</span>
-              </div>
-              <div style={{display:'flex',gap:8,overflowX:'auto',marginBottom:8}}>
-                {['10Y 4.21%','DXY 103.8','ES +0.6%','CL −0.3%','GC +0.1%'].map((v,i)=>(
-                  <div key={i} style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 11px',fontSize:11,color:C.subtext,fontFamily:"'IBM Plex Mono',monospace",whiteSpace:'nowrap',flexShrink:0}}>{v}</div>
-                ))}
-              </div>
-              <div style={{fontSize:11,color:C.dim,fontStyle:'italic'}}>"Yields easing → lifting growth names → today's setups skew bullish."</div>
-            </div>
 
             {/* ── Checklist ── */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
