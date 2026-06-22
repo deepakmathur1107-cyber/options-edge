@@ -11,5 +11,12 @@
 // Do not duplicate the scoring logic here — this file should never contain
 // any `score +=` / `score -=` lines itself. If it does, the consolidation
 // this file exists for has failed.
+//
+// pickBetterSide added alongside scoreConviction: needed by the client-side
+// two-sided scoring change in App.jsx (runScan/scanOneTicker now score both
+// call and put against the real chain and choose the higher side, same as
+// the server-side cron — see convictionScore.cjs's pickBetterSide comment
+// for why the comparison logic lives there and not duplicated here).
 import convictionModule from '../../api/_lib/convictionScore.cjs'
 export const scoreConviction = convictionModule.scoreConviction
+export const pickBetterSide = convictionModule.pickBetterSide

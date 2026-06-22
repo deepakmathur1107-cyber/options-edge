@@ -6,7 +6,7 @@ import TweetShare from './components/TweetShare'
 import AdminDashboard from './components/AdminDashboard'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
-import { scoreConviction } from './lib/convictionScore'
+import { scoreConviction, pickBetterSide } from './lib/convictionScore'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -195,10 +195,29 @@ const approxGEX = (o, price) => {
   if (!oi || iv===0) return 0
   // gamma proxy: bell-shaped, peaks at delta=0.5
   const gammaPx = delta*(1-delta) / (price * iv * Math.sqrt(30/365))
-  // For calls: positive GEX (dealers long gamma → pinning)
-  // For puts: negative GEX (dealers short gamma → acceleration)
+  // sign here is just optType (call=+1, put=-1) times the magnitude above —
+  // NOT a measure of dealer positioning. A true dealer-long/short-gamma read
+  // would require aggregating both calls AND puts at a strike with knowledge
+  // of which side market makers are actually short, which this function does
+  // not have. Comment corrected — see gexNote below, which used to claim
+  // "Dealers long/short gamma" based on this same sign and has been reworded
+  // to describe what's actually known (gamma-weighted OI concentration).
   const sign = o.option_type==='call' ? 1 : -1
   return sign * gammaPx * oi * 100
+}
+
+// gexMagnitudeNorm: 0-1 normalized |gex| for one contract relative to the
+// actual range of |gex| values across the side it's on — mirrors the fix in
+// api/_lib/scanLogic.js (the server-side scanner's copy of this same logic).
+// An earlier version of both copies normalized against allOI*0.01+1, which
+// saturates Math.min(...,1) to 1.0 for nearly every realistically-selected
+// contract once real-world OI is in the thousands (confirmed by direct
+// calculation: raw gex routinely 100-300x the old denominator). Fixed by
+// normalizing against max(|gex|) actually observed on that side instead.
+const gexMagnitudeNorm = (o, price, allGexAbsMax) => {
+  if (!allGexAbsMax || allGexAbsMax <= 0) return 0
+  const gex = Math.abs(approxGEX(o, price))
+  return Math.min(gex / allGexAbsMax, 1)
 }
 
 // scoreStrike: composite score for a single option contract
@@ -302,6 +321,9 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
   const allVol = Math.max(...side.map(o=>parseFloat(o.volume||0)),1)
   const sc     = scoreStrike(best, price, allOI, allVol)
   const gex    = approxGEX(best, price)
+  // allGexAbsMax computed across THIS side of the chain — see gexMagnitudeNorm
+  // comment above for why this replaced the old allOI-scaled denominator.
+  const allGexAbsMax = Math.max(...side.map(o=>Math.abs(approxGEX(o, price))), 1)
   const strikeQuality = sc>=0.60?'⭐ HIGH CONVICTION':sc>=0.35?'MODERATE':'LOW — check liquidity'
 
   return {
@@ -321,9 +343,17 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
     strikeScore:   sc,
     strikeQuality,
     gexSign:       gex>=0?'positive':'negative',
-    gexNote:       gex>=0
-      ? `Dealers long gamma at $${best.strike} — price pinning / support zone`
-      : `Dealers short gamma at $${best.strike} — momentum accelerator / breakout zone`,
+    gexMagnitude01: gexMagnitudeNorm(best, price, allGexAbsMax),
+    // Reworded — previous text ("Dealers long/short gamma...pinning/breakout
+    // zone") claimed a directional dealer-positioning read this calculation
+    // can't actually support (sign here is just call-vs-put, not net dealer
+    // exposure; see approxGEX's corrected comment above). What this DOES
+    // legitimately tell you: how much open-interest-weighted gamma is
+    // concentrated at this specific strike relative to the rest of the chain
+    // — a real signal about strike significance, just not a directional one.
+    gexNote:       gex!==0
+      ? `$${best.strike} carries meaningful gamma-weighted open interest — a strike other traders have concentrated into, not a thin/orphan level`
+      : `Low gamma-weighted open interest at $${best.strike} — not a strike with much concentrated positioning`,
   }
 }
 
@@ -1186,12 +1216,72 @@ useEffect(() => {
       const chgPctEstimated=chgInfo.estimated
       const SPREAD_TYPES = ['Call Spread','Put Spread','Iron Condor','Butterfly','Strangle']
       const isSpread     = SPREAD_TYPES.includes(scanType)
-      const bearish=scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
-      const optType=bearish?'put':'call'
-      const tradeType=scanType==='Any'?(bearish?'Put':'Call'):scanType
+      // TWO-SIDED SCORING (this pass) — gated strictly to the auto-pick case.
+      // scanType==='Any' is the ONLY case where direction was ever a guess
+      // (chgPct<-0.5 → bearish) rather than something the person explicitly
+      // chose from the dropdown. If they picked "Call", "Put", or any spread
+      // type, that's an explicit instruction — two-sided comparison must NOT
+      // override it or even run, since silently second-guessing an explicit
+      // selection would be a worse outcome than the direction-guessing bug
+      // this is meant to fix elsewhere. isSpread is excluded from two-sided
+      // scoring entirely: spread direction is encoded in the structure choice
+      // itself (Call Spread vs Put Spread are different structures, not a
+      // call/put toggle on one structure), so there's no "other side" to
+      // build and compare the way there is for a single naked leg.
+      const isAutoPick = scanType === 'Any' && !isSpread
+      const bearishGuess = scanType==='Put'||scanType==='Put Spread'||(scanType==='Any'&&chgPct<-0.5)
+      let optType, tradeType, twoSidedDecision = null
+
+      if (isAutoPick) {
+        // Build + score BOTH sides on the real chain, let pickBetterSide decide.
+        // This replaces the old chgPct<-0.5 guess for the 'Any' case only.
+        const tfCfgForSide = tfCfg
+        const buildSide = (sideType) => {
+          const sideChain = chain.filter(o=>o.option_type===sideType)
+          if (!sideChain.length) return null
+          const stepLocal = autoStep(price)
+          const tdLocal = buildNakedResult(chain, price, stepLocal, sideType, tfCfgForSide)
+          if (!tdLocal) return null
+          const ivLocal = tdLocal.iv||0, deltaLocal = tdLocal.delta||null
+          let beReqPct = null
+          if (tdLocal.mid>0) {
+            const strike_ = parseFloat(tdLocal.primaryStrike||0)
+            if (strike_>0) {
+              const isPutA = sideType==='put'
+              const bePrice_a = isPutA ? (strike_ - tdLocal.mid) : (strike_ + tdLocal.mid)
+              const signedPct = ((bePrice_a / price) - 1) * 100
+              beReqPct = isPutA ? -Math.abs(signedPct) : Math.abs(signedPct)
+            }
+          }
+          const scored = scoreConviction({
+            price, chgPct, chgPctEstimated, optType: sideType, iv: ivLocal, delta: deltaLocal,
+            volRatio: (quote.volume||0)/((quote.average_volume||quote.volume||0)||1),
+            strikeVolume: tdLocal.volume||0, pos52: (price-(quote.week_52_low||price))/(((quote.week_52_high||price)-(quote.week_52_low||price))||1),
+            dte: Math.round((new Date(expiryRaw+'T12:00:00')-new Date())/(1000*60*60*24)),
+            spxChgToday: esBar?.chgPct||0, ndxChgToday: nqBar?.chgPct||0, breakevenReqPct: beReqPct,
+            isMorningWindow: isOpeningWindow(), fundamentals: null, now: new Date(), tf: scanTF,
+            gexSign: tdLocal.gexSign, gexMagnitude01: tdLocal.gexMagnitude01,
+            srPosition: null, srDistPct: null,   // S/R fetched later, async, after direction is already chosen — see note below
+          })
+          return { td: tdLocal, breakevenReqPct: beReqPct, ...scored }
+        }
+        const callSide = buildSide('call')
+        const putSide  = buildSide('put')
+        const picked = pickBetterSide(callSide, putSide)
+        if (!picked) throw new Error('No liquid contracts found on either side')
+        optType = picked.side
+        tradeType = optType === 'put' ? 'Put' : 'Call'
+        twoSidedDecision = { otherSideScore: picked.loser ? picked.loser.score : null, gap: picked.gap, isClose: picked.isClose }
+        dbg(`   ✓ Two-sided: Call ${callSide?.score ?? '—'} vs Put ${putSide?.score ?? '—'} → chose ${tradeType.toUpperCase()}${picked.isClose ? ' (close call, gap='+picked.gap+')' : ''}`)
+      } else {
+        // Explicit selection (Call/Put/any spread type) — unchanged behavior,
+        // no comparison run, dropdown choice is honored as-is.
+        optType = bearishGuess ? 'put' : 'call'
+        tradeType = scanType
+      }
 
       const step=autoStep(price)
-      const strikePct=bearish?(2-tfCfg.strikePct):tfCfg.strikePct
+      const strikePct=optType==='put'?(2-tfCfg.strikePct):tfCfg.strikePct
       const tgtStrike=Math.round(price*strikePct/step)*step
       const side=chain.filter(o=>o.option_type===optType)
       if (!side.length) throw new Error(`No ${optType} contracts found`)
@@ -1244,7 +1334,7 @@ useEffect(() => {
         price, chgPct, chgPctEstimated, optType, iv, delta, volRatio,
         strikeVolume: best.volume||0, pos52, dte,
         spxChgToday, ndxChgToday, breakevenReqPct: null,
-        isMorningWindow: isMorningNoise, fundamentals: null, now,
+        isMorningWindow: isMorningNoise, fundamentals: null, now, tf: scanTF,
       })
 
       const tradeData = isSpread
@@ -1284,7 +1374,8 @@ useEffect(() => {
             price, chgPct, chgPctEstimated, optType, iv: ivFinal, delta: deltaFinal,
             volRatio, strikeVolume: tradeData.volume||best.volume||0, pos52, dte,
             spxChgToday, ndxChgToday, breakevenReqPct,
-            isMorningWindow: isMorningNoise, fundamentals: null, now,
+            isMorningWindow: isMorningNoise, fundamentals: null, now, tf: scanTF,
+            gexSign: tradeData.gexSign, gexMagnitude01: tradeData.gexMagnitude01,
           })
       // No-catalyst cap, hard-block cap, and the 20–95 final clamp are all
       // applied inside scoreConviction already. Fundamentals are fetched
@@ -1370,6 +1461,10 @@ useEffect(() => {
         strikeQuality: tradeData.strikeQuality||'',
         gexNote:       tradeData.gexNote||'',
         gexSign:       tradeData.gexSign||'',
+        // Two-sided decision visibility — null for explicit Call/Put/spread
+        // picks (no comparison was run); populated only when scanType was
+        // 'Any' and both sides were actually built and scored.
+        directionDecision: twoSidedDecision,
         entry:         tradeData.entry,
         target:        tradeData.target,
         stop:          tradeData.stop,
@@ -1558,6 +1653,18 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
   // Fundamentals (sector, market cap, earnings date) are fetched from
   // /api/fundamentals which reads Supabase → Redis → api-ninjas (in that order).
   // This keeps api-ninjas calls well within the 3000/month limit.
+  //
+  // TWO-SIDED SCORING (this pass): mirrors the same change in scanTicker
+  // (api/_lib/scanLogic.js, used by the server-side cron). Previously optType
+  // was decided BEFORE scoring from chgPct/SPX direction alone, so a stock
+  // ticking up 0.2% on no real signal would only ever have its CALL side
+  // built and scored, even if the put side (different strike, different
+  // liquidity, different delta) was the objectively better setup at that
+  // moment. Now both sides are built against the real chain and scored
+  // independently; pickBetterSide chooses. Direction is a scoring OUTPUT here
+  // too, not an input — same as the server path, so auto-scanner alerts from
+  // the client (this function) and from the cron should no longer diverge on
+  // which side they pick for the same ticker at the same moment.
   const scanOneTicker = useCallback(async (ticker, tf='Swing (21–45 DTE)', withFundamentals=false)=>{
     const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)']
     try {
@@ -1571,23 +1678,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const chain=await getChain(ticker,expiryRaw)
       if (!chain.length) return null
 
-      const chgPct=safeChgPct(quote).pct
-      // When flat (chgPct=0), use market regime to pick direction
-      const spxDir = esBar?.chgPct||0
-      const optType = chgPct > 0.1 ? 'call'
-                    : chgPct < -0.1 ? 'put'
-                    : spxDir >= 0 ? 'call' : 'put'  // flat stock: follow market
+      const chgInfo = safeChgPct(quote)
+      const chgPct = chgInfo.pct
+      // FIX: previously this function destructured a bare `chgPct` and passed
+      // an undefined `chgPctEstimated` into scoreConviction below — the
+      // pre-market estimate warning could never fire from THIS call path
+      // (it works correctly in runScan, which does carry .estimated through).
+      // Now carries the same .estimated flag scanTicker/runScan already do.
+      const chgPctEstimated = chgInfo.estimated
       const step=autoStep(price)
-      const side=chain.filter(o=>o.option_type===optType)
-      if (!side.length) return null
 
-      // Use buildNakedResult for consistent contract selection (same as manual scan)
-      const td = buildNakedResult(chain, price, step, optType, tfCfg2)
-      if (!td) return null
-
-      const iv=td.iv||0, delta=td.delta||null
-      const vol=quote.volume||0, avg=quote.average_volume||vol
-      const volRatio=vol/(avg||1)
       const now2=new Date()
       const isMorning2=isOpeningWindow()  // ET-aware: first 30 min ET
       const expDate2=new Date(expiryRaw+'T12:00:00')
@@ -1597,6 +1697,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
       const hi52=parseFloat(quote.week_52_high||price)
       const lo52=parseFloat(quote.week_52_low||price)
       const pos52=(price-lo52)/((hi52-lo52)||1)
+
+      const vol=quote.volume||0, avg=quote.average_volume||vol
+      const volRatio=vol/(avg||1)
 
       // Market regime from live index state (same as manual scan)
       const spxChgToday = esBar?.chgPct||0
@@ -1618,25 +1721,56 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         } catch {}
       }
 
-      // Break-even, computed before scoring since the canonical module needs
-      // it as input rather than deriving it internally.
-      let breakevenReqPct2 = null
-      if(td && td.mid>0){
-        const strike_ = parseFloat(td.primaryStrike||0)
-        if(strike_>0){
-          const isPutA = optType==='put'
-          const bePrice_a = isPutA ? (strike_ - td.mid) : (strike_ + td.mid)
-          const signedPct = ((bePrice_a / price) - 1) * 100
-          breakevenReqPct2 = isPutA ? -Math.abs(signedPct) : Math.abs(signedPct)
+      // buildSide: builds the contract + breakeven + score for ONE side,
+      // self-contained so call and put go through identical logic. Returns
+      // null if that side has no liquid contracts at all (e.g. far OTM chain
+      // gaps) — pickBetterSide below handles either side being null.
+      const buildSide = (sideType) => {
+        const side = chain.filter(o=>o.option_type===sideType)
+        if (!side.length) return null
+        const td = buildNakedResult(chain, price, step, sideType, tfCfg2)
+        if (!td) return null
+
+        const iv = td.iv||0, delta = td.delta||null
+
+        let breakevenReqPct = null
+        if (td.mid>0) {
+          const strike_ = parseFloat(td.primaryStrike||0)
+          if (strike_>0) {
+            const isPutA = sideType==='put'
+            const bePrice_a = isPutA ? (strike_ - td.mid) : (strike_ + td.mid)
+            const signedPct = ((bePrice_a / price) - 1) * 100
+            breakevenReqPct = isPutA ? -Math.abs(signedPct) : Math.abs(signedPct)
+          }
         }
+
+        const scored = scoreConviction({
+          price, chgPct, chgPctEstimated, optType: sideType, iv, delta, volRatio,
+          strikeVolume: td.volume||0, pos52, dte: dte2,
+          spxChgToday, ndxChgToday, breakevenReqPct,
+          isMorningWindow: isMorning2, fundamentals: fund, now: now2, tf,
+          gexSign: td.gexSign, gexMagnitude01: td.gexMagnitude01,
+          // No S/R input on this client path yet — srLevels.js's getSRLevels
+          // does a Tradier /markets/history fetch designed for the manual
+          // scan's single-ticker, non-blocking background pattern (see
+          // runScan). Wiring it into the auto-scanner loop (up to 342 tickers
+          // in sequence) would add a fetch per ticker per scan with no
+          // gating yet — same risk profile as the cron's S/R fetch, but
+          // without that gate built here. Left out of this pass deliberately
+          // rather than silently doing it without the same cost control.
+          srPosition: null, srDistPct: null,
+        })
+
+        return { td, breakevenReqPct, ...scored }
       }
 
-      const { score, reasons, warnings, hardBlocks: hardBlocks2 } = scoreConviction({
-        price, chgPct, chgPctEstimated, optType, iv, delta, volRatio,
-        strikeVolume: td.volume||0, pos52, dte: dte2,
-        spxChgToday, ndxChgToday, breakevenReqPct: breakevenReqPct2,
-        isMorningWindow: isMorning2, fundamentals: fund, now: now2,
-      })
+      const callSide = buildSide('call')
+      const putSide  = buildSide('put')
+      const picked = pickBetterSide(callSide, putSide)
+      if (!picked) return null
+
+      const { side: optType, winner } = picked
+      const { td, score, reasons, warnings, hardBlocks: hardBlocks2 } = winner
 
       const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       // Breakeven for Telegram alert
@@ -1652,7 +1786,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         ticker,score,
         tradeType: td.structureType,
         price:fmtP(price),bid:fmtP(td.bid),ask:fmtP(td.ask),mid:fmtP(td.mid),
-        iv:fmtPct(iv),delta:delta?delta.toFixed(3):'—',
+        iv:fmtPct(td.iv||0),delta:td.delta?td.delta.toFixed(3):'—',
         volume:td.volume||0,oi:td.oi||0,
         expiryDisplay,
         strikeStr:td.strikeStr,
@@ -1677,6 +1811,13 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         marketCap:  fund?.market_cap || null,
         peRatio:    fund?.pe_ratio   || null,
         earningsDate: fund?.earnings_date || null,
+        // Visibility into the two-sided decision — same shape as scanTicker's
+        // server-side return, so UI code can treat both paths identically.
+        directionDecision: {
+          otherSideScore: picked.loser ? picked.loser.score : null,
+          gap: picked.gap,
+          isClose: picked.isClose,
+        },
       }
     } catch { return null }
   },[tradierToken,tradierMode,esBar,nqBar])
@@ -1722,7 +1863,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           if (fundData.market_cap && fundData.market_cap>100_000_000_000){ enrichedReasons.push(`Large-cap (${fundData.sector||'—'})`); enrichedScore=Math.min(95,enrichedScore+3) }
           // Hard blocks (e.g. chasing, high IV) cap conviction regardless of fundamentals —
           // never let the enrichment step lift a score back above that ceiling.
-          const cappedScore = (r.hardBlocks?.length>0) ? Math.min(enrichedScore,48) : enrichedScore
+          // FIX: previously a flat 48 regardless of WHICH hard block fired — the
+          // exact bug class convictionScore.cjs's header comment documents as
+          // already fixed inside the canonical scorer (point #1: chasing needs
+          // 42, not 48), just reintroduced one layer up here since this
+          // enrichment step re-clamps independently after scanOneTicker already
+          // returned a correctly-capped score. Now checks for the chasing
+          // hard block specifically (same text-match pattern runScan's own
+          // post-fundamentals re-clamp already uses) before falling back to 48
+          // for any other hard block.
+          const isChasingBlock = (r.hardBlocks||[]).some(b=>b.includes('Already')&&b.includes('today'))
+          const cappedScore = isChasingBlock ? Math.min(enrichedScore,42)
+            : (r.hardBlocks?.length>0) ? Math.min(enrichedScore,48)
+            : enrichedScore
           rEnriched = { ...r, score:Math.min(95,Math.max(20,cappedScore)), warnings:enrichedWarnings, reasons:enrichedReasons,
             sector:fundData.sector||null, industry:fundData.industry||null, marketCap:fundData.market_cap||null, earningsDate:fundData.earnings_date||null }
         }

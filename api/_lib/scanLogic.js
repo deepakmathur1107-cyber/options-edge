@@ -14,7 +14,7 @@
 // reimplemented here. If you need to change a scoring rule, change it there
 // — never re-add inline score+=/-= logic to this file.
 
-const { scoreConviction, safeIV } = require('./convictionScore.cjs');
+const { scoreConviction, safeIV, pickBetterSide } = require('./convictionScore.cjs');
 
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50;
 const fmtP   = n => n==null?'—':'$'+parseFloat(n).toFixed(2);
@@ -137,6 +137,25 @@ const approxGEX = (o, price) => {
   return sign * gammaPx * oi * 100;
 };
 
+// gexMagnitudeNorm: 0-1 normalized magnitude of approxGEX for ONE contract,
+// relative to the actual range of |gex| values across all contracts on that
+// side of the chain — NOT a raw-OI-scaled denominator. An earlier version used
+// allOI*0.01+1 as the denominator (matching scoreStrike's internal gexNorm),
+// but that constant is tuned for scoreStrike's composite where it's damped by
+// a 0.10 weight — used standalone, real-world OI (thousands) made the raw gex
+// value dwarf that denominator by 100-300x, saturating Math.min(...,1) to 1.0
+// for nearly every realistically-selected contract regardless of how it
+// actually compared to chain peers. Confirmed via direct calculation before
+// shipping: gex≈14,500 vs denom≈51 → ratio≈285, clamped to 1 every time.
+// Fixed by normalizing against max(|gex|) actually observed on this side,
+// so the result is a genuine relative ranking (0 = lowest-gex contract on
+// this side, 1 = highest), not a near-constant ceiling value.
+const gexMagnitudeNorm = (o, price, allGexAbsMax) => {
+  if (!allGexAbsMax || allGexAbsMax <= 0) return 0;
+  const gex = Math.abs(approxGEX(o, price));
+  return Math.min(gex / allGexAbsMax, 1);
+};
+
 const scoreStrike = (o, price, allOI, allVol) => {
   if (!o) return 0;
   const oi      = parseFloat(o.open_interest||0);
@@ -197,6 +216,11 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
   const allVol = Math.max(...side.map(o=>parseFloat(o.volume||0)), 1);
   const sc = scoreStrike(best, price, allOI, allVol);
   const gex = approxGEX(best, price);
+  // allGexAbsMax: highest |gex| across THIS side of the chain — used to
+  // normalize the selected contract's gex as a genuine relative ranking
+  // rather than against a raw-OI-scaled constant that saturates (see
+  // gexMagnitudeNorm's comment for why allOI was wrong here).
+  const allGexAbsMax = Math.max(...side.map(o=>Math.abs(approxGEX(o, price))), 1);
   const suf  = optType==='call' ? 'C' : 'P';
   return {
     strikeStr:     `$${best.strike}${suf}`,
@@ -218,6 +242,7 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
     primaryStrike: best.strike,
     strikeScore:   sc,
     gexSign:       gex>=0?'positive':'negative',
+    gexMagnitude01: gexMagnitudeNorm(best, price, allGexAbsMax),
   };
 };
 
@@ -225,8 +250,27 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
 // scanTicker: server-side port of scanOneTicker. Same scoring, same hard
 // blocks, same direction-aware breakeven. Market regime (spxChg/ndxChg) is
 // passed in rather than read from React state, since this runs outside React.
+//
+// TWO-SIDED SCORING (this pass): previously, optType was decided BEFORE any
+// scoring ran (purely from today's chgPct vs. SPX direction as tie-break),
+// then every downstream check — IV bands, delta quality, 52w trend, breakeven,
+// S/R — only ever ran for that one pre-chosen side. That meant a stock could
+// have a far better put setup sitting unscored and invisible just because it
+// happened to tick up 0.2% at the moment of the scan. This function now
+// builds AND scores both the call and the put side on the real chain, then
+// uses pickBetterSide (convictionScore.cjs) to choose — direction is now a
+// scoring OUTPUT, not scoring input. chgPct/SPX direction still feed into each
+// side's OWN score (e.g. a call still gets the market-regime penalty if SPX
+// is falling) — they just no longer gate which side gets built at all.
+//
+// srLevels: deliberately NOT fetched inside this function. getSRLevels() in
+// srLevels.js does its own network call (Tradier /markets/history) and this
+// function stays a pure, synchronous scorer — no awaits, callable identically
+// from the cron (which can afford the extra fetch, gated by score) and from
+// any future caller that can't. Callers that have S/R data (or none) pass it
+// in as a plain object; scanTicker never reaches out for it itself.
 // ─────────────────────────────────────────────────────────────────────────
-function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }) {
+function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels = null }) {
   const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)'];
   try {
     if (!quote) return null;
@@ -239,18 +283,8 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
     const chgInfo = safeChgPct(quote);
     const chgPct = chgInfo.pct;
     const chgPctEstimated = chgInfo.estimated;
-    const spxDir = spxChg||0;
-    const optType = chgPct > 0.1 ? 'call'
-                  : chgPct < -0.1 ? 'put'
-                  : spxDir >= 0 ? 'call' : 'put';
     const step = autoStep(price);
-    const side = chain.filter(o=>o.option_type===optType);
-    if (!side.length) return null;
 
-    const td = buildNakedResult(chain, price, step, optType, tfCfg2);
-    if (!td) return null;
-
-    const iv = td.iv||0, delta = td.delta||null;
     const vol = quote.volume||0, avg = quote.average_volume||vol;
     const volRatio = vol/(avg||1);
     const now2 = new Date();
@@ -265,28 +299,62 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
     const spxChgToday = spxChg||0;
     const ndxChgToday = ndxChg||0;
 
-    // Break-even — computed here (depends on td.primaryStrike/td.mid, specific
-    // to this scan), then handed to the canonical scorer as a plain number
-    // rather than re-deriving it inside the shared module.
-    let breakevenReqPct = null;
-    if (td && td.mid>0) {
-      const strike_ = parseFloat(td.primaryStrike||0);
-      if (strike_>0) {
-        const isPutA = optType==='put';
-        const bePrice_a = isPutA ? (strike_ - td.mid) : (strike_ + td.mid);
-        const signedPct = ((bePrice_a / price) - 1) * 100;
-        // Canonical module expects negative = stock must fall, positive = must
-        // rise, regardless of call/put — match that sign convention here.
-        breakevenReqPct = isPutA ? -Math.abs(signedPct) : Math.abs(signedPct);
+    // srPosition/srDistPct: same level set regardless of side (S/R is a
+    // property of the stock's price location, not of call vs put), but
+    // srDistPct is always reported as a positive "how far away" number —
+    // scoreConviction interprets at_resistance/at_support relative to optType
+    // itself, so the same srLevels input is valid for both sides below.
+    let srPosition = null, srDistPct = null;
+    if (srLevels) {
+      srPosition = srLevels.position || null;
+      if (srPosition === 'at_resistance' && srLevels.r1) {
+        srDistPct = Math.abs(((srLevels.r1 - price) / price) * 100);
+      } else if (srPosition === 'at_support' && srLevels.s1) {
+        srDistPct = Math.abs(((price - srLevels.s1) / price) * 100);
       }
     }
 
-    const { score, reasons, warnings, hardBlocks: hardBlocks2 } = scoreConviction({
-      price, chgPct, chgPctEstimated, optType, iv, delta, volRatio,
-      strikeVolume: td.volume||0, pos52, dte: dte2,
-      spxChgToday, ndxChgToday, breakevenReqPct,
-      isMorningWindow: isMorning2, fundamentals: fund, now: now2,
-    });
+    // buildSide: builds the contract + computes breakeven + scores ONE side
+    // (call or put), fully self-contained so both sides go through identical
+    // logic. Returns null if that side has no liquid contracts at all.
+    const buildSide = (sideType) => {
+      const side = chain.filter(o=>o.option_type===sideType);
+      if (!side.length) return null;
+      const td = buildNakedResult(chain, price, step, sideType, tfCfg2);
+      if (!td) return null;
+
+      const iv = td.iv||0, delta = td.delta||null;
+
+      let breakevenReqPct = null;
+      if (td.mid>0) {
+        const strike_ = parseFloat(td.primaryStrike||0);
+        if (strike_>0) {
+          const isPutA = sideType==='put';
+          const bePrice_a = isPutA ? (strike_ - td.mid) : (strike_ + td.mid);
+          const signedPct = ((bePrice_a / price) - 1) * 100;
+          breakevenReqPct = isPutA ? -Math.abs(signedPct) : Math.abs(signedPct);
+        }
+      }
+
+      const scored = scoreConviction({
+        price, chgPct, chgPctEstimated, optType: sideType, iv, delta, volRatio,
+        strikeVolume: td.volume||0, pos52, dte: dte2,
+        spxChgToday, ndxChgToday, breakevenReqPct,
+        isMorningWindow: isMorning2, fundamentals: fund, now: now2, tf,
+        gexSign: td.gexSign, gexMagnitude01: td.gexMagnitude01,
+        srPosition, srDistPct,
+      });
+
+      return { td, breakevenReqPct, ...scored };
+    };
+
+    const callSide = buildSide('call');
+    const putSide  = buildSide('put');
+    const picked = pickBetterSide(callSide, putSide);
+    if (!picked) return null;
+
+    const { side: optType, winner } = picked;
+    const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2 } = winner;
 
     const expiryDisplay = new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     const isPutReturn = optType === 'put';
@@ -302,7 +370,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
       ticker, score,
       tradeType: td.structureType,
       price:fmtP(price), bid:fmtP(td.bid), ask:fmtP(td.ask), mid:fmtP(td.mid),
-      iv:fmtPct(iv), delta:delta?delta.toFixed(3):'—',
+      iv:fmtPct(td.iv||0), delta:td.delta?td.delta.toFixed(3):'—',
       volume:td.volume||0, oi:td.oi||0,
       expiryDisplay,
       strikeStr: td.strikeStr,
@@ -321,6 +389,14 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg }
       industry:   fund?.industry   || null,
       marketCap:  fund?.market_cap || null,
       earningsDate: fund?.earnings_date || null,
+      // New: visibility into the two-sided decision itself — lets the UI/cron
+      // show "Call won 78 vs Put 61 (gap 17)" instead of presenting the
+      // winning side as if it were the only side ever considered.
+      directionDecision: {
+        otherSideScore: picked.loser ? picked.loser.score : null,
+        gap: picked.gap,
+        isClose: picked.isClose,
+      },
     };
   } catch { return null; }
 }

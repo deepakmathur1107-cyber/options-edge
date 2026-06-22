@@ -51,15 +51,48 @@
  * @param {number|null} p.breakevenReqPct - signed % move required to reach break-even (null if not computable)
  * @param {boolean} p.isMorningWindow - true if within the first 30 min of the regular session
  * @param {{market_cap?:number, sector?:string, earnings_date?:string}|null} p.fundamentals
+ * @param {string} [p.tf] - timeframe key matching TF_CONFIG (e.g. 'Quick (5–14 DTE)', 'LEAP (90–180 DTE)').
+ *   Selects a delta-quality / DTE weighting profile from TF_WEIGHT_PROFILES. Falls back to the
+ *   'Swing (21–45 DTE)' profile (= original, unweighted behavior) if omitted or unrecognized —
+ *   existing callers that don't pass tf get byte-identical scoring to before this param existed.
+ * @param {string|null} [p.gexSign] - accepted for caller compatibility (scanLogic.js computes it),
+ *   but NOT used directionally here — see comment at the gamma-weighted-strike-conviction block
+ *   below for why optType-derived sign isn't a real dealer-positioning signal.
+ * @param {number|null} [p.gexMagnitude01] - gamma-weighted-OI magnitude at the selected strike,
+ *   normalized 0–1 upstream (gexNorm in scanLogic.js). Used as a strike-quality/conviction
+ *   confirmation signal (high concentration = not a thin/orphan strike), not a directional one.
+ * @param {('at_support'|'at_resistance'|'mid_range')|null} [p.srPosition] - from srLevels.js
+ * @param {number|null} [p.srDistPct] - % distance to the relevant near level (whichever srPosition refers to), always positive
  * @param {Date} [p.now]
  * @returns {{score:number, reasons:string[], warnings:string[], hardBlocks:string[]}}
  */
+
+// TF_WEIGHT_PROFILES: scales the two blocks that genuinely behave differently by
+// horizon — delta-quality band and DTE/IV tolerance. A LEAP buyer wants higher
+// delta (closer to stock-replacement) and tolerates high IV less, since vega
+// exposure compounds over months; a scalp/quick trade cares more about getting
+// delta-quality right *for that band* but DTE/IV crush isn't really a concept
+// at 5-14 days the way it is at 90+. Deliberately NOT a full second scoring
+// table (that was the rejected "4 separate models" proposal) — same blocks,
+// same formula shape, just different multipliers/bands per timeframe so one
+// function stays the single source of truth.
+const TF_WEIGHT_PROFILES = {
+  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6 },
+  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0 },
+  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4 },
+  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6 },
+}
+const DEFAULT_TF_PROFILE = TF_WEIGHT_PROFILES['Swing (21–45 DTE)']
+
 function scoreConviction(p) {
   const {
     chgPct, chgPctEstimated, optType, iv, delta, volRatio, strikeVolume,
     pos52, dte, spxChgToday = 0, ndxChgToday = 0, breakevenReqPct,
-    isMorningWindow, fundamentals, now = new Date(),
+    isMorningWindow, fundamentals, now = new Date(), tf,
+    gexSign = null, gexMagnitude01 = null, srPosition = null, srDistPct = null,
   } = p
+
+  const tfProfile = TF_WEIGHT_PROFILES[tf] || DEFAULT_TF_PROFILE
 
   const ivPct = iv * 100
   const isIntraChasing = Math.abs(chgPct) > 2.0 && Math.abs(chgPct) <= 5.0
@@ -161,8 +194,18 @@ function scoreConviction(p) {
   }
 
   // ── Delta quality ─────────────────────────────────────────────────────────
-  if (delta && Math.abs(delta) >= 0.35 && Math.abs(delta) <= 0.55) { score += 10; reasons.push(`Delta ${delta.toFixed(2)} ideal`) }
-  else if (delta && Math.abs(delta) >= 0.25 && Math.abs(delta) <= 0.65) { score += 5; reasons.push(`Delta ${delta.toFixed(2)}`) }
+  // Ideal band shifts by timeframe (tfProfile): Quick/Swing want ~0.35-0.55
+  // (balanced premium buyer), LEAP/Deep LEAP want 0.60-0.90 (stock-replacement,
+  // less extrinsic decay risk). Falls back to the Swing band if tf is unset.
+  {
+    const lo = tfProfile.deltaIdealLo, hi = tfProfile.deltaIdealHi
+    const widerLo = Math.max(0.10, lo - 0.10), widerHi = Math.min(0.95, hi + 0.10)
+    if (delta && Math.abs(delta) >= lo && Math.abs(delta) <= hi) {
+      score += 10 * tfProfile.deltaMult; reasons.push(`Delta ${delta.toFixed(2)} ideal for ${tf || 'this'} timeframe`)
+    } else if (delta && Math.abs(delta) >= widerLo && Math.abs(delta) <= widerHi) {
+      score += 5 * tfProfile.deltaMult; reasons.push(`Delta ${delta.toFixed(2)}`)
+    }
+  }
 
   // ── Strike-specific liquidity ─────────────────────────────────────────────
   if (!isMorningWindow && strikeVolume > 500) { score += 5; reasons.push(`${strikeVolume} contracts on strike`) }
@@ -179,8 +222,70 @@ function scoreConviction(p) {
     else if (pos52 > 0.80) { score -= 8; warnings.push('Near 52w high — puts against trend, trading in uptrend') }
   }
 
+  // ── Gamma-weighted strike conviction ──────────────────────────────────────
+  // CORRECTED framing: approxGEX's sign in scanLogic.js is just optType
+  // (call=+1, put=-1) times a gamma-weighted-OI magnitude — it is NOT net
+  // dealer positioning (that would require aggregating both calls AND puts
+  // at the strike with assumptions about which side market makers are short,
+  // data this function doesn't have). For a single already-selected contract,
+  // gexSign is always positive for a call and always negative for a put by
+  // construction — using it as a directional "amplifies vs. dampens" signal
+  // would just reward/penalize every call identically and every put
+  // identically, which isn't a real signal at all. Caught and corrected
+  // before shipping — see conversation history if this needs re-deriving.
+  //
+  // What gexMagnitude01 DOES legitimately tell you: this specific strike has
+  // meaningfully more open-interest-weighted gamma than the chain average —
+  // i.e. it's a strike other traders have actually concentrated into, not a
+  // thin/orphan strike that happened to be closest to the target price. That's
+  // a real, if modest, conviction signal: confirms strike quality beyond what
+  // scoreStrike's raw OI/volume ratio already captures, since it also folds
+  // in IV and delta. Treated here as a small same-direction-for-both-sides
+  // bonus, not a call-vs-put directional tilt.
+  if (gexMagnitude01 != null && gexMagnitude01 > 0.4) {
+    const bonus = Math.round(5 * gexMagnitude01)
+    score += bonus
+    reasons.push(`High open-interest concentration at this strike — not a thin/orphan strike`)
+  }
+
+  // ── Support/resistance structure ──────────────────────────────────────────
+  // srPosition/srDistPct come from srLevels.js (swing highs/lows + Fib + pivots,
+  // already computed and shown in the UI info panel today, but never fed into
+  // the score). A call bought right at overhead resistance, or a put bought
+  // right at support, is buying into the level most likely to reject the move —
+  // the same "late/against structure" problem the chasing/52w checks catch from
+  // other angles, but neither of those sees the *level* itself.
+  if (srPosition && srDistPct != null) {
+    if (optType === 'call') {
+      if (srPosition === 'at_resistance') {
+        score -= 10
+        warnings.push(`Price is at/near resistance (${srDistPct.toFixed(1)}% away) — calls face the level most likely to reject this move`)
+      } else if (srPosition === 'at_support') {
+        score += 6
+        reasons.push(`Bouncing off support (${srDistPct.toFixed(1)}% away) — room to run before the next resistance`)
+      }
+    } else {
+      if (srPosition === 'at_support') {
+        score -= 10
+        warnings.push(`Price is at/near support (${srDistPct.toFixed(1)}% away) — puts face the level most likely to bounce`)
+      } else if (srPosition === 'at_resistance') {
+        score += 6
+        reasons.push(`Rejecting off resistance (${srDistPct.toFixed(1)}% away) — room to fall before the next support`)
+      }
+    }
+  }
+
   // ── DTE / IV incompatibility ──────────────────────────────────────────────
-  if (dte < 14 && iv > 0.45) { score -= 12; warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`) }
+  // Penalty scaled by dteIvPenaltyMult: LEAP/Deep LEAP carry meaningful vega
+  // over months, so paying high IV up front matters more for them than for a
+  // 5-14 day Quick play where theta dominates and IV crush has less runway to
+  // hurt. dte<14 trigger condition itself is unchanged — Quick trades sit right
+  // at that boundary already and shouldn't get an easier pass on the trigger,
+  // only on the size of the penalty if it fires.
+  if (dte < 14 && iv > 0.45) {
+    score -= Math.round(12 * tfProfile.dteIvPenaltyMult)
+    warnings.push(`DTE ${dte} + IV ${ivPct.toFixed(0)}% = theta+IV crush. Need 21+ DTE at this IV.`)
+  }
   else if (dte >= 21 && dte <= 60) { score += 5; reasons.push(`${dte} DTE — good buffer`) }
 
   // ── Break-even reality ────────────────────────────────────────────────────
@@ -209,7 +314,12 @@ function scoreConviction(p) {
   }
 
   // ── No-catalyst cap ───────────────────────────────────────────────────────
-  const hasRealSignal = Math.abs(chgPct) >= 1.5 || pos52 > 0.85 || isEarningsGap
+  // FIX (symmetry): originally only checked pos52 > 0.85 (near 52w HIGH), which
+  // only ever counts as a "real signal" for calls. A flat-on-the-day stock sitting
+  // at a fresh 52w LOW — a textbook bearish continuation setup — never tripped
+  // hasRealSignal and got capped at 72 regardless of how good the put thesis was.
+  // Catalyst detection must check both sides of the range, not just the upside.
+  const hasRealSignal = Math.abs(chgPct) >= 1.5 || pos52 > 0.85 || pos52 < 0.15 || isEarningsGap
   if (!hasRealSignal && hardBlocks.length === 0) {
     score = Math.min(score, 72)
     warnings.push('No identifiable catalyst — technical signals confirm structure but cannot predict direction. Know the specific WHY before entering.')
@@ -222,6 +332,38 @@ function scoreConviction(p) {
   score = Math.min(95, Math.max(20, score))
 
   return { score, reasons, warnings, hardBlocks }
+}
+
+// pickBetterSide: given a fully-built scoreConviction result for the call side
+// and the put side (each already scored against ITS OWN selected contract —
+// different strike/IV/delta per side, since the best call strike and best put
+// strike are rarely the same contract), decides which side wins and by how much.
+//
+// Deliberately NOT responsible for building either side's contract data —
+// that requires buildNakedResult (lives in scanLogic.js, needs the live chain),
+// and duplicating contract selection here would just recreate the
+// three-copies-drifted problem this file already exists to prevent. Callers
+// (scanTicker in scanLogic.js, runScan/scanOneTicker in App.jsx) build both
+// sides' td/iv/delta/breakeven from the real chain, score each through
+// scoreConviction, and pass both finished results in here to decide.
+//
+// minGapToPreferDirection: if the two sides are within this many points of
+// each other, this is a low-conviction/ambiguous setup either way — caller can
+// use isClose to decide whether to surface it as lower-confidence or skip it,
+// rather than silently presenting whichever side happened to score one point
+// higher as if it were a clear signal.
+function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6 } = {}) {
+  if (!callResult && !putResult) return null
+  if (!callResult) return { side: 'put', winner: putResult, loser: null, gap: null, isClose: false }
+  if (!putResult)  return { side: 'call', winner: callResult, loser: null, gap: null, isClose: false }
+
+  const gap = Math.abs(callResult.score - putResult.score)
+  const isClose = gap < minGapToPreferDirection
+  const side = callResult.score >= putResult.score ? 'call' : 'put'
+  const winner = side === 'call' ? callResult : putResult
+  const loser  = side === 'call' ? putResult  : callResult
+
+  return { side, winner, loser, gap, isClose }
 }
 
 // safeIV: Tradier occasionally returns mid_iv as the literal string 'NaN' when
@@ -243,4 +385,4 @@ function safeIV(o, fallback=0) {
   return fallback
 }
 
-module.exports = { scoreConviction, safeIV }
+module.exports = { scoreConviction, safeIV, pickBetterSide, TF_WEIGHT_PROFILES }

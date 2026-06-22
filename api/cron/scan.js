@@ -16,6 +16,7 @@
 
 const { TF_CONFIG, pickExpiry, scanTicker, safeChgPct } = require('../_lib/scanLogic')
 const { getFundamentals } = require('../_lib/fundamentals')
+const { getSRLevels } = require('../_lib/srLevels')
 const { SP500 } = require('../_lib/sp500')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -237,7 +238,7 @@ module.exports = async function handler(req, res) {
       const chain = await getChain(ticker, expiryRaw, rateTracker)
       if (!chain.length) { scanned++; return null }
 
-      const r = scanTicker({ ticker, quote, expDates, chain, tf, fund: null, spxChg, ndxChg })
+      const r = scanTicker({ ticker, quote, expDates, chain, tf, fund: null, spxChg, ndxChg, srLevels: null })
       scanned++
       if (!r) return null
 
@@ -247,12 +248,32 @@ module.exports = async function handler(req, res) {
       // gate only wrapped the fundamentals fetch, not the write itself.
       if (r.score < MIN_WRITE_SCORE) return null
 
-      // Fundamentals only fetched for tickers worth showing — same rationale
-      // as the earlier client-side fix: don't spend API budget on misses.
-      const fund = await getFundamentals(ticker).catch(() => null)
-      if (fund) {
-        // Re-run with fundamentals to apply the large-cap/earnings adjustments
-        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg })
+      // Fundamentals + S/R levels only fetched for tickers worth showing — same
+      // rationale as the earlier client-side fix: don't spend API budget on
+      // misses. Gated on the FIRST (pre-fundamentals, pre-S/R) score, same point
+      // fundamentals was already gated at — see scanTicker's two-sided scoring
+      // comment for why that means a ticker fundamentals later pushes from 58
+      // to 61 won't retroactively get S/R either; accepted as a minor edge case
+      // rather than a second full re-score pass just to re-evaluate the gate.
+      //
+      // NOTE — rate-limit visibility gap: getSRLevels makes its own Tradier
+      // /markets/history call via a raw fetch() in srLevels.js, NOT through this
+      // file's tFetch/rateTracker wrapper. That means S/R fetches are invisible
+      // to the rate-check instrumentation above (recordRateHeaders/minAvailable)
+      // — exactly the kind of untracked API consumer that instrumentation was
+      // built to catch after the previous 429 incident. Only ~qualified tickers
+      // (score≥60) hit this per run, so volume is much lower than the 342-ticker
+      // quote/chain calls, but it is a real blind spot worth closing in a
+      // follow-up (route srLevels.js through the shared tFetch helper) rather
+      // than silently accepting it indefinitely.
+      const [fund, srLevels] = await Promise.all([
+        getFundamentals(ticker).catch(() => null),
+        getSRLevels(ticker).catch(() => null),
+      ])
+      if (fund || srLevels) {
+        // Re-run with fundamentals AND S/R to apply large-cap/earnings
+        // adjustments and the S/R structure scoring block.
+        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels })
         if (r2) Object.assign(r, r2)
       }
 
@@ -270,6 +291,7 @@ module.exports = async function handler(req, res) {
         reasons: r.reasons, warnings: r.warnings, hard_blocks: r.hardBlocks,
         sector: r.sector, industry: r.industry, market_cap: r.marketCap,
         earnings_date: r.earningsDate, expiry_display: r.expiryDisplay,
+        direction_decision: r.directionDecision || null,
         scanned_at: scannedAt.toISOString(), expires_at: expiresAt.toISOString(),
       }
 
