@@ -1002,6 +1002,16 @@ export default function App(props={}) {
   const [tickerBrief, setTickerBrief] = useState(null)
   const [srLoading,   setSrLoading]   = useState(false)
   const [debugLog,   setDebugLog]   = useState([])
+  // activeScanTickerRef: tracks which ticker the MOST RECENTLY STARTED scan
+  // was for. Used to guard the async S/R + AI brief fetch in runScan (see
+  // that fetch's comment below) — without this, scanning AMZN then quickly
+  // scanning NFLX before AMZN's slower /api/brief response lands would let
+  // AMZN's stale brief overwrite NFLX's freshly-cleared display once it
+  // finally resolves, since nothing previously checked whether a response
+  // was still for the ticker currently on screen. A ref (not state) is
+  // correct here specifically because this needs to be read synchronously
+  // inside a .then() callback without triggering a re-render itself.
+  const activeScanTickerRef = useRef('')
 
   // ── auto-scanner ──
   const [autoOn,      setAutoOn]      = useState(false)
@@ -1133,11 +1143,68 @@ useEffect(() => {
   }, [])
 
   // ─── Single ticker scan ───────────────────────────────────────────────────
+  // fetchSrAndBrief: fetches S/R levels + AI commentary for a ticker in the
+  // background (non-blocking — runScan doesn't await this, the trade card
+  // itself renders immediately with the score/strike/entry already known).
+  //
+  // STALENESS GUARD: checks activeScanTickerRef.current === ticker before
+  // applying EITHER setSrData or setTickerBrief. Without this, scanning
+  // AMZN (kicks off this fetch) then quickly scanning NFLX before AMZN's
+  // response lands would let AMZN's stale brief overwrite NFLX's display
+  // once it finally resolves — confirmed live (see conversation history:
+  // AMZN commentary shown under an NFLX trade card). The ref is updated
+  // synchronously at the start of every runScan call, before either the
+  // cache-hit or live path begins its async work, so by the time ANY
+  // previous call's fetch resolves, the ref will already point to whatever
+  // ticker is actually current — exactly what this check needs.
+  const fetchSrAndBrief = ({ ticker, price, chgPct, iv, dte, score, tradeType }) => {
+    const requestTicker = ticker
+    getAuthToken().then(authTok => {
+      const headers = authTok ? { Authorization: `Bearer ${authTok}` } : {}
+      const qp = new URLSearchParams({
+        ticker: requestTicker,
+        price:     Number(price||0).toFixed(2),
+        chgPct:    Number(chgPct||0).toFixed(2),
+        iv:        String(iv),
+        dte:       String(dte),
+        score:     String(score),
+        tradeType: tradeType || 'Call',
+      })
+      fetch(`/api/brief?${qp}`, { headers })
+        .then(r => r.json())
+        .then(d => {
+          if (activeScanTickerRef.current !== requestTicker) return  // stale — a newer scan has since started
+          if (d.sr)    setSrData(d.sr)
+          if (d.brief) setTickerBrief(d.brief)
+        })
+        .catch(e => console.warn('[SR/Brief]', e.message))
+        .finally(() => {
+          if (activeScanTickerRef.current === requestTicker) setSrLoading(false)
+        })
+    }).catch(() => {
+      if (activeScanTickerRef.current === requestTicker) setSrLoading(false)
+    })
+  }
+
   const runScan = async()=>{
     if (!scanTicker.trim()) return
     const log=[]; const dbg=m=>{log.push(m);setDebugLog([...log])}
     setScanning(true);setScanResult(null);setScanErr('');setDebugLog([])
     const ticker=scanTicker.toUpperCase()
+    // Marks this ticker as the one any async response should check itself
+    // against before applying — set unconditionally at the start of every
+    // scan (cache-hit or live), BEFORE either path's async work begins.
+    activeScanTickerRef.current = ticker
+    // FIX: previously the cache-hit path below returned early without ever
+    // touching srData/tickerBrief — confirmed live: scan AMZN (live path,
+    // populates tickerBrief with AMZN's AI commentary) → scan NFLX where a
+    // fresh cache entry exists (<20min old) → cache-hit path returns
+    // immediately, AMZN's brief is still sitting in state, displayed
+    // underneath the new NFLX trade card as if it were NFLX's commentary.
+    // Clearing unconditionally here (before the cache-check branch) means
+    // EVERY scan starts from a clean slate regardless of which path
+    // (cache-hit or live) it ultimately takes.
+    setSrData(null); setTickerBrief(null)
 
     // ── Check the cron-populated cache first ────────────────────────────────
     // If a fresh (<20min old) result already exists for this exact ticker+
@@ -1182,6 +1249,33 @@ useEffect(() => {
             sector: row.sector, industry: row.industry, marketCap: row.market_cap,
             earningsDate: row.earnings_date,
             fromCache: true, cachedAt: row.scanned_at,
+          })
+          // Cache-hit results previously showed NO commentary at all (this
+          // path returned immediately, before the brief fetch that exists
+          // further down on the live path). Fetching it here too means cache
+          // hits get the same AI commentary live scans do, just via the same
+          // non-blocking background pattern. Guarded by activeScanTickerRef
+          // (see fetchSrAndBrief) so a slow response can't land after the
+          // user has already moved on to a different ticker.
+          //
+          // NOTE: scan_results doesn't store a raw underlying price (mid/
+          // bid/ask are pre-formatted display strings like "$4.72", and
+          // chg_pct is stored as "0.30%" — see scanTicker's return shape in
+          // api/_lib/scanLogic.js). /api/brief defaults price/chgPct to 0 if
+          // unparseable rather than throwing, so this degrades gracefully
+          // (a less-precise brief) rather than breaking — but it's an honest
+          // approximation, not the exact live price at scan time. Parsing
+          // the formatted strings back to numbers here rather than passing
+          // raw garbage or silently sending 0.
+          setSrLoading(true)
+          fetchSrAndBrief({
+            ticker,
+            price: parseFloat(String(row.mid||'0').replace(/[^0-9.\-]/g,'')) || 0,
+            chgPct: parseFloat(String(row.chg_pct||'0').replace(/[^0-9.\-]/g,'')) || 0,
+            iv: row.iv || '0',
+            dte: row.dte || '30',
+            score: row.score || '50',
+            tradeType: row.trade_type || 'Call',
           })
           setScanning(false)
           return
@@ -1426,28 +1520,15 @@ useEffect(() => {
       score=Math.min(95,Math.max(20,score))
       dbg(`   ✓ Conviction: ${score}%`)
 
-      // Fetch S/R levels + AI brief in background (non-blocking)
-      setSrData(null); setTickerBrief(null); setSrLoading(true)
-      getAuthToken().then(authTok => {
-        const headers = authTok ? { Authorization: `Bearer ${authTok}` } : {}
-        const qp = new URLSearchParams({
-          ticker,
-          price:     price.toFixed(2),
-          chgPct:    chgPct.toFixed(2),
-          iv:        String(iv),
-          dte:       String(dte),
-          score:     String(score),
-          tradeType: tradeData.structureType || 'Call',
-        })
-        fetch(`/api/brief?${qp}`, { headers })
-          .then(r => r.json())
-          .then(d => {
-            if (d.sr)    setSrData(d.sr)
-            if (d.brief) setTickerBrief(d.brief)
-          })
-          .catch(e => console.warn('[SR/Brief]', e.message))
-          .finally(() => setSrLoading(false))
-      }).catch(() => setSrLoading(false))
+      // Fetch S/R levels + AI brief in background (non-blocking). See
+      // fetchSrAndBrief's own comment for the staleness guard — same helper
+      // now used by both this live path and the cache-hit path above, so
+      // there's one guarded implementation instead of two that could drift.
+      setSrLoading(true)
+      fetchSrAndBrief({
+        ticker, price, chgPct, iv: String(iv), dte: String(dte),
+        score: String(score), tradeType: tradeData.structureType || 'Call',
+      })
 
       dbg(`   ✓ Structure: ${tradeData.structureType}`)
       dbg(`   ✓ Strike: ${tradeData.strikeStr} | Entry: ${tradeData.entry}`)
