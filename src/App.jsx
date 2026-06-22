@@ -1267,12 +1267,25 @@ useEffect(() => {
           // approximation, not the exact live price at scan time. Parsing
           // the formatted strings back to numbers here rather than passing
           // raw garbage or silently sending 0.
+          //
+          // FIX: row.iv is ALSO a formatted percent string ("35.9%", per
+          // scanTicker's `iv: fmtPct(iv)`) — NOT a raw decimal. Confirmed
+          // live: tickerBrief.js's prompt builder does `parseFloat(iv)*100`,
+          // expecting a raw decimal (0.359) the same way the LIVE path's
+          // `iv: String(iv)` sends it (tradeData.iv is the raw decimal there).
+          // Originally passed row.iv through unconverted here on the
+          // cache-hit path → parseFloat("35.9%")=35.9 → *100 = 3590 →
+          // AI commentary read "extreme 3590% IV" while the trade card's own
+          // IV panel correctly showed 35.9% from the same underlying value —
+          // caught during QA before this shipped to production. Strip the
+          // '%' and divide by 100 so this path sends the same decimal shape
+          // the live path always has.
           setSrLoading(true)
           fetchSrAndBrief({
             ticker,
             price: parseFloat(String(row.mid||'0').replace(/[^0-9.\-]/g,'')) || 0,
             chgPct: parseFloat(String(row.chg_pct||'0').replace(/[^0-9.\-]/g,'')) || 0,
-            iv: row.iv || '0',
+            iv: (parseFloat(String(row.iv||'0').replace(/[^0-9.\-]/g,'')) || 0) / 100,
             dte: row.dte || '30',
             score: row.score || '50',
             tradeType: row.trade_type || 'Call',
