@@ -1722,23 +1722,25 @@ useEffect(() => {
     return (n < 5 ? n * 100 : n).toFixed(0) + '%'   // <5 = raw decimal, else already percent-scale
   }
 
-  // buildScanAlert: shared content builder for both the TG-button send (real
-  // Telegram markdown, rendered bold/italic by Telegram's API) and the COPY
-  // button (plain text pasted manually — Telegram's app does NOT reformat
-  // already-typed asterisks, so markdown syntax there shows as literal '*'
-  // characters; confirmed live). Field order and content finalized after
-  // direct feedback on a real sent message (see conversation): header alone
-  // first, then what/where/when (trade type, strike, expiry), then price to
-  // act on (entry range+mid), then target/stop, then IV and reasoning
-  // de-emphasized in italics (Telegram has no real font-size control —
-  // italic is the closest available visual de-emphasis vs. the bold
-  // headline fields), then a closing app link so a forwarded/shared message
-  // is traceable back to the source even without app context.
+  // buildScanAlert: ONE shared template, built once with Telegram markdown
+  // markers and emoji. forCopy strips those markers/emoji at the end rather
+  // than maintaining a second hand-written template — this is the fix for
+  // a real structural drift: an earlier version had two independently
+  // written templates (TG markdown vs. COPY plain-text) that drifted apart
+  // on actual CONTENT, not just formatting — confirmed live when the COPY
+  // output was missing the price line entirely while the TG version had it.
+  // Building from one string and sanitizing for forCopy makes that kind of
+  // drift structurally impossible going forward.
   //
-  // forCopy=true returns the plain-text variant (no asterisks) for the
-  // COPY button; forCopy=false (default) returns the markdown variant for
-  // the TG-button send. Both built from the same fields so they can't drift
-  // apart on substance, only on formatting syntax.
+  // Field order and content finalized after direct feedback on real sent
+  // messages (see conversation): header alone first, then what/where/when
+  // (strike, expiry), then price, then entry, then target/stop, then IV +
+  // skip-flag count and reasoning de-emphasized (italic — Telegram has no
+  // real font-size control), then a closing app link so a forwarded/shared
+  // message is traceable back to the source even without app context.
+  // chgPct/today's-move was deliberately removed from the price line
+  // entirely (not a dedup fix — explicit decision regardless of whether a
+  // reasons-list entry also states the day's move).
   const APP_LINK = 'optionsedgeflow.com'
   const buildScanAlert = (r, forCopy = false) => {
   const sym    = r.ticker||r.sym||'—'
@@ -1748,16 +1750,12 @@ useEffect(() => {
   const ivPct  = normalizeIvPct(r.iv)
   // priceApprox (alertHistory rows only) is the OPTION's own mid price, not
   // the underlying stock — scan_results has no stock-price column at all.
-  // Labeled explicitly as "Option" rather than "Stock" so it's never
+  // Labeled explicitly as "option" rather than left ambiguous so it's never
   // confused with the underlying's price. r.price (set by scanOneTicker/
   // runScan's live paths) IS the real stock price where available — prefer
   // that, fall back to the labeled option-price approximation, never show
   // a bare "undefined" the way the original template did.
-  const priceLine = r.price
-    ? `${r.price} (${r.chgPct||'—'} today)`
-    : r.priceApprox
-      ? `${r.priceApprox} option (${r.chgPct||'—'} today)`
-      : (r.chgPct || '—') + ' today'
+  const priceLine = r.price || (r.priceApprox ? `${r.priceApprox} option` : '—')
   // Filters out any reason that just restates the dedicated IV line above
   // it (e.g. "IV 54% — moderate") — confirmed live duplication on a real
   // $ORCL alert showing "IV 54%" then "IV 54% — moderate" two lines later,
@@ -1767,19 +1765,7 @@ useEffect(() => {
     ? `${r.hardBlocks.length} skip flag(s) — see app for details`
     : null
 
-  if (forCopy) {
-    return `${isBear?'PUT':'CALL'} - ${sym}
-Strike ${r.strikeStr} · Exp ${r.expiryDisplay}
-Entry ${r.entry}
-Target ${r.target} | Stop ${r.stop}
-
-IV ${ivPct}${flagLine ? ' · ' + flagLine : ''}
-${topReasons.length ? topReasons.map(x=>'- '+x).join('\n') : ''}
-
-${APP_LINK} · Not financial advice`
-  }
-
-  return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
+  const msg = `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
 📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
 💰 ${priceLine}
@@ -1790,7 +1776,29 @@ _IV ${ivPct}${flagLine ? ' · ' + flagLine : ''}_
 ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
 🔗 ${APP_LINK} · _Not financial advice_`
+
+  if (!forCopy) return msg
+
+  // Plain-text sanitization for the COPY button: strip markdown markers
+  // (Telegram's app does NOT reformat already-typed asterisks/underscores
+  // when pasted manually — confirmed live, they show as literal characters)
+  // and strip emoji, since emoji-as-bullets read oddly without Telegram's
+  // own rendering context. Structure/content is otherwise byte-for-byte
+  // the same template — this is sanitization, not a second template.
+  //
+  // CAUGHT BEFORE SHIPPING: an earlier version of this also ran
+  // .replace(/^\s+/gm, ...) intending to clean up any leading space left
+  // by emoji removal — but with the multiline flag, ^\s+ also matches a
+  // blank separator line's own newline, which collapsed every blank line
+  // in the message (confirmed via isolated test: 7-line spaced message
+  // became 5 lines with no blank separators at all). Removed — the emoji
+  // regex's own trailing \s? already consumes the one space after each
+  // emoji; nothing else needs stripping.
+  return msg
+    .replace(/[*_]/g, '')                     // bold/italic markers
+    .replace(/[🔴📉🟢📈📌💰📊🎯🛑🔗]\s?/g, '')   // emoji used as line markers
 }
+
 
 
   // ─── Auto scanner ─────────────────────────────────────────────────────────
