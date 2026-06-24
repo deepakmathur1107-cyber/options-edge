@@ -2381,8 +2381,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            them. Nothing here removes or restyles the desktop-width rules
            that already exist elsewhere in this file; these are additive
            rules layered on top of the same elements. ── */
-        .dash-reads-grid{display:grid;grid-template-columns:1fr;gap:10px}
-        @media(min-width:768px){.dash-reads-grid{grid-template-columns:1fr 1fr;gap:14px}}
+
+        /* ── Reversal: News/Price now side-by-side at ALL widths, including
+           mobile, per explicit instruction. This reintroduces the original
+           squeeze risk (the literal bug reported at the start of this work),
+           so it's paired with mobile-only size/spacing tightening below —
+           smaller eyebrow label, smaller bias word, and the refresh badge
+           moved below the label instead of sharing its row — specifically
+           to avoid recreating that overlap at ~360-390px widths. Desktop
+           sizing is untouched: these font/padding rules only apply inside
+           the same <768px query as the rest of this mobile block. ── */
+        .dash-reads-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        @media(min-width:768px){.dash-reads-grid{gap:14px}}
         .dash-evidence-grid{display:grid;grid-template-columns:1fr;gap:14px}
         @media(min-width:768px){.dash-evidence-grid{grid-template-columns:1fr 1fr;gap:20px}}
         .dash-spx-ndx-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:16px}
@@ -2397,6 +2407,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            style and create a conflict; omitting it is the safer choice. */
         .dash-read-desc, .dash-read-risk, .dash-price-bar{display:none}
         @media(min-width:768px){.dash-read-desc{display:block}.dash-read-risk{display:block}.dash-price-bar{display:block}}
+
+        /* ── Mobile-only tightening for the now-side-by-side read cards ──
+           Targets only elements inside .dash-reads-grid, only below 768px.
+           Desktop's existing inline fontSize/padding values are untouched —
+           these rules just don't apply once the viewport clears 768px. ── */
+        @media(max-width:767px){
+          .dash-reads-grid > div{padding:12px 10px!important}
+          .dash-reads-grid .dash-read-label{font-size:9px!important;letter-spacing:0.3px!important}
+          .dash-reads-grid .dash-read-bias{font-size:16px!important}
+          .dash-reads-grid .dash-refresh-row{flex-direction:column!important;align-items:flex-start!important;gap:4px!important}
+          .dash-reads-grid .dash-refresh-btn{font-size:9px!important;padding:2px 6px!important}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -2472,7 +2494,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           <div className="dash-reads-grid" style={{marginBottom:8}}>
             {/* News Read */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:'18px 20px'}}>
-              <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>
+              <div className="dash-read-label" style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:C.blue}}/>NEWS READ · AI reading headlines
               </div>
               <div className="dash-read-desc" style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
@@ -2480,7 +2502,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
               {briefData?.why ? (
                 <>
-                  <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:newsBias==='BULLISH'?C.green:newsBias==='BEARISH'?C.red:C.orange,marginBottom:8}}>
+                  <div className="dash-read-bias" style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:newsBias==='BULLISH'?C.green:newsBias==='BEARISH'?C.red:C.orange,marginBottom:8}}>
                     {briefData.bias || 'Neutral'}
                   </div>
                   <div className="dash-read-desc" style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:10}}>{briefData.why}</div>
@@ -2495,11 +2517,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
             {/* Price Read */}
             <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:12,padding:'18px 20px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700}}>
+              <div className="dash-refresh-row" style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div className="dash-read-label" style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700}}>
                   <span style={{width:6,height:6,borderRadius:'50%',background:C.orange}}/>PRICE READ · SPX/NDX % change
                 </div>
-                <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
+                <button className="hv dash-refresh-btn" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
                   style={{fontSize:10,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}50`,padding:'3px 9px',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontWeight:600}}>
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}
                 </button>
@@ -2510,7 +2532,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               {marketConviction ? (
                 <>
                   <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:8}}>
-                    <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
+                    <div className="dash-read-bias" style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
                     <div style={{fontSize:12,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{marketConviction.score}%</div>
                   </div>
                   <div className="dash-price-bar" style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
