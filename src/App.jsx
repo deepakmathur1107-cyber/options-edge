@@ -1707,39 +1707,98 @@ useEffect(() => {
     setFutLoading(false)
   }
 
-  const buildScanAlert = r => {
+  // normalizeIvPct: r.iv arrives in two different shapes depending on which
+  // caller built the source object — a formatted string like "40.2%"
+  // (scanOneTicker/scanResult/indexAlerts, all via fmtPct) or a raw decimal
+  // like 0.402 (alertHistory, fixed earlier this session). Detects which
+  // shape it actually got rather than assuming one, so this stays correct
+  // regardless of which of buildScanAlert's four call sites is using it —
+  // confirmed by checking all four before writing this rather than guessing.
+  const normalizeIvPct = (iv) => {
+    if (iv == null || iv === '') return '—'
+    if (typeof iv === 'string' && iv.includes('%')) return iv   // already formatted, e.g. "40.2%"
+    const n = parseFloat(iv)
+    if (isNaN(n)) return '—'
+    return (n < 5 ? n * 100 : n).toFixed(0) + '%'   // <5 = raw decimal, else already percent-scale
+  }
+
+  // buildScanAlert: ONE shared template, built once with Telegram markdown
+  // markers and emoji. forCopy strips those markers/emoji at the end rather
+  // than maintaining a second hand-written template — this is the fix for
+  // a real structural drift: an earlier version had two independently
+  // written templates (TG markdown vs. COPY plain-text) that drifted apart
+  // on actual CONTENT, not just formatting — confirmed live when the COPY
+  // output was missing the price line entirely while the TG version had it.
+  // Building from one string and sanitizing for forCopy makes that kind of
+  // drift structurally impossible going forward.
+  //
+  // Field order and content finalized after direct feedback on real sent
+  // messages (see conversation): header alone first, then what/where/when
+  // (strike, expiry), then price, then entry, then target/stop, then IV +
+  // skip-flag count and reasoning de-emphasized (italic — Telegram has no
+  // real font-size control), then a closing app link so a forwarded/shared
+  // message is traceable back to the source even without app context.
+  // chgPct/today's-move was deliberately removed from the price line
+  // entirely (not a dedup fix — explicit decision regardless of whether a
+  // reasons-list entry also states the day's move).
+  const APP_LINK = 'optionsedgeflow.com'
+  const buildScanAlert = (r, forCopy = false) => {
   const sym    = r.ticker||r.sym||'—'
   const isBear = (r.tradeType||'').toLowerCase().includes('put')||
                  (r.tradeType||'').toLowerCase().includes('bear')
   const em     = isBear?'🔴📉':'🟢📈'
-  const legsBlock = r.legsList?.length
-    ? `\n🔧 *Legs:*\n${r.legsList.map(l=>'  '+l).join('\n')}`
-    : ''
-  const blockWarn = r.hardBlocks?.length
-    ? `\n🚫 *SKIP FLAGS:*\n${r.hardBlocks.map(b=>'  ⚠ '+b).join('\n')}`
-    : ''
-  const beSign  = r.breakevenIsPut || (r.tradeType||'').toLowerCase().includes('put') ? '−' : '+'
-  const beAbsPct = r.breakevenPct != null ? Math.abs(parseFloat(r.breakevenPct)).toFixed(1) : null
-  const beBlock = r.breakeven
-    ? `\n📊 *Break-even:* $${r.breakeven} (${beSign}${beAbsPct}% required) · DTE: ${r.dte}`
-    : ''
-  return `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
+  const ivPct  = normalizeIvPct(r.iv)
+  // Filters out any reason that just restates the dedicated IV line above
+  // it (e.g. "IV 54% — moderate") — confirmed live duplication on a real
+  // $ORCL alert showing "IV 54%" then "IV 54% — moderate" two lines later,
+  // wasting one of only 3 reason slots on a fact already stated.
+  const topReasons = (r.reasons||[]).filter(x => !/^IV\s+\d/i.test(x)).slice(0, 3)
+  const flagLine = r.hardBlocks?.length
+    ? `${r.hardBlocks.length} skip flag(s) — see app for details`
+    : null
 
-🎯 *Conviction: ${r.score}%* | Grade: ${r.grade||'—'}
-💰 *Stock:* ${r.price} (${r.chgPct} today)
-📌 *Strike:* ${r.strikeStr} | Expiry: ${r.expiryDisplay}
+  // NOTE: a price line (real stock price r.price, or a labeled option-mid
+  // approximation r.priceApprox for alertHistory rows) used to appear here.
+  // Removed entirely per explicit decision — the $2.08-labeled-"option"
+  // fallback in particular read as confusing (easy to mistake for the
+  // underlying's price even with the "option" label), and rather than
+  // keep it only for the r.price case and drop it only for r.priceApprox,
+  // the decision was to drop price from this message ENTIRELY, no
+  // exceptions, for both the real-price and approximated-price cases.
+  const msg = `${em} *${(r.tradeType||'OPTION').toUpperCase()} — $${sym}*
 
-📊 *Entry:* ${r.entry}
-🎯 *Target:* ${r.target}
-🛑 *Stop:* ${r.stop}${beBlock}${legsBlock}${blockWarn}
+📌 ${r.strikeStr} · Exp ${r.expiryDisplay}
+📊 Entry: ${r.entry}
+🎯 Target: ${r.target}  🛑 Stop: ${r.stop}
 
-📡 *Chain:* IV: ${r.iv} | Δ ${r.delta} | Bid: ${r.bid} | Ask: ${r.ask}
+_IV ${ivPct}${flagLine ? ' · ' + flagLine : ''}_
+${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
-✅ *Why:*
-${(r.reasons||[]).map(x=>'• '+x).join('\n')||'• Momentum setup'}
+🔗 ${APP_LINK} · _Not financial advice_`
 
-_Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
+  if (!forCopy) return msg
+
+  // Plain-text sanitization for the COPY button: strip markdown markers
+  // (Telegram's app does NOT reformat already-typed asterisks/underscores
+  // when pasted manually — confirmed live, they show as literal characters)
+  // and strip emoji, since emoji-as-bullets read oddly without Telegram's
+  // own rendering context. Structure/content is otherwise byte-for-byte
+  // the same template — this is sanitization, not a second template.
+  //
+  // CAUGHT BEFORE SHIPPING: an earlier version of this also ran
+  // .replace(/^\s+/gm, ...) intending to clean up any leading space left
+  // by emoji removal — but with the multiline flag, ^\s+ also matches a
+  // blank separator line's own newline, which collapsed every blank line
+  // in the message (confirmed via isolated test: 7-line spaced message
+  // became 5 lines with no blank separators at all). Removed — the emoji
+  // regex's own trailing \s? already consumes the one space after each
+  // emoji; nothing else needs stripping.
+  return msg
+    .replace(/[*_]/g, '')                     // bold/italic markers
+    .replace(/[🔴📉🟢📈📌💰📊🎯🛑🔗]\s?/g, '')   // emoji used as line markers
 }
+
+
 
   // ─── Auto scanner ─────────────────────────────────────────────────────────
   // ── scanOneTicker — unified scoring with manual runScan ──────────────────────
@@ -2013,6 +2072,19 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
         entry: row.entry, target: row.target, stop: row.stop,
         bid: row.bid, ask: row.ask, mid: row.mid, delta: row.delta,
+        // FIX: this object never had a `price` field at all — scan_results
+        // doesn't store the underlying stock price, only the option's own
+        // bid/ask/mid (already formatted strings like "$7.20"). buildScanAlert
+        // reads r.price directly into the Telegram message's "Stock:" line,
+        // so with no field here it rendered literally as "undefined" —
+        // confirmed live via a copy-pasted $ORCL alert. row.mid (the OPTION
+        // price, not the stock price) is the only price-shaped data this
+        // object has access to; using it as a labeled approximation per
+        // explicit decision rather than leaving the field missing. The
+        // trimmed buildScanAlert template (see below) labels this clearly
+        // as the option price, not the stock price, to avoid the confusion
+        // a generic "Stock:" label would create with an option-price value.
+        priceApprox: row.mid,
         // FIX: row.iv is a formatted percent string from scan_results
         // (scanTicker's `iv: fmtPct(iv)` → "40.2%"), not a raw decimal.
         // The original guard here (`parseFloat(row.iv)`) correctly avoided
@@ -2298,6 +2370,33 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
            this scoped <style> tag doesn't exist in the DOM on routes that
            don't render App.jsx (e.g. /app/trades), so the rule needs to live
            somewhere truly global instead. */
+
+        /* ── Mobile DASH layout fix ──────────────────────────────────────────
+           Desktop default behavior is UNCHANGED: both grids below render at
+           1fr 1fr exactly as before at >=768px (matches AppNav's existing
+           767/768 breakpoint). Below 768px they stack to a single column,
+           which is the actual fix for the card-squeeze/overlap bug. The
+           agree/disagree note and the News/Price descriptive copy are
+           hidden on mobile only, per explicit instruction — desktop keeps
+           them. Nothing here removes or restyles the desktop-width rules
+           that already exist elsewhere in this file; these are additive
+           rules layered on top of the same elements. ── */
+        .dash-reads-grid{display:grid;grid-template-columns:1fr;gap:10px}
+        @media(min-width:768px){.dash-reads-grid{grid-template-columns:1fr 1fr;gap:14px}}
+        .dash-evidence-grid{display:grid;grid-template-columns:1fr;gap:14px}
+        @media(min-width:768px){.dash-evidence-grid{grid-template-columns:1fr 1fr;gap:20px}}
+        .dash-spx-ndx-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:16px}
+        @media(min-width:768px){.dash-spx-ndx-grid{grid-template-columns:1fr 1fr;gap:12px}}
+        .dash-agree-note{display:none}
+        @media(min-width:768px){.dash-agree-note{display:flex}}
+        /* No explicit desktop override needed below 768px for these — their
+           original inline "style" prop (set directly on the JSX element)
+           already governs desktop display once this class's mobile-only
+           display:none stops applying above the breakpoint. Adding a second
+           display value here would risk guessing wrong against the inline
+           style and create a conflict; omitting it is the safer choice. */
+        .dash-read-desc, .dash-read-risk, .dash-price-bar{display:none}
+        @media(min-width:768px){.dash-read-desc{display:block}.dash-read-risk{display:block}.dash-price-bar{display:block}}
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -2319,7 +2418,16 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
               <>
                 <span style={{fontFamily:"'Fraunces',serif",fontSize:17,letterSpacing:0.3,color:C.text}}>{data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                 <span style={{fontSize:13,color,fontWeight:700}}>{data.chgPct>=0?'+':''}{data.chgPct.toFixed(2)}%</span>
-                <span style={{fontSize:12,color,opacity:.7}}>({data.chg>=0?'+':''}{data.chg.toFixed(2)})</span>
+                {/* FIX: removed the parenthetical absolute-change value
+                    (e.g. "(-27.79)") — confirmed real horizontal overflow on
+                    mobile at this bar specifically: at a 390px viewport this
+                    row's scrollWidth (546px) exceeded its clientWidth
+                    (481px), clipping NDX's change value mid-digit. Removed
+                    on ALL screen sizes per explicit decision (simplest fix,
+                    no breakpoint to maintain) rather than only hiding it
+                    below a width threshold. The %-change already conveys
+                    the move; the absolute dollar/point change was the least
+                    essential of the four fields this row was trying to fit. */}
               </>
             ) : (
               <span style={{fontSize:12,color:C.dim,letterSpacing:1}}>{barLoading?'—':'—'}</span>
@@ -2360,14 +2468,14 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             <span style={{color:C.dim}}>— affects how fresh each read below can be</span>
           </div>
 
-          {/* ── Two Reads, side by side, equal weight ── */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:8}}>
+          {/* ── Two Reads, side by side on desktop, stacked on mobile ── */}
+          <div className="dash-reads-grid" style={{marginBottom:8}}>
             {/* News Read */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:'18px 20px'}}>
               <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:C.blue}}/>NEWS READ · AI reading headlines
               </div>
-              <div style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
+              <div className="dash-read-desc" style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
                 Reads today's market headlines and judges overall tone — bullish, neutral, or bearish — based on what's being reported, not price movement.
               </div>
               {briefData?.why ? (
@@ -2375,9 +2483,9 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:newsBias==='BULLISH'?C.green:newsBias==='BEARISH'?C.red:C.orange,marginBottom:8}}>
                     {briefData.bias || 'Neutral'}
                   </div>
-                  <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:10}}>{briefData.why}</div>
+                  <div className="dash-read-desc" style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:10}}>{briefData.why}</div>
                   {briefData.risk_trigger && (
-                    <div style={{fontSize:11.5,color:C.subtext}}><span style={{color:C.red,fontWeight:600}}>Risk: </span>{briefData.risk_trigger}</div>
+                    <div className="dash-read-risk" style={{fontSize:11.5,color:C.subtext}}><span style={{color:C.red,fontWeight:600}}>Risk: </span>{briefData.risk_trigger}</div>
                   )}
                 </>
               ) : (
@@ -2396,7 +2504,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}
                 </button>
               </div>
-              <div style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
+              <div className="dash-read-desc" style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
                 Scores how far SPX and NDX have actually moved today — pure price action, no news or context factored in.
               </div>
               {marketConviction ? (
@@ -2405,7 +2513,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                     <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
                     <div style={{fontSize:12,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{marketConviction.score}%</div>
                   </div>
-                  <div style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
+                  <div className="dash-price-bar" style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
                   </div>
                   <div style={{fontSize:13,color:C.text}}>SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% · NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%</div>
@@ -2416,22 +2524,24 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
             </div>
           </div>
 
-          {/* ── Agree/disagree note — only renders once both reads have resolved ──
-               Reworded from the original ⚖/dashed-orange-border treatment, which
-               read as an error state on first glance (orange + dashed border is
-               the same visual language used elsewhere for warnings) even though
-               this is normal, expected, informational content — the two reads
-               are independent signals and disagreeing is a routine outcome, not
-               a fault condition. Tone and styling now match that: neutral blue,
-               solid border, phrased as a divergence observation rather than
-               something needing to be explained away as "not a bug." */}
+          {/* ── Agree/disagree note — desktop only per explicit instruction.
+               Mobile drops this; nothing replaces it there. Reworded from the
+               original ⚖/dashed-orange-border treatment, which read as an
+               error state on first glance (orange + dashed border is the same
+               visual language used elsewhere for warnings) even though this
+               is normal, expected, informational content — the two reads are
+               independent signals and disagreeing is a routine outcome, not
+               a fault condition. Tone and styling match that on desktop:
+               neutral blue, solid border, phrased as a divergence observation
+               rather than something needing to be explained away as "not a
+               bug." */}
           {bothKnown && (
             agree ? (
-              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.green,background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
+              <div className="dash-agree-note" style={{alignItems:'center',gap:8,fontSize:11.5,color:C.green,background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
                 <span>✓</span><span>Both reads agree — news sentiment and price action are pointing the same direction right now.</span>
               </div>
             ) : (
-              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.blue,background:`${C.blue}10`,border:`1px solid ${C.blue}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
+              <div className="dash-agree-note" style={{alignItems:'center',gap:8,fontSize:11.5,color:C.blue,background:`${C.blue}10`,border:`1px solid ${C.blue}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
                 <span>◐</span><span>News and price are reading differently right now — sentiment and recent price action don't always move together. Worth knowing before you size a trade off either one alone.</span>
               </div>
             )
@@ -2444,7 +2554,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                 Evidence behind the news read <span style={{color:C.dim,fontWeight:400,marginLeft:6}}>— the headlines and price levels behind this read</span>
                 <span className="expand-hint">tap to expand</span>
               </summary>
-              <div style={{padding:'0 18px 16px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+              <div className="dash-evidence-grid" style={{padding:'0 18px 16px'}}>
                 <div>
                   <div style={{fontSize:10,letterSpacing:1.3,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>What's happening</div>
                   {(briefData.events||[]).map((ev,i)=>(
@@ -2474,7 +2584,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
           <div className="dash-left">
 
             {/* ── SPX / NDX price cards ── */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+            <div className="dash-spx-ndx-grid">
               {[
                 {sym:esBar?.label||'SPX',data:esBar},
                 {sym:nqBar?.label||'NDX',data:nqBar},
@@ -3275,7 +3385,7 @@ _Options Edge · ${new Date().toLocaleTimeString()} · Not financial advice_`
                             )}
 
                             <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                              <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
+                              <button className="hv" onClick={()=>{navigator.clipboard.writeText(buildScanAlert(al, true));setAlertCopied(true);setTimeout(()=>setAlertCopied(false),2000)}} style={{
                                 background:`${C.green}18`,border:`1px solid ${C.green}40`,color:C.green,
                                 padding:'6px 12px',borderRadius:4,fontSize:11,cursor:'pointer',fontWeight:700,letterSpacing:0.5
                               }}>{alertCopied?'✅ COPIED':'📋 COPY'}</button>
