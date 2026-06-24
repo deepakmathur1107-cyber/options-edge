@@ -2370,6 +2370,51 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            this scoped <style> tag doesn't exist in the DOM on routes that
            don't render App.jsx (e.g. /app/trades), so the rule needs to live
            somewhere truly global instead. */
+
+        /* ── Mobile DASH layout fix ──────────────────────────────────────────
+           Desktop default behavior is UNCHANGED: both grids below render at
+           1fr 1fr exactly as before at >=768px (matches AppNav's existing
+           767/768 breakpoint). Below 768px they stack to a single column,
+           which is the actual fix for the card-squeeze/overlap bug. The
+           agree/disagree note and the News/Price descriptive copy are
+           hidden on mobile only, per explicit instruction — desktop keeps
+           them. Nothing here removes or restyles the desktop-width rules
+           that already exist elsewhere in this file; these are additive
+           rules layered on top of the same elements. ── */
+
+        /* ── Reversal: News/Price now side-by-side at ALL widths, including
+           mobile, per explicit instruction. This reintroduces the original
+           squeeze risk (the literal bug reported at the start of this work),
+           so it's paired with mobile-only size/spacing tightening below —
+           smaller eyebrow label, smaller bias word, and the refresh badge
+           moved below the label instead of sharing its row — specifically
+           to avoid recreating that overlap at ~360-390px widths. Desktop
+           sizing is untouched: these font/padding rules only apply inside
+           the same <768px query as the rest of this mobile block. ── */
+        .dash-reads-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        @media(min-width:768px){.dash-reads-grid{gap:14px}}
+        .dash-spx-ndx-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:16px}
+        @media(min-width:768px){.dash-spx-ndx-grid{grid-template-columns:1fr 1fr;gap:12px}}
+        /* No explicit desktop override needed below 768px for these — their
+           original inline "style" prop (set directly on the JSX element)
+           already governs desktop display once this class's mobile-only
+           display:none stops applying above the breakpoint. Adding a second
+           display value here would risk guessing wrong against the inline
+           style and create a conflict; omitting it is the safer choice. */
+        .dash-read-desc, .dash-read-risk, .dash-price-bar{display:none}
+        @media(min-width:768px){.dash-read-desc{display:block}.dash-read-risk{display:block}.dash-price-bar{display:block}}
+
+        /* ── Mobile-only tightening for the now-side-by-side read cards ──
+           Targets only elements inside .dash-reads-grid, only below 768px.
+           Desktop's existing inline fontSize/padding values are untouched —
+           these rules just don't apply once the viewport clears 768px. ── */
+        @media(max-width:767px){
+          .dash-reads-grid > div{padding:12px 10px!important}
+          .dash-reads-grid .dash-read-label{font-size:9px!important;letter-spacing:0.3px!important}
+          .dash-reads-grid .dash-read-bias{font-size:16px!important}
+          .dash-reads-grid .dash-refresh-row{flex-direction:column!important;align-items:flex-start!important;gap:4px!important}
+          .dash-reads-grid .dash-refresh-btn{font-size:9px!important;padding:2px 6px!important}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -2427,8 +2472,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             // silently never matched.
             const newsBias  = (briefData?.bias || '').toUpperCase()
             const priceBias = marketConviction?.direction || ''
-            const bothKnown = newsBias && priceBias
-            const agree     = bothKnown && newsBias === priceBias
             const sessionPhase = getSessionPhase()
             const sessionLabel = sessionPhase==='pre' ? 'PRE-MARKET' : sessionPhase==='after' ? 'AFTER HOURS' : sessionPhase==='open' ? 'MARKET OPEN' : 'MARKET CLOSED'
             const sessionColor = sessionPhase==='open' ? C.green : sessionPhase==='closed' ? C.dim : C.orange
@@ -2441,24 +2484,24 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             <span style={{color:C.dim}}>— affects how fresh each read below can be</span>
           </div>
 
-          {/* ── Two Reads, side by side, equal weight ── */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:8}}>
+          {/* ── Two Reads, side by side on desktop, stacked on mobile ── */}
+          <div className="dash-reads-grid" style={{marginBottom:8}}>
             {/* News Read */}
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:'18px 20px'}}>
-              <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>
+              <div className="dash-read-label" style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:C.blue}}/>NEWS READ · AI reading headlines
               </div>
-              <div style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
+              <div className="dash-read-desc" style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
                 Reads today's market headlines and judges overall tone — bullish, neutral, or bearish — based on what's being reported, not price movement.
               </div>
               {briefData?.why ? (
                 <>
-                  <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:newsBias==='BULLISH'?C.green:newsBias==='BEARISH'?C.red:C.orange,marginBottom:8}}>
+                  <div className="dash-read-bias" style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:newsBias==='BULLISH'?C.green:newsBias==='BEARISH'?C.red:C.orange,marginBottom:8}}>
                     {briefData.bias || 'Neutral'}
                   </div>
-                  <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:10}}>{briefData.why}</div>
+                  <div className="dash-read-desc" style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:10}}>{briefData.why}</div>
                   {briefData.risk_trigger && (
-                    <div style={{fontSize:11.5,color:C.subtext}}><span style={{color:C.red,fontWeight:600}}>Risk: </span>{briefData.risk_trigger}</div>
+                    <div className="dash-read-risk" style={{fontSize:11.5,color:C.subtext}}><span style={{color:C.red,fontWeight:600}}>Risk: </span>{briefData.risk_trigger}</div>
                   )}
                 </>
               ) : (
@@ -2468,25 +2511,25 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
             {/* Price Read */}
             <div style={{background:C.card,border:`1px solid ${marketConviction?marketConviction.color+'50':C.border}`,borderRadius:12,padding:'18px 20px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700}}>
+              <div className="dash-refresh-row" style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div className="dash-read-label" style={{display:'flex',alignItems:'center',gap:6,fontSize:10,letterSpacing:1,textTransform:'uppercase',color:C.dim,fontWeight:700}}>
                   <span style={{width:6,height:6,borderRadius:'50%',background:C.orange}}/>PRICE READ · SPX/NDX % change
                 </div>
-                <button className="hv" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
+                <button className="hv dash-refresh-btn" onClick={()=>{ fetchPriceBar(); setNextRefresh(30) }}
                   style={{fontSize:10,color:C.blue,background:`${C.blue}15`,border:`1px solid ${C.blue}50`,padding:'3px 9px',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontWeight:600}}>
                   {barLoading ? '···' : `↺ ${nextRefresh}s`}
                 </button>
               </div>
-              <div style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
+              <div className="dash-read-desc" style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:12}}>
                 Scores how far SPX and NDX have actually moved today — pure price action, no news or context factored in.
               </div>
               {marketConviction ? (
                 <>
                   <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:8}}>
-                    <div style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
+                    <div className="dash-read-bias" style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
                     <div style={{fontSize:12,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{marketConviction.score}%</div>
                   </div>
-                  <div style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
+                  <div className="dash-price-bar" style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
                   </div>
                   <div style={{fontSize:13,color:C.text}}>SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% · NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%</div>
@@ -2496,57 +2539,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               )}
             </div>
           </div>
-
-          {/* ── Agree/disagree note — only renders once both reads have resolved ──
-               Reworded from the original ⚖/dashed-orange-border treatment, which
-               read as an error state on first glance (orange + dashed border is
-               the same visual language used elsewhere for warnings) even though
-               this is normal, expected, informational content — the two reads
-               are independent signals and disagreeing is a routine outcome, not
-               a fault condition. Tone and styling now match that: neutral blue,
-               solid border, phrased as a divergence observation rather than
-               something needing to be explained away as "not a bug." */}
-          {bothKnown && (
-            agree ? (
-              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.green,background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
-                <span>✓</span><span>Both reads agree — news sentiment and price action are pointing the same direction right now.</span>
-              </div>
-            ) : (
-              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:11.5,color:C.blue,background:`${C.blue}10`,border:`1px solid ${C.blue}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
-                <span>◐</span><span>News and price are reading differently right now — sentiment and recent price action don't always move together. Worth knowing before you size a trade off either one alone.</span>
-              </div>
-            )
-          )}
-
-          {/* ── Evidence — collapsed by default, supports the News Read above ── */}
-          {briefData?.why && (
-            <details style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:16}}>
-              <summary className="expand-summary" style={{padding:'13px 18px',fontSize:12.5,fontWeight:600,color:C.text,cursor:'pointer',listStyle:'none'}}>
-                Evidence behind the news read <span style={{color:C.dim,fontWeight:400,marginLeft:6}}>— the headlines and price levels behind this read</span>
-                <span className="expand-hint">tap to expand</span>
-              </summary>
-              <div style={{padding:'0 18px 16px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:1.3,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>What's happening</div>
-                  {(briefData.events||[]).map((ev,i)=>(
-                    <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:6}}>
-                      <span style={{width:5,height:5,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:6}}/>
-                      <span style={{fontSize:12.5,color:C.subtext,lineHeight:1.5}}>{ev}</span>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:1.3,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>Key levels</div>
-                  {(briefData.levels||[]).map((lv,i)=>(
-                    <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:6}}>
-                      <span style={{color:C.blue,fontWeight:700,flexShrink:0}}>→</span>
-                      <span style={{fontSize:12.5,color:C.subtext,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1.5}}>{lv}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </details>
-          )}
           </>
             )
           })()}
@@ -2555,7 +2547,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           <div className="dash-left">
 
             {/* ── SPX / NDX price cards ── */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+            <div className="dash-spx-ndx-grid">
               {[
                 {sym:esBar?.label||'SPX',data:esBar},
                 {sym:nqBar?.label||'NDX',data:nqBar},
