@@ -2393,12 +2393,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            the same <768px query as the rest of this mobile block. ── */
         .dash-reads-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
         @media(min-width:768px){.dash-reads-grid{gap:14px}}
-        .dash-evidence-grid{display:grid;grid-template-columns:1fr;gap:14px}
-        @media(min-width:768px){.dash-evidence-grid{grid-template-columns:1fr 1fr;gap:20px}}
         .dash-spx-ndx-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:16px}
         @media(min-width:768px){.dash-spx-ndx-grid{grid-template-columns:1fr 1fr;gap:12px}}
-        .dash-agree-note{display:none}
-        @media(min-width:768px){.dash-agree-note{display:flex}}
         /* No explicit desktop override needed below 768px for these — their
            original inline "style" prop (set directly on the JSX element)
            already governs desktop display once this class's mobile-only
@@ -2476,8 +2472,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             // silently never matched.
             const newsBias  = (briefData?.bias || '').toUpperCase()
             const priceBias = marketConviction?.direction || ''
-            const bothKnown = newsBias && priceBias
-            const agree     = bothKnown && newsBias === priceBias
             const sessionPhase = getSessionPhase()
             const sessionLabel = sessionPhase==='pre' ? 'PRE-MARKET' : sessionPhase==='after' ? 'AFTER HOURS' : sessionPhase==='open' ? 'MARKET OPEN' : 'MARKET CLOSED'
             const sessionColor = sessionPhase==='open' ? C.green : sessionPhase==='closed' ? C.dim : C.orange
@@ -2545,59 +2539,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               )}
             </div>
           </div>
-
-          {/* ── Agree/disagree note — desktop only per explicit instruction.
-               Mobile drops this; nothing replaces it there. Reworded from the
-               original ⚖/dashed-orange-border treatment, which read as an
-               error state on first glance (orange + dashed border is the same
-               visual language used elsewhere for warnings) even though this
-               is normal, expected, informational content — the two reads are
-               independent signals and disagreeing is a routine outcome, not
-               a fault condition. Tone and styling match that on desktop:
-               neutral blue, solid border, phrased as a divergence observation
-               rather than something needing to be explained away as "not a
-               bug." */}
-          {bothKnown && (
-            agree ? (
-              <div className="dash-agree-note" style={{alignItems:'center',gap:8,fontSize:11.5,color:C.green,background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
-                <span>✓</span><span>Both reads agree — news sentiment and price action are pointing the same direction right now.</span>
-              </div>
-            ) : (
-              <div className="dash-agree-note" style={{alignItems:'center',gap:8,fontSize:11.5,color:C.blue,background:`${C.blue}10`,border:`1px solid ${C.blue}30`,borderRadius:8,padding:'8px 12px',marginBottom:16}}>
-                <span>◐</span><span>News and price are reading differently right now — sentiment and recent price action don't always move together. Worth knowing before you size a trade off either one alone.</span>
-              </div>
-            )
-          )}
-
-          {/* ── Evidence — collapsed by default, supports the News Read above ── */}
-          {briefData?.why && (
-            <details style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:16}}>
-              <summary className="expand-summary" style={{padding:'13px 18px',fontSize:12.5,fontWeight:600,color:C.text,cursor:'pointer',listStyle:'none'}}>
-                Evidence behind the news read <span style={{color:C.dim,fontWeight:400,marginLeft:6}}>— the headlines and price levels behind this read</span>
-                <span className="expand-hint">tap to expand</span>
-              </summary>
-              <div className="dash-evidence-grid" style={{padding:'0 18px 16px'}}>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:1.3,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>What's happening</div>
-                  {(briefData.events||[]).map((ev,i)=>(
-                    <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:6}}>
-                      <span style={{width:5,height:5,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:6}}/>
-                      <span style={{fontSize:12.5,color:C.subtext,lineHeight:1.5}}>{ev}</span>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <div style={{fontSize:10,letterSpacing:1.3,textTransform:'uppercase',color:C.dim,fontWeight:700,marginBottom:10}}>Key levels</div>
-                  {(briefData.levels||[]).map((lv,i)=>(
-                    <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:6}}>
-                      <span style={{color:C.blue,fontWeight:700,flexShrink:0}}>→</span>
-                      <span style={{fontSize:12.5,color:C.subtext,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1.5}}>{lv}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </details>
-          )}
           </>
             )
           })()}
