@@ -989,7 +989,7 @@ export default function App(props={}) {
   // ── scanner ──
   // Manual vs Auto-scanner mode toggle — was always-stacked before; matches
   // the approved mock's tab structure (one tool, two modes) instead.
-  const [scanMode, setScanMode] = useState('manual')
+  const [scanMode, setScanMode] = useState('auto')
   const [scanTicker, setScanTicker] = useState('')
   const [scanType,   setScanType]   = useState(()=>ls('scanType','Any'))
   const [scanTF,     setScanTF]     = useState(()=>ls('scanTF','Swing (21–45 DTE)'))
@@ -2446,6 +2446,20 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
              dash-left/dash-right as real flex containers above that width. */
           .dash-left, .dash-right{display:contents}
         }
+
+        /* ── Mobile-only: Scan tab Auto-scanner panel. Min Edge Score slider
+           hidden — alerts already render sorted descending by conviction,
+           making a minimum-threshold control redundant on this screen; the
+           value remains adjustable via Tools → Alert Preferences, which
+           writes to the same alertPrefs.min_edge_score field. Showing chips
+           enlarged to use the space the slider previously occupied. Desktop
+           (1024px and up) keeps the inline slider and smaller chips
+           unchanged. ── */
+        @media(max-width:1023px){
+          .scan-minscore-block{display:none}
+          .scan-showing-label{font-size:13px!important}
+          .scan-tf-chip{font-size:13px!important;font-weight:600!important;padding:8px 16px!important;border-radius:18px!important}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -2738,18 +2752,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
             {/* ── Mode toggle: Manual vs Auto-scanner, one tool not two stacked panels ── */}
             <div style={{display:'flex',gap:6,marginBottom:16}}>
-              <button className="hv" onClick={()=>setScanMode('manual')} style={{
-                fontSize:12.5,fontWeight:600,padding:'9px 18px',borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',gap:6,
-                border:`1px solid ${scanMode==='manual'?C.orange:C.border}`,
-                background:scanMode==='manual'?`${C.orange}14`:C.card,
-                color:scanMode==='manual'?C.orange:C.dim,
-              }}>🔍 Manual</button>
               <button className="hv" onClick={()=>setScanMode('auto')} style={{
                 fontSize:12.5,fontWeight:600,padding:'9px 18px',borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',gap:6,
                 border:`1px solid ${scanMode==='auto'?C.orange:C.border}`,
                 background:scanMode==='auto'?`${C.orange}14`:C.card,
                 color:scanMode==='auto'?C.orange:C.dim,
               }}>📡 Auto-scanner <span style={{width:6,height:6,borderRadius:'50%',background:autoOn?C.green:C.dim,display:'inline-block',boxShadow:autoOn?`0 0 6px ${C.green}`:'none'}}/> {autoOn?'ON':'OFF'}</button>
+              <button className="hv" onClick={()=>setScanMode('manual')} style={{
+                fontSize:12.5,fontWeight:600,padding:'9px 18px',borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',gap:6,
+                border:`1px solid ${scanMode==='manual'?C.orange:C.border}`,
+                background:scanMode==='manual'?`${C.orange}14`:C.card,
+                color:scanMode==='manual'?C.orange:C.dim,
+              }}>🔍 Manual</button>
             </div>
 
             {scanMode==='manual' && (<>
@@ -3158,8 +3172,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   </select>
                 </div>
               </div>
-              {/* Min Edge Score — inline in scanner */}
-              <div style={{marginBottom:10}}>
+              {/* Min Edge Score — inline in scanner on desktop. Hidden on mobile
+                  since alerts already render sorted descending by conviction,
+                  making a minimum-threshold control redundant there; the
+                  threshold remains adjustable via Tools → Alert Preferences,
+                  which writes to the same alertPrefs.min_edge_score this
+                  slider also writes to (see onChange below) — removing this
+                  control doesn't remove the only way to change the value. */}
+              <div className="scan-minscore-block" style={{marginBottom:10}}>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
                   <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,fontFamily:"'Inter',sans-serif"}}>Min Edge Score</div>
                   <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.green,fontWeight:700}}>{minScore}%+</span>
@@ -3178,16 +3198,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
 
               {/* ── Timeframe filter — all 4 shown mixed by default; click one to narrow ── */}
-              <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
-                <span style={{fontSize:11,color:C.dim,fontWeight:600,marginRight:2}}>Showing:</span>
-                <button className="hv" onClick={()=>{setAlertTfFilter(null);loadOrRefreshAlerts()}} style={{
+              <div className="scan-showing-row" style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
+                <span className="scan-showing-label" style={{fontSize:11,color:C.dim,fontWeight:600,marginRight:2}}>Showing:</span>
+                <button className="hv scan-tf-chip" onClick={()=>{setAlertTfFilter(null);loadOrRefreshAlerts()}} style={{
                   fontSize:11,fontWeight:600,padding:'4px 11px',borderRadius:14,cursor:'pointer',
                   border:`1px solid ${!alertTfFilter?C.orange:C.border}`,
                   background:!alertTfFilter?`${C.orange}16`:C.card,
                   color:!alertTfFilter?C.orange:C.dim,
                 }}>All 4</button>
                 {Object.entries(TF_CONFIG).map(([key,cfg])=>(
-                  <button key={key} className="hv" onClick={()=>{setAlertTfFilter(key);loadOrRefreshAlerts()}} style={{
+                  <button key={key} className="hv scan-tf-chip" onClick={()=>{setAlertTfFilter(key);loadOrRefreshAlerts()}} style={{
                     fontSize:11,fontWeight:600,padding:'4px 11px',borderRadius:14,cursor:'pointer',
                     border:`1px solid ${alertTfFilter===key?cfg.color:C.border}`,
                     background:alertTfFilter===key?`${cfg.color}16`:C.card,

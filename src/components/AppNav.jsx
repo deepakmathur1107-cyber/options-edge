@@ -23,9 +23,11 @@ export default function AppNav({
   showTools, setShowTools,
 }) {
   const location    = useLocation()
+  // Trades used to be treated as a separate "sub-page" (Back-to-/app link
+  // instead of the normal 5-tab bar) whenever location.pathname was
+  // '/app/trades'. That's been removed — Trades is now a full peer tab,
+  // consistent with Dash/Scan/Tools/Admin, on both desktop and mobile.
   const isTradesPage = location.pathname === '/app/trades'
-  const isMainApp    = !isTradesPage
-  const subLabel     = 'TRADES'
 
   // ── Shared base ───────────────────────────────────────────────────────────
   const base = {
@@ -119,60 +121,39 @@ export default function AppNav({
             <span style={{ fontSize: 8, color: C.dim, letterSpacing: 2 }}>v3.0</span>
           </div>
 
-          {/* ── Main app tabs ── */}
-          {isMainApp && (
-            <div style={{ display:'flex', gap:4, flex:1 }}>
-              {[
-                { id:'dash',  icon:'◈', label:'DASH'  },
-                { id:'scan',  icon:'⌁', label:'SCAN'  },
-              ].map(t => (
-                <button key={t.id} className="oe-navbtn oe-toptab"
-                  onClick={() => setTab(t.id)}
-                  style={topTab(tab === t.id)}
-                >
-                  {t.icon}&nbsp;{t.label}
-                </button>
-              ))}
-
-              <Link to="/app/trades" className="oe-navbtn oe-toptab"
-                style={{ ...topTab(false), textDecoration:'none' }}>
-                ≡&nbsp;TRADES
-              </Link>
-
-              <button className="oe-navbtn oe-toptab"
-                onClick={() => setShowTools(p => !p)}
-                style={topTab(showTools)}>
-                ⚙&nbsp;TOOLS
+          {/* ── Main app tabs — always shown, Trades included as a peer tab ── */}
+          <div style={{ display:'flex', gap:4, flex:1 }}>
+            {[
+              { id:'dash',  icon:'◈', label:'DASH'  },
+              { id:'scan',  icon:'⌁', label:'SCAN'  },
+            ].map(t => (
+              <button key={t.id} className="oe-navbtn oe-toptab"
+                onClick={() => setTab(t.id)}
+                style={topTab(tab === t.id)}
+              >
+                {t.icon}&nbsp;{t.label}
               </button>
+            ))}
 
-              {isAdmin && (
-                <button className="oe-navbtn oe-toptab"
-                  onClick={() => setTab('admin')}
-                  style={{...topTab(tab === 'admin'), color: tab === 'admin' ? '#1c1916' : C.green, borderColor: `${C.green}40`}}>
-                  ★&nbsp;ADMIN
-                </button>
-              )}
-            </div>
-          )}
+            <Link to="/app/trades" className="oe-navbtn oe-toptab"
+              style={{ ...topTab(isTradesPage), textDecoration:'none' }}>
+              ≡&nbsp;TRADES
+            </Link>
 
-          {/* ── Sub-page breadcrumb ── */}
-          {!isMainApp && (
-            <div style={{ flex:1, display:'flex', alignItems:'center', gap:10 }}>
-              <Link to="/app" style={{
-                ...base, textDecoration:'none',
-                color: C.text, fontSize: 11,
-                background: C.cardAlt,
-                border: `1px solid ${C.border}`,
-                padding: '6px 14px', borderRadius: 6,
-                letterSpacing: .4,
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-              }}>← BACK</Link>
-              <span style={{
-                fontSize: 11, color: C.dim,
-                letterSpacing: 2, fontWeight: 600,
-              }}>{subLabel}</span>
-            </div>
-          )}
+            <button className="oe-navbtn oe-toptab"
+              onClick={() => setShowTools(p => !p)}
+              style={topTab(showTools)}>
+              ⚙&nbsp;TOOLS
+            </button>
+
+            {isAdmin && (
+              <button className="oe-navbtn oe-toptab"
+                onClick={() => setTab('admin')}
+                style={{...topTab(tab === 'admin'), color: tab === 'admin' ? '#1c1916' : C.green, borderColor: `${C.green}40`}}>
+                ★&nbsp;ADMIN
+              </button>
+            )}
+          </div>
 
           {/* ── Right controls ── */}
           <div style={{ display:'flex', alignItems:'center', gap:8, marginLeft:'auto', flexShrink:0 }}>
@@ -261,66 +242,37 @@ export default function AppNav({
         borderTop: `1px solid ${C.border}`,
         boxShadow: '0 -2px 12px rgba(0,0,0,.08)',
       }}>
-        {isMainApp ? (
-          <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 5 : 4},1fr)` }}>
-            {[
-              { id:'dash',   icon:'◈', label:'DASH'   },
-              { id:'scan',   icon:'⌁', label:'SCAN'   },
-              { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
-              { id:'tools',  icon:'⚙', label:'TOOLS'  },
-              ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),
-            ].map(t => {
-              const active = t.id === 'tools' ? showTools : tab === t.id
-              const col    = active ? C.green : C.dim
+        <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 5 : 4},1fr)` }}>
+          {[
+            { id:'dash',   icon:'◈', label:'DASH'   },
+            { id:'scan',   icon:'⌁', label:'SCAN'   },
+            { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
+            { id:'tools',  icon:'⚙', label:'TOOLS'  },
+            ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),
+          ].map(t => {
+            const active = t.id === 'tools' ? showTools : t.id === 'trades' ? isTradesPage : tab === t.id
+            const col    = active ? C.green : C.dim
 
-              if (t.link) return (
-                <Link key={t.id} to={t.link} style={{
-                  ...mobileTab(false),
-                  color: C.dim, textDecoration: 'none',
-                }}>
-                  <span style={{ fontSize:20, color:C.dim, lineHeight:1 }}>{t.icon}</span>
-                  <span style={{ fontSize:10, fontWeight:600, color:C.dim, letterSpacing:.4 }}>{t.label}</span>
-                </Link>
-              )
+            if (t.link) return (
+              <Link key={t.id} to={t.link} style={{
+                ...mobileTab(active),
+                color: col, textDecoration: 'none',
+              }}>
+                <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
+                <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
+              </Link>
+            )
 
-              return (
-                <button key={t.id}
-                  onClick={() => t.id === 'tools' ? setShowTools(p=>!p) : setTab(t.id)}
-                  style={mobileTab(active)}>
-                  <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
-                  <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
-                </button>
-              )
-            })}
-          </div>
-        ) : (
-          /* Sub-page minimal bar */
-          <div style={{
-            display:'flex', alignItems:'center',
-            justifyContent:'space-between', padding:'8px 16px',
-          }}>
-            <Link to="/app" style={{
-              ...base, textDecoration:'none',
-              color: C.text, fontSize: 11,
-              background: C.cardAlt,
-              border: `1px solid ${C.border}`,
-              padding: '8px 16px', borderRadius: 6,
-            }}>← BACK</Link>
-
-            <span style={{ fontSize:11, color:C.dim, letterSpacing:2, fontWeight:600 }}>
-              {subLabel}
-            </span>
-
-            <button onClick={() => setIsDark(p=>!p)} style={{
-              ...base,
-              width: 36, height: 36, borderRadius: 8,
-              background: '#e8a84e28', border: '1px solid #e8a84e70',
-              color: '#e8a84e', fontSize: 17,
-            }}>
-              {isDark ? '☀' : '🌙'}
-            </button>
-          </div>
-        )}
+            return (
+              <button key={t.id}
+                onClick={() => t.id === 'tools' ? setShowTools(p=>!p) : setTab(t.id)}
+                style={mobileTab(active)}>
+                <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
+                <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
+              </button>
+            )
+          })}
+        </div>
       </div>
     </>
   )
