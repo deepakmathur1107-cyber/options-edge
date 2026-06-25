@@ -955,9 +955,15 @@ export default function App(props={}) {
   const [newTrade, setNewTrade] = useState({ticker:'',type:'Call',status:'Open',entry:'',exitPrice:'',pnl:'',contracts:'1',expiry:'',date:'',notes:'',conviction:'',iv:'',chgPctAtEntry:'',strike:'',breakevenReqPct:''})
   useEffect(()=>{try{localStorage.setItem('trades',JSON.stringify(trades))}catch{}},[trades])
 
-  // Load trades from cloud on mount (merges with localStorage)
-  useEffect(()=>{
-    if (tradesLoaded) return
+  // Load trades from cloud — runs on first mount, then again any time the
+  // user navigates (back) to the Dash tab, since that's where jStats
+  // (Total P&L / Win Rate / Open) is displayed. Without this second trigger,
+  // closing or logging a trade on the separate /app/trades page never shows
+  // up here: App never remounts on Trades<->Dash navigation (confirmed via
+  // network inspection — only one /api/user/trades call fires per session
+  // without this), so a mount-only effect would just keep showing whatever
+  // trades existed when the session first loaded.
+  const loadTrades = () => {
     getAuthToken().then(token => {
       if (!token) { setTradesLoaded(true); return }
       fetch('/api/user/trades', { headers:{ Authorization:`Bearer ${token}` } })
@@ -981,7 +987,17 @@ export default function App(props={}) {
         })
         .catch(()=>setTradesLoaded(true))
     }).catch(()=>setTradesLoaded(true))
+  }
+
+  useEffect(()=>{
+    if (tradesLoaded) return
+    loadTrades()
   }, [])
+
+  useEffect(()=>{
+    if (tab==='dash' && tradesLoaded) loadTrades()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
 
   const jStats = (()=>{
     const closed=trades.filter(t=>t.status!=='Open')
@@ -2377,6 +2393,28 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         .dash-left{display:flex;flex-direction:column;gap:0}
         .dash-right{display:flex;flex-direction:column;gap:0}
         @media(min-width:1024px){.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}.dash-left,.dash-right{display:flex;flex-direction:column;gap:0}}
+
+        /* ── Desktop type scale + responsive width, ported from the desktop
+           redesign mock. Scoped entirely to >=1024px so none of the mobile
+           sizing tuned across many earlier rounds (dash-read-bias at 21px,
+           the tightened Scan chips, etc.) is touched — those rules live in
+           separate @media(max-width:...) blocks elsewhere in this file and
+           are unaffected by what's defined here. Variables are named by
+           content ROLE (the one number/word a card exists to show, vs. a
+           page title, vs. a label) rather than by which element happened
+           to use a given size first — that's what makes "match Trades'
+           bigger font" actually mean something consistent app-wide instead
+           of one card copying another's literal pixel value. ── */
+        @media(min-width:1024px){
+          :root{
+            --type-brand: clamp(22px,1.8vw,28px);
+            --type-page-h1: clamp(28px,2.4vw,36px);
+            --type-primary: clamp(20px,1.7vw,26px);
+            --desktop-page-width: min(92vw,1440px);
+          }
+          .dash-read-bias{font-size:var(--type-primary)!important}
+          .dash-index-val{font-size:var(--type-primary)!important}
+        }
         /* Expand/collapse chevron rule (.expand-summary) moved to index.css —
            this scoped <style> tag doesn't exist in the DOM on routes that
            don't render App.jsx (e.g. /app/trades), so the rule needs to live
@@ -2436,7 +2474,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            single-column flex stack that's already the default layout below
            that breakpoint. ── */
         @media(max-width:1023px){
-          .dash-checklist-card{display:none}
           .dash-journal-summary{display:none}
           .dash-spx-ndx-grid{order:0}
           .dash-today-signals{order:2}
@@ -2522,7 +2559,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       )}
 
       {/* ═══════════════ MAIN CONTENT ════════════════════════════════════════ */}
-      <div style={{padding:'20px 24px',maxWidth:1400,margin:'0 auto'}}>
+      <div style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
 
         {/* ── DASHBOARD TAB ──────────────────────────────────────────────── */}
         {tab==='dash' && (
@@ -2624,7 +2661,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       {data && <span style={{fontSize:10,color:bc,border:`1px solid ${bc}40`,padding:'1px 4px',borderRadius:3}}>{up?'▲':'▼'}</span>}
                     </div>
                     <div className="spx-ndx-price-row">
-                      <div style={{fontFamily:"'Fraunces',serif",fontSize:26,color:C.text,letterSpacing:0.3,lineHeight:1.1}}>
+                      <div className="dash-index-val" style={{fontFamily:"'Fraunces',serif",fontSize:26,color:C.text,letterSpacing:0.3,lineHeight:1.1}}>
                         {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
                       </div>
                       {data && <div className="spx-ndx-chg" style={{fontSize:12,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}%</div>}
@@ -2716,24 +2753,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             {/* ── Market Readout ── */}
             <div className="dash-market-readout">
               <MorningBrief getToken={getAuthToken} theme={C} isAdmin={isAdmin} onBriefLoaded={setBriefData} />
-            </div>
-
-            {/* ── Checklist ── */}
-            <div className="dash-checklist-card" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
-                <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
-                <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:12,color:'#1c1916',background:C.blue,border:'none',padding:'8px 18px',borderRadius:4,cursor:'pointer',fontWeight:700,fontFamily:"'Fraunces',serif",letterSpacing:0.3}}>OPEN</button>
-              </div>
-              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
-                <div style={{fontFamily:"'Fraunces',serif",fontSize:40,color:clColor,letterSpacing:0.3,lineHeight:1}}>{clScore}%</div>
-                <div>
-                  <div style={{fontSize:11,color:clScore>=80?C.green:clScore>=60?C.orange:C.red}}>{clScore>=80?'STRONG SETUP':clScore>=60?'CAUTION':'SKIP THIS TRADE'}</div>
-                  <div style={{fontSize:11,color:C.dim,marginTop:1}}>{Object.values(checked).filter(Boolean).length}/{CHECKLIST.length} checks</div>
-                </div>
-              </div>
-              <div style={{width:'100%',height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
-                <div style={{width:clScore+'%',height:'100%',background:clColor,transition:'width .4s',borderRadius:2}}/>
-              </div>
             </div>
 
             {/* ── Journal summary ── */}

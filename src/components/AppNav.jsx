@@ -106,7 +106,7 @@ export default function AppNav({
           : '0 2px 12px rgba(0,0,0,.08)',
       }}>
         <div style={{
-          maxWidth: 1100, margin: '0 auto',
+          maxWidth: 'min(92vw,1440px)', margin: '0 auto',
           padding: '0 20px', height: 58,
           display: 'flex', alignItems: 'center', gap: 6,
         }}>
@@ -115,7 +115,7 @@ export default function AppNav({
           <div style={{ display:'flex', alignItems:'baseline', gap:6, marginRight:14, flexShrink:0 }}>
             <span style={{
               fontFamily: "'Fraunces',serif",
-              fontSize: 22, letterSpacing:0.3,
+              fontSize: 'clamp(20px,1.6vw,26px)', letterSpacing:0.3,
               color: C.green, lineHeight: 1,
             }}>OPTIONS EDGE</span>
             <span style={{ fontSize: 8, color: C.dim, letterSpacing: 2 }}>v3.0</span>

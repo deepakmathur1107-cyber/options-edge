@@ -309,7 +309,7 @@ export default function TradeLog(props) {
         setShowTools={() => navigate('/app?tab=tools')}
       />
 
-      <div style={{maxWidth:1100, margin:'0 auto', padding:'28px 24px'}}>
+      <div style={{maxWidth:'min(92vw,1440px)', margin:'0 auto', padding:'28px 24px'}}>
 
         {/* ── Page header ── */}
         <div style={{marginBottom:28}}>
