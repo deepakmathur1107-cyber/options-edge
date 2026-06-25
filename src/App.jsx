@@ -2411,8 +2411,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         @media(max-width:767px){
           .dash-reads-grid > div{padding:12px 10px!important}
           .dash-reads-grid .dash-read-label{font-size:9px!important;letter-spacing:0.3px!important}
-          .dash-reads-grid .dash-read-bias{font-size:19px!important}
+          .dash-reads-grid .dash-read-bias{font-size:21px!important}
           .dash-reads-grid .dash-price-spxndx-line{display:none!important}
+          .dash-price-score{display:none!important}
           .dash-reads-grid .dash-refresh-row{flex-direction:column!important;align-items:flex-start!important;gap:4px!important}
           .dash-reads-grid .dash-refresh-btn{font-size:9px!important;padding:2px 6px!important}
         }
@@ -2425,6 +2426,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            that breakpoint. ── */
         @media(max-width:1023px){
           .dash-checklist-card{display:none}
+          .dash-journal-summary{display:none}
           .dash-spx-ndx-grid{order:0}
           .dash-today-signals{order:2}
           .dash-market-readout{order:1}
@@ -2556,7 +2558,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 <>
                   <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:8}}>
                     <div className="dash-read-bias" style={{fontFamily:"'Fraunces',serif",fontWeight:600,fontSize:22,color:marketConviction.color}}>{marketConviction.direction.charAt(0)+marketConviction.direction.slice(1).toLowerCase()}</div>
-                    <div style={{fontSize:12,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{marketConviction.score}%</div>
+                    <div className="dash-price-score" style={{fontSize:12,color:C.dim,fontFamily:"'IBM Plex Mono',monospace"}}>{marketConviction.score}%</div>
                   </div>
                   <div className="dash-price-bar" style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
@@ -2701,6 +2703,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             </div>
 
             {/* ── Journal summary ── */}
+            <div className="dash-journal-summary">
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:4}}>
               {[
                 {l:'TOTAL P&L',v:(jStats.pnl>=0?'+':'-')+'$'+Math.abs(jStats.pnl).toFixed(0),c:jStats.pnl>=0?C.green:C.red},
@@ -2714,6 +2717,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               ))}
             </div>
             <Link to="/app/trades" style={{display:'block',textAlign:'center',padding:'12px 16px',borderRadius:10,marginBottom:4,border:`1px solid ${C.blue}40`,color:C.blue,fontSize:13,fontWeight:600,letterSpacing:1.5,textDecoration:'none',background:`${C.blue}10`,boxShadow:C.shadow,fontFamily:"'Inter',sans-serif"}}>≡ VIEW FULL TRADE LOG & BACKTEST →</Link>
+            </div>
             </div>{/* end dash-right */}
           </div>{/* end dash-grid */}
           </div>
