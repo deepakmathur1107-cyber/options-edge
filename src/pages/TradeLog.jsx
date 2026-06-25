@@ -4,6 +4,7 @@
  * Unified trade journal + backtest — fully theme-aware, modern UI
  */
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AppNav from '../components/AppNav'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ function EquityCurve({ trades, C }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function TradeLog(props) {
   const { getToken, isDark, setIsDark, C } = props
+  const navigate = useNavigate()
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [trades,     setTrades]     = useState([])
@@ -301,8 +303,10 @@ export default function TradeLog(props) {
       <AppNav
         isDark={isDark} setIsDark={setIsDark} C={C}
         {...props}
-        tab={null} setTab={()=>{}}
-        showTools={false} setShowTools={()=>{}}
+        tab="trades"
+        setTab={(id) => navigate(`/app?tab=${id}`)}
+        showTools={false}
+        setShowTools={() => navigate('/app?tab=tools')}
       />
 
       <div style={{maxWidth:1100, margin:'0 auto', padding:'28px 24px'}}>

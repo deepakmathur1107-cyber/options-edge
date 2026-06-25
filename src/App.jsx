@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import AppNav from './components/AppNav'
 import MorningBrief from './components/MorningBrief'
 import TweetShare from './components/TweetShare'
@@ -780,9 +780,20 @@ export default function App(props={}) {
   }
 
   // ── main tab & tools panel ──
-  const [tab,        setTab]        = useState('dash')
+  const [searchParams] = useSearchParams()
+  // Allows navigating here from a separate page/route (e.g. TradeLog's own
+  // AppNav instance, which has no shared `tab`/`showTools` state to call
+  // setTab/setShowTools into) via a real link to /app?tab=scan or
+  // /app?tab=tools, landing on the requested tab instead of always
+  // defaulting to Dash. Falls back to 'dash' for any value that isn't one
+  // of the three real tab ids, so a malformed or stale URL param can't put
+  // the app in a blank/broken state. Tools is a separate boolean
+  // (showTools), not part of `tab` — initialized from the same param.
+  const tabParam = searchParams.get('tab')
+  const initialTab = ['dash','scan','admin'].includes(tabParam) ? tabParam : 'dash'
+  const [tab,        setTab]        = useState(initialTab)
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
-  const [showTools,  setShowTools]  = useState(false)
+  const [showTools,  setShowTools]  = useState(tabParam === 'tools')
   const [toolsTab,   setToolsTab]   = useState('settings')
   const [feedbackText,    setFeedbackText]    = useState('')
   const [feedbackType,    setFeedbackType]    = useState('suggestion')
@@ -2459,6 +2470,13 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .scan-minscore-block{display:none}
           .scan-showing-label{font-size:13px!important}
           .scan-tf-chip{font-size:13px!important;font-weight:600!important;padding:8px 16px!important;border-radius:18px!important}
+          /* SPX/NDX cards: price + % change on one line instead of stacked,
+             shortening the card. Desktop keeps the original stacked layout
+             (no rule needed above 1023px — these are plain divs, so omitting
+             an override here just leaves their natural block-level stacking
+             in place, same as before this change). */
+          .spx-ndx-price-row{display:flex!important;align-items:baseline!important;gap:8px!important}
+          .spx-ndx-chg{margin-top:0!important}
         }
       `}</style>
 
@@ -2605,10 +2623,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       <span style={{fontFamily:"'Fraunces',serif",fontSize:17,letterSpacing:0.3,color:bc}}>{sym}</span>
                       {data && <span style={{fontSize:10,color:bc,border:`1px solid ${bc}40`,padding:'1px 4px',borderRadius:3}}>{up?'▲':'▼'}</span>}
                     </div>
-                    <div style={{fontFamily:"'Fraunces',serif",fontSize:26,color:C.text,letterSpacing:0.3,lineHeight:1.1}}>
-                      {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
+                    <div className="spx-ndx-price-row">
+                      <div style={{fontFamily:"'Fraunces',serif",fontSize:26,color:C.text,letterSpacing:0.3,lineHeight:1.1}}>
+                        {data?data.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}
+                      </div>
+                      {data && <div className="spx-ndx-chg" style={{fontSize:12,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}%</div>}
                     </div>
-                    {data && <div style={{fontSize:12,color:bc,marginTop:2}}>{up?'+':''}{data.chgPct.toFixed(2)}%</div>}
                   </div>
                 )
               })}
