@@ -2515,6 +2515,31 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .spx-ndx-price-row{display:flex!important;align-items:baseline!important;gap:8px!important}
           .spx-ndx-chg{margin-top:0!important}
         }
+
+        /* ── Auto-scanner Alert History — mobile-only row-to-card conversion.
+           Desktop keeps the original single fixed-width-column line exactly
+           as it was (no rule needed above 639px — every width:Npx value
+           below is untouched at that range, this query simply never
+           applies). Below 640px specifically (tighter than the 1023px
+           breakpoint used elsewhere, since this row has 7 columns to
+           Dash's 2 and starts squeezing well before a tablet width), the
+           row switches to flex-wrap so ticker/grade/score stay on one
+           line and contract/timeframe/DTE/mid wrap to a second line
+           instead of overflowing or truncating. The header row (column
+           labels) is hidden since a wrapped card doesn't read as a table
+           anymore — each value already carries its own visual context
+           (color, badge, units) without needing a column label above it. ── */
+        @media(max-width:639px){
+          .alert-table-header{display:none}
+          .alert-row-mobile{flex-wrap:wrap!important;row-gap:6px!important}
+          .alert-row-ticker{width:auto!important;order:1}
+          .alert-row-grade{width:auto!important;order:2;margin-left:auto}
+          .alert-row-conviction{width:auto!important;order:3;flex:1 1 100%!important}
+          .alert-row-contract{flex:1 1 auto!important;order:4;width:auto!important}
+          .alert-row-tf{order:5}
+          .alert-row-dte{width:auto!important;order:6}
+          .alert-row-mid{width:auto!important;order:7;margin-left:auto}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
@@ -3258,8 +3283,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
                 <div style={{marginBottom:10}}>
-                  {/* Table header */}
-                  <div style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
+                  {/* Table header — hidden on mobile, where rows become
+                      self-labeled cards instead of table columns (no header
+                      row needed when each value already has visual context). */}
+                  <div className="alert-table-header" style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
                     <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
                     <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
                     <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:78,textAlign:'center'}}>TIMEFRAME</span>
@@ -3275,8 +3302,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     const grade = al.score>=80?'A':al.score>=65?'B':'C'
                     return (
                       <div key={i}>
-                        {/* Row */}
-                        <div className="hv" onClick={()=>{
+                        {/* Row — desktop is the original fixed-width single
+                            line, unchanged. Mobile (<640px) switches to a
+                            2-line card via the alert-row-mobile class: line 1
+                            is ticker+grade+score (always shown), line 2 is
+                            contract+timeframe+DTE+mid (wraps as needed). The
+                            CSS for both states lives in the shared <style>
+                            block above; only classNames are added here so
+                            the desktop JSX/markup itself is untouched. */}
+                        <div className="hv alert-row-mobile" onClick={()=>{
                           const next = isSelected?null:i
                           setSelectedAlert(next)
                           // Fetch S/R (no AI brief — auto-scanner has no space for it) the first
@@ -3320,20 +3354,20 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           borderLeft:`3px solid ${scoreCol}`,
                           transition:'all .15s',
                         }}>
-                          <span style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>${al.ticker}</span>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
-                          {al.tfLabel&&<span style={{fontSize:10.5,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 6px',borderRadius:2,flexShrink:0,width:78,textAlign:'center',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{al.tfLabel}</span>}
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.dim,width:28}}>{al.dte||'—'}D</span>
-                          <div style={{width:90,display:'flex',alignItems:'center',gap:4}}>
+                          <span className="alert-row-ticker" style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>${al.ticker}</span>
+                          <span className="alert-row-contract" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
+                          {al.tfLabel&&<span className="alert-row-tf" style={{fontSize:10.5,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 6px',borderRadius:2,flexShrink:0,width:78,textAlign:'center',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{al.tfLabel}</span>}
+                          <span className="alert-row-dte" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.dim,width:28}}>{al.dte||'—'}D</span>
+                          <div className="alert-row-conviction" style={{width:90,display:'flex',alignItems:'center',gap:4}}>
                             <div style={{flex:1,height:3,background:C.border,borderRadius:2,overflow:'hidden'}}>
                               <div style={{height:'100%',width:`${al.score||0}%`,background:`linear-gradient(90deg,${scoreCol}80,${scoreCol})`,borderRadius:2}}/>
                             </div>
                             <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:scoreCol,fontWeight:700,width:22,textAlign:'right'}}>{al.score}</span>
                           </div>
-                          <div style={{width:28,textAlign:'center'}}>
+                          <div className="alert-row-grade" style={{width:28,textAlign:'center'}}>
                             <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:3,padding:'1px 5px',color:scoreCol,fontWeight:700,fontSize:12}}>{grade}</span>
                           </div>
-                          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
+                          <span className="alert-row-mid" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
                           <span style={{fontSize:11,color:C.dim,width:14,textAlign:'center'}}>{isSelected?'▲':'▼'}</span>
                         </div>
                         {/* Expanded detail */}
@@ -3936,7 +3970,19 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       </div>
                       <input type="range" min={40} max={95} step={5}
                         value={alertPrefs.min_edge_score}
-                        onChange={e=>setAlertPrefs(p=>({...p,min_edge_score:Number(e.target.value)}))}
+                        onChange={e=>{
+                          const v=Number(e.target.value)
+                          setAlertPrefs(p=>({...p,min_edge_score:v}))
+                          // Keep the Scan tab's live threshold in sync as the
+                          // slider moves, not just when "Save Preferences" is
+                          // clicked — otherwise dragging this slider updates
+                          // the %, and the value that WILL be saved, but the
+                          // actual active scanner threshold (minScore) stays
+                          // stale until a save happens. Mirrors what the
+                          // Scan tab's own inline slider already does on
+                          // every change (see scan-minscore-block above).
+                          setMinScore(v)
+                        }}
                         style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
                       />
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.dim,marginTop:2}}>
