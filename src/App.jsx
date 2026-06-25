@@ -2411,9 +2411,38 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         @media(max-width:767px){
           .dash-reads-grid > div{padding:12px 10px!important}
           .dash-reads-grid .dash-read-label{font-size:9px!important;letter-spacing:0.3px!important}
-          .dash-reads-grid .dash-read-bias{font-size:16px!important}
+          .dash-reads-grid .dash-read-bias{font-size:19px!important}
+          .dash-reads-grid .dash-price-spxndx-line{display:none!important}
           .dash-reads-grid .dash-refresh-row{flex-direction:column!important;align-items:flex-start!important;gap:4px!important}
           .dash-reads-grid .dash-refresh-btn{font-size:9px!important;padding:2px 6px!important}
+        }
+
+        /* ── Mobile-only: Pre-Trade Checklist hidden, Market Readout moved
+           ahead of Today's Signals/Generate. Desktop (1024px and up) is
+           untouched — dash-left/dash-right stay independent grid columns
+           there, so this reordering only has any effect inside the
+           single-column flex stack that's already the default layout below
+           that breakpoint. ── */
+        @media(max-width:1023px){
+          .dash-checklist-card{display:none}
+          .dash-spx-ndx-grid{order:0}
+          .dash-today-signals{order:2}
+          .dash-market-readout{order:1}
+          /* dash-left/dash-right are normally the only direct flex children
+             of dash-grid, which means the order property on their grandchildren
+             (Today's Signals, Market Readout, SPX/NDX grid) has no effect —
+             order only works among direct siblings. display:contents removes
+             these wrapper divs from the box model on mobile only, promoting
+             their children to be direct flex children of dash-grid so order
+             can actually reorder them. The "no market data" CTA divs inside
+             dash-left have no order set, so they default to order:0 and sit
+             alongside the SPX/NDX grid — both are part of the same visual
+             group and were already adjacent before this change, so that
+             default is correct, not an oversight. This whole block is
+             mobile-only (under 1024px); desktop's grid-column layout is
+             untouched since the existing min-width:1024px rule re-asserts
+             dash-left/dash-right as real flex containers above that width. */
+          .dash-left, .dash-right{display:contents}
         }
       `}</style>
 
@@ -2532,7 +2561,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   <div className="dash-price-bar" style={{position:'relative',height:5,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:10}}>
                     <div style={{position:'absolute',left:0,top:0,height:'100%',width:marketConviction.score+'%',background:marketConviction.color,borderRadius:3,transition:'width .6s'}}/>
                   </div>
-                  <div style={{fontSize:13,color:C.text}}>SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% · NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%</div>
+                  <div className="dash-price-spxndx-line" style={{fontSize:13,color:C.text}}>SPX {marketConviction.spxChg>=0?'+':''}{marketConviction.spxChg?.toFixed(2)}% · NDX {marketConviction.ndxChg>=0?'+':''}{marketConviction.ndxChg?.toFixed(2)}%</div>
                 </>
               ) : (
                 <div style={{fontSize:11,color:C.dim,textAlign:'center',padding:'10px 0'}}>Fetch market data to see this read</div>
@@ -2589,7 +2618,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             )}
 
             {/* ── Today's Signals (SPX/NDX, was "Index Setups") ── */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+            <div className="dash-today-signals" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
                   <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>TODAY'S SIGNALS</div>
@@ -2649,10 +2678,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             <div className="dash-right">
 
             {/* ── Market Readout ── */}
-            <MorningBrief getToken={getAuthToken} theme={C} isAdmin={isAdmin} onBriefLoaded={setBriefData} />
+            <div className="dash-market-readout">
+              <MorningBrief getToken={getAuthToken} theme={C} isAdmin={isAdmin} onBriefLoaded={setBriefData} />
+            </div>
 
             {/* ── Checklist ── */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+            <div className="dash-checklist-card" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
                 <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>PRE-TRADE CHECKLIST</div>
                 <button className="hv" onClick={()=>{setToolsTab('checklist');setShowTools(true)}} style={{fontSize:12,color:'#1c1916',background:C.blue,border:'none',padding:'8px 18px',borderRadius:4,cursor:'pointer',fontWeight:700,fontFamily:"'Fraunces',serif",letterSpacing:0.3}}>OPEN</button>
