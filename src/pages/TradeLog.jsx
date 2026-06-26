@@ -682,8 +682,7 @@ export default function TradeLog(props) {
                         </div>
                       </div>
 
-                      {/* Inline close form — sticky so it stays in view if the
-                          table is horizontally scrolled on narrow screens */}
+                      {/* Inline close form */}
                       {isClosing && (
                         <div className="slide-down" style={{
                           background:`${C.orange}08`,
@@ -692,7 +691,6 @@ export default function TradeLog(props) {
                           padding:'16px 20px',
                           display:'flex', alignItems:'flex-end',
                           gap:16, flexWrap:'wrap',
-                          position:'sticky', left:0, width:'fit-content', minWidth:'100%',
                         }}>
                           <div>
                             <label style={{
@@ -738,7 +736,7 @@ export default function TradeLog(props) {
                         </div>
                       )}
 
-                      {/* Notes row — sticky for the same reason as the close form above */}
+                      {/* Notes row */}
                       {trade.notes && (
                         <div style={{
                           padding:'6px 20px 10px',
@@ -746,7 +744,6 @@ export default function TradeLog(props) {
                           fontStyle:'italic',
                           borderBottom:`1px solid ${C.border}20`,
                           background: i%2===0 ? 'transparent' : C.cardAlt,
-                          position:'sticky', left:0, width:'fit-content', minWidth:'100%',
                         }}>
                           ↳ {trade.notes}
                         </div>
