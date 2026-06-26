@@ -106,20 +106,29 @@ module.exports = async function handler(req, res) {
 
       if (verdict.flagged) flaggedNow++
 
-      // last_verdict_check_at — updated on EVERY successful check, not just
-      // transitions. Distinguishes "checked and currently fine" from "never
-      // checked" — found during live testing that a healthy, never-flagged
-      // trade wrote zero verdict_checks rows ever (correct, by that table's
-      // transition-only design), making it indistinguishable from a trade
-      // that's never been checked at all. Respects dryRun same as the
-      // verdict_checks write below — dry-run touches nothing.
+      // last_verdict_check_at / current_score / flagged — all updated on
+      // EVERY successful check, in ONE write, not just on transitions.
+      // last_verdict_check_at distinguishes "checked and currently fine"
+      // from "never checked" (found during live testing — a healthy,
+      // never-flagged trade wrote zero verdict_checks rows ever, by that
+      // table's correct transition-only design, but that made it
+      // indistinguishable from never-checked). current_score/flagged let
+      // the Trades tab UI show current state WITHOUT a live recheck on
+      // every page view — a deliberate choice to avoid an uncapped,
+      // per-view Tradier call stacking on the cron's own scheduled usage
+      // (already seen tonight getting close to the 120/min wall on a real
+      // scan run). Respects dryRun same as the verdict_checks write below.
       if (!dryRun) {
         const { error: touchErr } = await client
           .from('trades')
-          .update({ last_verdict_check_at: verdict.checkedAt })
+          .update({
+            last_verdict_check_at: verdict.checkedAt,
+            current_score: verdict.currentScore,
+            flagged: verdict.flagged,
+          })
           .eq('id', trade.id)
         if (touchErr) {
-          console.error(`[cron/verdict-check] failed to update last_verdict_check_at for trade ${trade.id}:`, touchErr.message)
+          console.error(`[cron/verdict-check] failed to update current state for trade ${trade.id}:`, touchErr.message)
         }
       }
 

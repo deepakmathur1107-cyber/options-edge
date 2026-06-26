@@ -10,6 +10,23 @@ import AppNav from '../components/AppNav'
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt    = (v, d=2) => { const n=parseFloat(v); return isNaN(n)?'—':n.toFixed(d) }
 const fmtUSD = (v) => { const n=parseFloat(v); if(isNaN(n)) return '—'; return (n>=0?'+$':'-$')+Math.abs(n).toFixed(0) }
+// fmtExpiry — trades.expiration is now a raw ISO date ("2026-07-17") for
+// trades logged after the verdict-engine expiry_raw fix (same session),
+// since buildOccSymbol needs that exact format. Older trades may still
+// carry the old display-string format ("Jul 17, 2026") from before that
+// fix, or trade.expiry (a SEPARATE field, always a display string,
+// untouched by that fix) as a fallback. This renders either shape
+// correctly rather than showing a raw "2026-07-17" to the user, which
+// would be a visible regression introduced by a backend-only fix.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const fmtExpiry = (v) => {
+  if (!v) return '—'
+  if (ISO_DATE_RE.test(v)) {
+    const d = new Date(v + 'T12:00:00')
+    return isNaN(d) ? v : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
+  }
+  return v   // already a display string (old trades, or trade.expiry fallback)
+}
 
 function calcPnl(trade) {
   const entry = parseFloat(trade.entry_price ?? trade.entry ?? 0)
@@ -87,6 +104,11 @@ export default function TradeLog(props) {
   const [submitting, setSubmitting] = useState(false)
   const [formError,  setFormError]  = useState(null)
   const [closingId,  setClosingId]  = useState(null)
+  // expandedVerdictId — mirrors closingId's pattern. Tracks which trade's
+  // verdict-check history (if any) is currently expanded below its row.
+  const [expandedVerdictId, setExpandedVerdictId] = useState(null)
+  const [verdictHistory, setVerdictHistory] = useState({})   // tradeId -> rows[], fetched on-demand
+  const [verdictHistoryLoading, setVerdictHistoryLoading] = useState(null)
   const [closeForm,  setCloseForm]  = useState(EMPTY_CLOSE)
   const [closeError, setCloseError] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
@@ -197,6 +219,34 @@ export default function TradeLog(props) {
       await loadTrades()
     } catch(e) { setError(e.message) }
     finally    { setDeletingId(null) }
+  }
+
+  // toggleVerdictHistory — expand/collapse a trade's verdict-check history.
+  // Fetches on first expand only (cached in verdictHistory by tradeId) —
+  // collapsing and re-expanding doesn't re-fetch. Deliberately a SEPARATE,
+  // on-demand fetch, not part of loadTrades' main payload: most trades
+  // won't have their history opened in a given session, so fetching all
+  // history up front for every trade would be wasted work for the common
+  // case (architect decision, same session as the live-recheck-on-load
+  // tradeoff this mirrors).
+  async function toggleVerdictHistory(tradeId) {
+    if (expandedVerdictId === tradeId) {
+      setExpandedVerdictId(null)
+      return
+    }
+    setExpandedVerdictId(tradeId)
+    if (verdictHistory[tradeId]) return   // already cached, don't re-fetch
+    setVerdictHistoryLoading(tradeId)
+    try {
+      const h = await authHeaders()
+      const res = await fetch(`/api/user/verdict-history?tradeId=${tradeId}`, { headers:h })
+      const d = await res.json()
+      setVerdictHistory(prev => ({ ...prev, [tradeId]: d.history ?? [] }))
+    } catch(e) {
+      setVerdictHistory(prev => ({ ...prev, [tradeId]: [] }))
+    } finally {
+      setVerdictHistoryLoading(null)
+    }
   }
 
   // ── Derived data ───────────────────────────────────────────────────────────
@@ -603,10 +653,31 @@ export default function TradeLog(props) {
                         opacity: isClosed ? 0.7 : 1,
                         background: i%2===0 ? 'transparent' : C.cardAlt,
                       }}>
-                        <span style={{
-                          color:C.blue, fontWeight:700, fontSize:14,
-                          fontFamily:"'IBM Plex Mono', monospace",
-                        }}>{trade.ticker}</span>
+                        <span style={{display:'flex', alignItems:'center', gap:6}}>
+                          <span style={{
+                            color:C.blue, fontWeight:700, fontSize:14,
+                            fontFamily:"'IBM Plex Mono', monospace",
+                          }}>{trade.ticker}</span>
+                          {/* Verdict badge — only shown for trades that have
+                              actually been checked (last_verdict_check_at
+                              not null). A trade missing timeframe/target/
+                              stop, or one that predates this feature, shows
+                              NOTHING here rather than a misleading "fine"
+                              dot — silence is the honest state for "not
+                              monitored," per the session decision not to
+                              guess/default for unscored trades. */}
+                          {!isClosed && trade.last_verdict_check_at && (
+                            <button
+                              onClick={()=>toggleVerdictHistory(trade.id)}
+                              title={trade.flagged ? 'Flagged — click for history' : 'Looking fine — click for history'}
+                              style={{
+                                width:8, height:8, borderRadius:'50%', border:'none', padding:0,
+                                cursor:'pointer', flexShrink:0,
+                                background: trade.flagged ? C.orange : C.green,
+                              }}
+                            />
+                          )}
+                        </span>
 
                         <span style={{
                           fontSize:11, fontWeight:600, textTransform:'uppercase',
@@ -629,7 +700,7 @@ export default function TradeLog(props) {
                         </span>
 
                         <span style={{color:C.dim, fontSize:11, fontFamily:"'Inter',sans-serif"}}>
-                          {trade.expiration??trade.expiry??'—'}
+                          {fmtExpiry(trade.expiration??trade.expiry)}
                         </span>
 
                         <span style={{fontFamily:"'IBM Plex Mono',monospace", fontSize:12}}>
@@ -733,6 +804,51 @@ export default function TradeLog(props) {
                             }}>
                             {submitting ? 'SAVING…' : 'CONFIRM CLOSE'}
                           </button>
+                        </div>
+                      )}
+
+                      {/* Verdict history — mirrors the inline close-form
+                          pattern above (slide-down, conditional render),
+                          not a new mechanism. */}
+                      {expandedVerdictId === trade.id && (
+                        <div className="slide-down" style={{
+                          background:`${C.blue}08`,
+                          borderLeft:`3px solid ${C.blue}`,
+                          borderBottom:`1px solid ${C.blue}20`,
+                          padding:'12px 20px',
+                        }}>
+                          {verdictHistoryLoading === trade.id ? (
+                            <div style={{fontSize:12, color:C.dim}}>Loading…</div>
+                          ) : (verdictHistory[trade.id]?.length ?? 0) === 0 ? (
+                            <div style={{fontSize:12, color:C.dim}}>
+                              No flag changes yet — last checked{' '}
+                              {new Date(trade.last_verdict_check_at).toLocaleString('en-US', {
+                                month:'short', day:'numeric', hour:'numeric', minute:'2-digit',
+                              })}
+                              , currently {trade.flagged ? 'flagged' : 'looking fine'}
+                              {trade.current_score != null && ` (score ${trade.current_score})`}.
+                            </div>
+                          ) : (
+                            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+                              {verdictHistory[trade.id].map((h, idx) => (
+                                <div key={idx} style={{fontSize:12, color:C.dim, display:'flex', gap:10, alignItems:'baseline'}}>
+                                  <span style={{
+                                    width:8, height:8, borderRadius:'50%', flexShrink:0,
+                                    background: h.flagged ? C.orange : C.green,
+                                  }}/>
+                                  <span>
+                                    {new Date(h.checked_at).toLocaleString('en-US', {
+                                      month:'short', day:'numeric', hour:'numeric', minute:'2-digit',
+                                    })}
+                                    {' — '}
+                                    {h.flagged
+                                      ? `flagged (score ${h.current_score}, was ${h.entry_score} at entry${(h.flag_reasons||[]).length ? ', ' + h.flag_reasons.join(', ') : ''})`
+                                      : `cleared (score ${h.current_score})`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
 
