@@ -106,6 +106,23 @@ module.exports = async function handler(req, res) {
 
       if (verdict.flagged) flaggedNow++
 
+      // last_verdict_check_at — updated on EVERY successful check, not just
+      // transitions. Distinguishes "checked and currently fine" from "never
+      // checked" — found during live testing that a healthy, never-flagged
+      // trade wrote zero verdict_checks rows ever (correct, by that table's
+      // transition-only design), making it indistinguishable from a trade
+      // that's never been checked at all. Respects dryRun same as the
+      // verdict_checks write below — dry-run touches nothing.
+      if (!dryRun) {
+        const { error: touchErr } = await client
+          .from('trades')
+          .update({ last_verdict_check_at: verdict.checkedAt })
+          .eq('id', trade.id)
+        if (touchErr) {
+          console.error(`[cron/verdict-check] failed to update last_verdict_check_at for trade ${trade.id}:`, touchErr.message)
+        }
+      }
+
       const lastState = await getLastFlaggedState(client, trade.id)
       const isTransition = lastState === null ? true : (lastState !== verdict.flagged)
       // lastState === null means the read itself failed (not "no history") —
