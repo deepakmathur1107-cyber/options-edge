@@ -3829,12 +3829,19 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             </div>
 
             {/* Panel sub-tabs */}
+            {/* Collapsed from 5 to 3 — Checklist/Strategy/Exit Rules merged into
+                one "Reference" tab. These three were mostly static lookup
+                content (Checklist has live interaction, the other two are
+                pure read-only reference) that's rarely revisited after the
+                first week of use, per product decision — not worth a nav
+                slot each, or further visual investment beyond this
+                consolidation. Settings and Futures keep their own tabs since
+                they see real repeat use (alert prefs / Telegram) or have a
+                planned growth path (Futures → $49 Pro+ Macro Pulse tier). */}
             <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel}}>
               {[
                 {id:'settings',  l:'Settings'},
-                {id:'checklist', l:'Checklist'},
-                {id:'strategy',  l:'Strategy'},
-                {id:'exit',      l:'Exit Rules'},
+                {id:'reference', l:'Reference'},
                 {id:'futures',   l:'Futures'},
               ].map(t=>(
                 <button key={t.id} onClick={()=>setToolsTab(t.id)} style={{
@@ -4130,8 +4137,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               )}
 
               {/* ── CHECKLIST ── */}
-              {toolsTab==='checklist'&&(
+              {/* ── REFERENCE (merged Checklist + Strategy + Exit Rules) ── */}
+              {toolsTab==='reference'&&(
                 <div className="si">
+
+                  {/* Checklist — the only interactive section of the three;
+                      kept first since it's the one with live state/scoring. */}
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
                     <div>
                       <div style={{fontFamily:"'Fraunces',serif",fontSize:22,color:clColor,letterSpacing:0.3}}>
@@ -4168,12 +4179,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       ))}
                     </div>
                   ))}
-                </div>
-              )}
 
-              {/* ── STRATEGY ── */}
-              {toolsTab==='strategy'&&(
-                <div className="si">
+                  {/* Section divider */}
+                  <div style={{display:'flex',alignItems:'center',gap:8,margin:'20px 0 16px'}}>
+                    <div style={{flex:1,height:1,background:C.border}}/>
+                    <span style={{fontSize:10,letterSpacing:1.5,color:C.dim,textTransform:'uppercase'}}>Strategy reference</span>
+                    <div style={{flex:1,height:1,background:C.border}}/>
+                  </div>
+
+                  {/* Strategy */}
                   {[
                     {t:'CALLS & PUTS',c:C.green,rules:['2+ TA signals required before entry','Avoid RSI > 75 (calls) or < 25 (puts)','Volume 1.5x+ above 20-day average','MACD crossover confirms direction','Options flow sweep = green light','21–45 DTE swings, 5–14 DTE quick plays']},
                     {t:'SPREADS',c:C.blue,rules:['Debit spreads when IVR < 30','Credit spreads when IVR > 50','Short strike at key S/R level','Min 1:1 risk/reward, target 1:2','Width: 5–10pts SPX, 2.5–5 stocks','Target 50–65% of max profit on credit']},
@@ -4192,12 +4206,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     <span style={{fontSize:11,color:C.dim,letterSpacing:2}}>GOLDEN RULE — </span>
                     Require <span style={{color:C.green}}>2+ TA</span> + <span style={{color:C.blue}}>1 flow</span> or <span style={{color:C.orange}}>1 catalyst</span> before entry.
                   </div>
-                </div>
-              )}
 
-              {/* ── EXIT RULES ── */}
-              {toolsTab==='exit'&&(
-                <div className="si">
+                  {/* Section divider */}
+                  <div style={{display:'flex',alignItems:'center',gap:8,margin:'20px 0 16px'}}>
+                    <div style={{flex:1,height:1,background:C.border}}/>
+                    <span style={{fontSize:10,letterSpacing:1.5,color:C.dim,textTransform:'uppercase'}}>Exit rules</span>
+                    <div style={{flex:1,height:1,background:C.border}}/>
+                  </div>
+
+                  {/* Exit Rules */}
                   {EXIT_RULES.map((sec,i)=>(
                     <div key={i} style={{marginBottom:16}}>
                       <div style={{fontFamily:"'Fraunces',serif",fontSize:15,color:sec.color,letterSpacing:0.3,marginBottom:7}}>{sec.type}</div>
