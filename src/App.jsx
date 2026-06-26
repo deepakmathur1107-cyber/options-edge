@@ -1050,6 +1050,9 @@ export default function App(props={}) {
   const [autoLog,     setAutoLog]     = useState([])
   const [lastAlert,   setLastAlert]   = useState(null)
   const [alertHistory, setAlertHistory] = useState([])   // last 10 full alert objects
+  // Sector/direction concentration clusters for the current scan batch — see
+  // loadOrRefreshAlerts and api/scan-cache.js. Each entry: { sector, direction, tickers: [...] }.
+  const [scanClusters, setScanClusters] = useState([])
   const [selectedAlert, setSelectedAlert] = useState(null) // expanded detail
   const [alertSR, setAlertSR] = useState({}) // { [alertIndex]: {loading, data} } — S/R for expanded auto-scan hits
   const [alertCopied, setAlertCopied] = useState(false)
@@ -2103,6 +2106,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       const data = await res.json()
       if (!data?.cached) throw new Error(data?.reason||'lookup unavailable')
       const rows = data.results || []
+      // Sector/direction concentration clusters — computed server-side in
+      // scan-cache.js against the FULL uncapped batch (not just these capped
+      // rows), so the count shown can legitimately be larger than what's
+      // visible in alertHistory below. See item 4 session notes. Single-tf
+      // mode returns `clusters` (flat array); mixed-tf (no tf filter) returns
+      // `clustersByTf` (keyed by timeframe) since a cluster within one
+      // timeframe isn't the same concentrated bet as one in another.
+      setScanClusters(
+        alertTfFilterRef.current
+          ? (data.clusters || [])
+          : Object.values(data.clustersByTf || {}).flat()
+      )
       setAlertHistory(rows.map(row => ({
         ticker: row.ticker, tradeType: row.trade_type, score: row.score,
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
@@ -3298,6 +3313,42 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   }}>{cfg.badge} {cfg.label}</button>
                 ))}
               </div>
+
+              {/* ── Concentration banner — item 4. Flags when several
+                  signals in this batch share a sector AND direction, so a
+                  user doesn't mistake batch breadth for independent
+                  diversification. Computed server-side against the FULL
+                  batch (see scan-cache.js) — counts here can exceed what's
+                  visible in the list below if the full cluster didn't all
+                  make the capped/sorted results. Deliberately doesn't name
+                  the scoring mechanism (market-regime term) — just the
+                  structural fact: count, sector, direction. ── */}
+              {scanClusters.length>0&&(
+                <div style={{
+                  marginBottom:10,padding:'10px 12px',borderRadius:8,
+                  border:`1px solid ${C.orange}40`,background:`${C.orange}0d`,
+                }}>
+                  <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+                    <span style={{fontSize:14,lineHeight:'18px'}}>⚠️</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.orange,marginBottom:3}}>
+                        Concentrated sector activity in this batch
+                      </div>
+                      <div style={{fontSize:12,color:C.dim,lineHeight:1.5}}>
+                        {scanClusters.map((c,i)=>(
+                          <span key={i}>
+                            {i>0 && ' · '}
+                            <strong style={{color:C.dim,fontWeight:600}}>{c.tickers.length}</strong>{' '}
+                            {c.sector} {c.direction==='put'?'puts':'calls'}
+                          </span>
+                        ))}
+                        {' — '}check whether several of these would really be one concentrated
+                        bet rather than diversified positions before acting on more than one.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(

@@ -37,6 +37,56 @@ async function hasActiveSub(clerkId, supabase) {
   } catch { return false }
 }
 
+// CLUSTER_MIN_COUNT: minimum same-sector + same-direction signals in a single
+// batch before it's surfaced to the user as a concentration flag. Tunable —
+// not yet validated against more than one day's real data. See session notes
+// June 25, 2026: today's batch showed sector+direction groups as large as 18
+// (Financials/call) and 13 (Information Technology/put), confirmed NOT pure
+// independent-stock agreement — chg_pct within the Financials/call cluster
+// ranged from -1.11% to +6.68%, including several names red on the day. The
+// shared driver is the market-regime term in convictionScore.cjs
+// (spxChgToday/ndxChgToday -> marketRising/marketFalling -> flat +/-6/+/-12
+// per optType, applied identically to every ticker in the batch) plus genuine
+// sector co-movement on top of it. This banner doesn't try to separate the
+// two -- it just tells the user the structural fact (count, sector,
+// direction) so they don't mistake batch breadth for independent
+// diversification.
+const CLUSTER_MIN_COUNT = 4
+
+// computeClusters: groups by (sector, direction) and returns only groups at
+// or above CLUSTER_MIN_COUNT. Deliberately takes a separate, UNCAPPED query
+// result -- never the same rows already truncated by PER_TF_LIMIT/.limit(50)
+// below. A cluster of 18 could easily have only a handful of its members
+// survive the score-desc + per-tf cap, so counting on the capped list would
+// silently undercount or misrepresent the true cluster size that produced
+// it. Banner and list must agree with the underlying data even when they
+// don't agree with each other in row count -- the banner describes the
+// batch, not the rendered page.
+//
+// Direction source CONFIRMED against live scan_results (June 25, 2026):
+// direction_decision is { gap, isClose, otherSideScore } -- it does NOT
+// carry a 'side' field, despite that being pickBetterSide's return shape in
+// convictionScore.cjs. side/winner/loser apparently aren't persisted to this
+// column. trade_type is the real, populated direction field, as a display
+// string like "Long Put" / "Long Call" -- not the raw 'put'/'call' used
+// elsewhere (e.g. signal_history.option_type). Parsed accordingly below.
+function computeClusters(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    if (!row.sector || !row.trade_type) continue
+    const direction = /put/i.test(row.trade_type) ? 'put'
+                     : /call/i.test(row.trade_type) ? 'call'
+                     : null
+    if (!direction) continue
+    const key = `${row.sector}|${direction}`
+    if (!groups.has(key)) groups.set(key, { sector: row.sector, direction, tickers: [] })
+    groups.get(key).tickers.push(row.ticker)
+  }
+  return [...groups.values()]
+    .filter(g => g.tickers.length >= CLUSTER_MIN_COUNT)
+    .sort((a, b) => b.tickers.length - a.tickers.length)
+}
+
 module.exports = async function handler(req, res) {
   // FIX: was '*' — this endpoint serves paid-tier data and must not be
   // readable from arbitrary origins.
@@ -101,7 +151,22 @@ module.exports = async function handler(req, res) {
         .order('score', { ascending: false })
         .limit(50)
       if (error) return res.status(200).json({ cached: false, reason: error.message, results: [] })
-      return res.status(200).json({ cached: true, results: data || [] })
+
+      // Clustering: separate, uncapped query against the SAME filter
+      // conditions (timeframe/threshold/freshness) as above, but selecting
+      // only the columns needed to group -- this must never reuse the
+      // .limit(50) result above, since a real cluster larger than 50 (or
+      // just outside the top-50-by-score window) would be silently
+      // undercounted if computed from the already-truncated list.
+      const { data: allFresh, error: clusterErr } = await client
+        .from('scan_results')
+        .select('ticker, sector, trade_type')
+        .eq('timeframe', tf)
+        .gte('score', threshold)
+        .gt('expires_at', new Date().toISOString())
+      const clusters = clusterErr ? [] : computeClusters(allFresh || [])
+
+      return res.status(200).json({ cached: true, results: data || [], clusters })
     }
     // No tf filter — mixing all 4 timeframes. A flat ORDER BY score LIMIT 50
     // would be dominated by whichever timeframe happens to have the most
@@ -124,7 +189,25 @@ module.exports = async function handler(req, res) {
       return data || []
     }))
     const data = perTfResults.flat().sort((a, b) => b.score - a.score)
-    return res.status(200).json({ cached: true, results: data })
+
+    // Clustering computed PER TIMEFRAME, not pooled across all four — a
+    // cluster within Quick (5-14 DTE) and a same-sector/direction cluster
+    // within Deep LEAP (180-365 DTE) are not the same concentrated bet; they
+    // reflect different horizons/reasoning even if they happen to share a
+    // sector and direction today. Each uses its own uncapped query, same
+    // reasoning as the single-tf path above.
+    const clustersByTf = {}
+    await Promise.all(timeframes.map(async (tfKey) => {
+      const { data: allFresh, error } = await client
+        .from('scan_results')
+        .select('ticker, sector, trade_type')
+        .eq('timeframe', tfKey)
+        .gte('score', threshold)
+        .gt('expires_at', new Date().toISOString())
+      clustersByTf[tfKey] = error ? [] : computeClusters(allFresh || [])
+    }))
+
+    return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {
     console.error('[scan-cache] error:', e.message)
     return res.status(200).json({ cached: false, reason: e.message })
