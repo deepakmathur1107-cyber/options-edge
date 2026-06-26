@@ -1053,6 +1053,7 @@ export default function App(props={}) {
   // Sector/direction concentration clusters for the current scan batch — see
   // loadOrRefreshAlerts and api/scan-cache.js. Each entry: { sector, direction, tickers: [...] }.
   const [scanClusters, setScanClusters] = useState([])
+  const [showAllClusters, setShowAllClusters] = useState(false)   // expands the "Today's skew" detail list
   const [selectedAlert, setSelectedAlert] = useState(null) // expanded detail
   const [alertSR, setAlertSR] = useState({}) // { [alertIndex]: {loading, data} } — S/R for expanded auto-scan hits
   const [alertCopied, setAlertCopied] = useState(false)
@@ -3314,41 +3315,73 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 ))}
               </div>
 
-              {/* ── Concentration banner — item 4. Flags when several
-                  signals in this batch share a sector AND direction, so a
-                  user doesn't mistake batch breadth for independent
-                  diversification. Computed server-side against the FULL
-                  batch (see scan-cache.js) — counts here can exceed what's
-                  visible in the list below if the full cluster didn't all
-                  make the capped/sorted results. Deliberately doesn't name
-                  the scoring mechanism (market-regime term) — just the
-                  structural fact: count, sector, direction. ── */}
-              {scanClusters.length>0&&(
-                <div style={{
-                  marginBottom:10,padding:'10px 12px',borderRadius:8,
-                  border:`1px solid ${C.orange}40`,background:`${C.orange}0d`,
-                }}>
-                  <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
-                    <span style={{fontSize:14,lineHeight:'18px'}}>⚠️</span>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:12,fontWeight:700,color:C.orange,marginBottom:3}}>
-                        Concentrated sector activity in this batch
-                      </div>
-                      <div style={{fontSize:12,color:C.dim,lineHeight:1.5}}>
-                        {scanClusters.map((c,i)=>(
+              {/* ── Today's skew — item 4, reframed. Originally built as an
+                  amber alert banner; revised after seeing it live against a
+                  real batch (~30 qualifying groups in "All 4" mixed mode —
+                  see session notes) made it read as a wall of warnings, not
+                  useful context. Sector+direction clustering isn't a defect
+                  — it's often the actual market regime that day — so this
+                  now sits as ambient market context (hairline-bounded,
+                  no icon, no warning tint) rather than an alert, with the
+                  top groups summarized in a sentence and the rest behind a
+                  toggle. Computed server-side against the FULL batch (see
+                  scan-cache.js) — counts can exceed what's visible in the
+                  list below if the full cluster didn't all make the
+                  capped/sorted results. ── */}
+              {scanClusters.length>0&&(()=>{
+                const top = scanClusters.slice(0,3)
+                const rest = scanClusters.slice(3)
+                // "Industrials and Financials are running broadly call-heavy"
+                // — group the TOP groups by direction so the lead sentence
+                // reads as plain English rather than a count-first list.
+                const byDirection = top.reduce((acc,c)=>{
+                  (acc[c.direction] = acc[c.direction] || []).push(c.sector)
+                  return acc
+                },{})
+                const clauses = Object.entries(byDirection).map(([dir,sectors])=>{
+                  const names = sectors.length===1 ? sectors[0]
+                    : sectors.slice(0,-1).join(', ')+' and '+sectors[sectors.length-1]
+                  const verb = sectors.length===1 ? 'is' : 'are'
+                  const bias = dir==='put' ? 'leaning puts' : 'running broadly call-heavy'
+                  return `${names} ${verb} ${bias}`
+                })
+                const leadSentence = clauses.join(' · ')
+                return (
+                  <div style={{
+                    borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
+                    padding:'10px 2px',marginBottom:12,
+                  }}>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
+                      <span style={{fontSize:11,color:C.dim,textTransform:'uppercase',letterSpacing:0.6,whiteSpace:'nowrap'}}>
+                        Today's skew
+                      </span>
+                      <span style={{fontSize:13,color:C.dim,flex:1}}>{leadSentence}</span>
+                      {rest.length>0&&(
+                        <button onClick={()=>setShowAllClusters(s=>!s)} style={{
+                          marginLeft:'auto',background:'none',border:'none',padding:0,
+                          color:C.blue,fontSize:12,cursor:'pointer',fontFamily:'inherit',
+                        }}>
+                          {showAllClusters ? 'Hide' : `See all ${scanClusters.length} groups`}
+                        </button>
+                      )}
+                    </div>
+                    {showAllClusters&&rest.length>0&&(
+                      <div style={{fontSize:12,color:C.dim,lineHeight:1.7,padding:'8px 0 0'}}>
+                        {rest.map((c,i)=>(
                           <span key={i}>
                             {i>0 && ' · '}
-                            <strong style={{color:C.dim,fontWeight:600}}>{c.tickers.length}</strong>{' '}
-                            {c.sector} {c.direction==='put'?'puts':'calls'}
+                            {c.tickers.length} {c.sector} {c.direction==='put'?'puts':'calls'}
                           </span>
                         ))}
-                        {' — '}check whether several of these would really be one concentrated
-                        bet rather than diversified positions before acting on more than one.
                       </div>
+                    )}
+                    <div style={{fontSize:12,color:C.dim,opacity:0.75,marginTop:6,lineHeight:1.5}}>
+                      Several signals in the same group often trace back to one market view rather
+                      than independent setups — worth a glance before stacking more than one.
                     </div>
                   </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
