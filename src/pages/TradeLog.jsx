@@ -560,10 +560,14 @@ export default function TradeLog(props) {
                 background:C.card, border:`1px solid ${C.border}`,
                 borderRadius:10, overflow:'hidden', boxShadow:shadow,
               }}>
+              {/* Horizontal scroll wrapper — table is 750px+ of fixed columns;
+                  below that viewport width, scroll instead of clipping P&L/Exit. */}
+              <div style={{overflowX:'auto'}}>
                 {/* Header */}
                 <div style={{
                   display:'grid',
                   gridTemplateColumns:'90px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
+                  minWidth:790,
                   padding:'12px 20px',
                   background:C.bgAlt,
                   borderBottom:`1px solid ${C.border}`,
@@ -591,6 +595,7 @@ export default function TradeLog(props) {
                       <div className="tl-row" style={{
                         display:'grid',
                         gridTemplateColumns:'90px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
+                        minWidth:790,
                         padding:'14px 20px',
                         borderLeft: leftBorder,
                         borderBottom:`1px solid ${C.border}30`,
@@ -677,7 +682,8 @@ export default function TradeLog(props) {
                         </div>
                       </div>
 
-                      {/* Inline close form */}
+                      {/* Inline close form — sticky so it stays in view if the
+                          table is horizontally scrolled on narrow screens */}
                       {isClosing && (
                         <div className="slide-down" style={{
                           background:`${C.orange}08`,
@@ -686,6 +692,7 @@ export default function TradeLog(props) {
                           padding:'16px 20px',
                           display:'flex', alignItems:'flex-end',
                           gap:16, flexWrap:'wrap',
+                          position:'sticky', left:0, width:'fit-content', minWidth:'100%',
                         }}>
                           <div>
                             <label style={{
@@ -731,7 +738,7 @@ export default function TradeLog(props) {
                         </div>
                       )}
 
-                      {/* Notes row */}
+                      {/* Notes row — sticky for the same reason as the close form above */}
                       {trade.notes && (
                         <div style={{
                           padding:'6px 20px 10px',
@@ -739,6 +746,7 @@ export default function TradeLog(props) {
                           fontStyle:'italic',
                           borderBottom:`1px solid ${C.border}20`,
                           background: i%2===0 ? 'transparent' : C.cardAlt,
+                          position:'sticky', left:0, width:'fit-content', minWidth:'100%',
                         }}>
                           ↳ {trade.notes}
                         </div>
@@ -746,6 +754,7 @@ export default function TradeLog(props) {
                     </div>
                   )
                 })}
+              </div>
               </div>
             )}
 
