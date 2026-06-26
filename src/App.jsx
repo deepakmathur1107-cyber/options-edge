@@ -2111,14 +2111,39 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       // scan-cache.js against the FULL uncapped batch (not just these capped
       // rows), so the count shown can legitimately be larger than what's
       // visible in alertHistory below. See item 4 session notes. Single-tf
-      // mode returns `clusters` (flat array); mixed-tf (no tf filter) returns
-      // `clustersByTf` (keyed by timeframe) since a cluster within one
-      // timeframe isn't the same concentrated bet as one in another.
-      setScanClusters(
-        alertTfFilterRef.current
-          ? (data.clusters || [])
-          : Object.values(data.clustersByTf || {}).flat()
-      )
+      // mode returns `clusters` (flat array, already sorted by size). Mixed
+      // mode (no tf filter) returns `clustersByTf` (keyed by timeframe) —
+      // each timeframe's list is internally sorted, but simply flattening
+      // them with .flat() (the original approach) left duplicate
+      // sector+direction entries (one per timeframe that happened to
+      // qualify) and a globally-unsorted result, which is exactly what
+      // produced the "mostly puts but heading says calls" bug seen live:
+      // the lead sentence read the first 3 array entries, which were only
+      // locally sorted within one timeframe's slice, not the true top 3
+      // overall. Fixed by merging same sector+direction across timeframes
+      // (summing tickers, not just concatenating the cluster objects) before
+      // re-sorting the merged result by total size.
+      if (alertTfFilterRef.current) {
+        setScanClusters(data.clusters || [])
+      } else {
+        const merged = new Map()
+        for (const list of Object.values(data.clustersByTf || {})) {
+          for (const c of list) {
+            const key = `${c.sector}|${c.direction}`
+            if (!merged.has(key)) merged.set(key, { sector: c.sector, direction: c.direction, tickers: new Set() })
+            // A SET, not an array push — the same ticker can independently
+            // qualify in more than one timeframe (e.g. NVDA flagged in both
+            // Quick Play and Swing Trade), and naively concatenating arrays
+            // would double-count it toward this sector+direction's total.
+            c.tickers.forEach(t=>merged.get(key).tickers.add(t))
+          }
+        }
+        setScanClusters(
+          [...merged.values()]
+            .map(c=>({...c, tickers:[...c.tickers]}))
+            .sort((a,b)=>b.tickers.length-a.tickers.length)
+        )
+      }
       setAlertHistory(rows.map(row => ({
         ticker: row.ticker, tradeType: row.trade_type, score: row.score,
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
@@ -3348,11 +3373,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 const leadSentence = clauses.join(' · ')
                 return (
                   <div style={{
-                    borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
-                    padding:'10px 2px',marginBottom:12,
+                    borderLeft:`2px solid ${C.blue}`,borderTop:`1px solid ${C.border}`,
+                    borderBottom:`1px solid ${C.border}`,borderRight:`1px solid ${C.border}`,
+                    padding:'10px 12px',marginBottom:12,borderRadius:'0 6px 6px 0',
                   }}>
                     <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
-                      <span style={{fontSize:11,color:C.dim,textTransform:'uppercase',letterSpacing:0.6,whiteSpace:'nowrap'}}>
+                      <span style={{fontSize:11,color:C.blue,fontWeight:700,textTransform:'uppercase',letterSpacing:0.6,whiteSpace:'nowrap'}}>
                         Today's skew
                       </span>
                       <span style={{fontSize:13,color:C.dim,flex:1}}>{leadSentence}</span>
