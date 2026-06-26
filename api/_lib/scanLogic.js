@@ -356,6 +356,23 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     const { side: optType, winner } = picked;
     const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2 } = winner;
 
+    // Item 3 — data freshness. safeIV (convictionScore.cjs) silently
+    // returns its fallback (0) when Tradier's IV solver failed to converge
+    // (the documented 'NaN'-string / out-of-range failure mode) — with NO
+    // warning emitted at the point of failure, unlike chgPctEstimated's
+    // existing PRE-MARKET ESTIMATE warning a few lines up the call chain.
+    // That silent fallback is the actual risky case: iv=0 doesn't just mean
+    // "no data," it means "scores as if IV were maximally cheap" (see the
+    // IV-band scoring block in convictionScore.cjs) — the worst failure
+    // mode, since missing data disguises itself as a positive signal
+    // characteristic. td.iv===0 is a safe, sufficient detector here: a
+    // genuinely valid IV essentially never computes to exactly zero, so
+    // this doesn't need a new field threaded through buildNakedResult —
+    // the existing value already tells us what happened.
+    if (td.iv === 0) {
+      warnings.push('📉 IV UNAVAILABLE — the options pricing solver could not compute implied volatility for this contract (common with stale, zero, or crossed bid/ask quotes). IV-based scoring for this signal used a 0% placeholder, not a real reading — treat the conviction score with extra caution until you can verify current IV yourself.')
+    }
+
     const expiryDisplay = new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     const isPutReturn = optType === 'put';
     const bePriceReturn = td.primaryStrike
