@@ -1632,6 +1632,9 @@ useEffect(() => {
         })(),
         breakevenIsPut: optType === 'put',
         tfLabel:tfCfg.label,tfBadge:tfCfg.badge,tfColor:tfCfg.color,
+        // tfKey — see same-named addition in loadOrRefreshAlerts for why
+        // this (not tfLabel) is what pushToJournal needs to store correctly.
+        tfKey:scanTF,
         source:'',
         // Fundamentals
         sector:       fund?.sector       || null,
@@ -2187,6 +2190,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         tfLabel: TF_CONFIG[row.timeframe]?.label||row.timeframe,
         tfBadge: TF_CONFIG[row.timeframe]?.badge||'',
         tfColor: TF_CONFIG[row.timeframe]?.color||C.dim,
+        // tfKey — the RAW TF_CONFIG key (e.g. "Swing (21–45 DTE)"), distinct
+        // from tfLabel's display name ("Swing Trade"). Needed by
+        // pushToJournal to store the correct timeframe on trades — the
+        // verdict engine (item 5) looks up TF_WEIGHT_PROFILES by this exact
+        // key, and tfLabel would silently miss every lookup.
+        tfKey: row.timeframe,
         alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
         grade: row.grade,
       })))
@@ -2310,6 +2319,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       // (confirmed by the existing entry/mid handling just above this block).
       target:           (() => { const n = parsePrice(r.target); return isNaN(n) ? null : n })(),
       stop:             (() => { const n = parsePrice(r.stop);   return isNaN(n) ? null : n })(),
+      // timeframe — the RAW TF_CONFIG key (e.g. "Swing (21–45 DTE)"), added
+      // alongside target/stop for the same reason: the verdict engine
+      // (item 5) needs this exact key to look up TF_WEIGHT_PROFILES.
+      // r.tfLabel ("Swing Trade") is a DIFFERENT string and would silently
+      // miss every lookup — see the tfKey additions in loadOrRefreshAlerts
+      // and the manual-scan setScanResult block, same session, for where
+      // r.tfKey itself is populated. null if r.tfKey is somehow missing
+      // (older code path, edge case) — explicit null, not a guessed default,
+      // matching the session decision to skip rather than approximate.
+      timeframe:        r.tfKey || null,
     }
 
     if (!t.ticker) {

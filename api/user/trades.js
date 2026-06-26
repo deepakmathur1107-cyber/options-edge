@@ -137,6 +137,14 @@ module.exports = async function handler(req, res) {
       // guessed here.
       target_price:     num(b.target ?? b.targetPrice ?? b.target_price),
       stop_price:        num(b.stop ?? b.stopPrice ?? b.stop_price),
+      // timeframe — the raw TF_CONFIG key (e.g. "Swing (21–45 DTE)"), added
+      // alongside target_price/stop_price for the same item-5 verdict-engine
+      // need: TF_WEIGHT_PROFILES lookups require this exact key string, not
+      // the human-readable tfLabel ("Swing Trade"). Null for manual entries
+      // or older payloads without it -- the verdict engine must skip scoring
+      // on null-timeframe trades rather than default to a guessed profile
+      // (session decision: skip explicitly, do not approximate).
+      timeframe:        b.timeframe || null,
       status:           b.status       || 'Open',
       notes:            b.notes        || null,
       // Optional scoring fields from scanner
