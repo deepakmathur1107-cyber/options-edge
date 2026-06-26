@@ -298,6 +298,29 @@ module.exports = async function handler(req, res) {
       const { error } = await client.from('scan_results').upsert(row, { onConflict: 'ticker,timeframe' })
       if (error) { console.error(`[cron/scan] upsert failed for ${ticker}:`, error.message); errors++; return null }
 
+      // Append-only permanent record for engine-level success-rate QA (Phase 1).
+      // Distinct from scan_results above: never upserted/overwritten, never
+      // expires, and a failure here must NOT fail the scan or block scan_results
+      // (which is what the live UI depends on) — log and move on.
+      const historyRow = {
+        ticker, timeframe: tf, tf_label: r.tfLabel,
+        trade_type: r.tradeType, option_type: r.optionType,
+        direction_decision: r.directionDecision || null,
+        primary_strike: r.primaryStrikeRaw, expiry_raw: r.expiryRaw,
+        score: r.score, grade: r.grade,
+        reasons: r.reasons, warnings: r.warnings, hard_blocks: r.hardBlocks,
+        entry_mid: r.midRaw, bid: r.bidRaw, ask: r.askRaw,
+        underlying_price: r.priceRaw, iv: r.ivRaw, delta: r.deltaRaw,
+        chg_pct: parseFloat(r.chgPct) || null,
+        volume: r.volume, open_interest: r.oi, dte_at_signal: r.dte,
+        profit_target_pct: r.profitTargetPct, stop_loss_pct: r.stopLossPct,
+        sector: r.sector, industry: r.industry, market_cap: r.marketCap,
+        earnings_date: r.earningsDate,
+        scanned_at: scannedAt.toISOString(),
+      }
+      const { error: histErr } = await client.from('signal_history').insert(historyRow)
+      if (histErr) console.error(`[cron/scan] signal_history insert failed for ${ticker} (non-fatal):`, histErr.message)
+
       qualified++
       return r
     } catch (e) {
