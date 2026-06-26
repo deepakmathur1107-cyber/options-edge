@@ -1058,6 +1058,14 @@ export default function App(props={}) {
   useEffect(()=>{ scanTFRef.current = scanTF },[scanTF])
   const alertTfFilterRef = useRef(alertTfFilter)   // same pattern, for loadOrRefreshAlerts' interval
   useEffect(()=>{ alertTfFilterRef.current = alertTfFilter },[alertTfFilter])
+  // FIX: minScore had no ref equivalent — loadOrRefreshAlerts's setInterval
+  // closure captured whatever minScore was at START time and never saw later
+  // slider changes, so dragging the slider mid-run updated the header text
+  // (a direct state read) but silently kept scanning at the old threshold
+  // until the user stopped and restarted auto-scanner. Same fix shape as
+  // scanTFRef/alertTfFilterRef above.
+  const minScoreRef = useRef(minScore)
+  useEffect(()=>{ minScoreRef.current = minScore },[minScore])
 
   // ── futures (tools panel) ──
   const [futSym,     setFutSym]     = useState('ES')
@@ -2088,7 +2096,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       // FIX: scan-cache now requires auth (it serves the paid scan results) — send the token.
       const alertsTok = await getAuthToken().catch(()=>null)
       const tfParam = alertTfFilterRef.current ? `&tf=${encodeURIComponent(alertTfFilterRef.current)}` : ''
-      const res = await fetch(`/api/scan-cache?minScore=${minScore}${tfParam}`, {
+      const res = await fetch(`/api/scan-cache?minScore=${minScoreRef.current}${tfParam}`, {
         headers: alertsTok ? { Authorization: `Bearer ${alertsTok}` } : {}
       })
       const data = await res.json()
@@ -2147,9 +2155,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       setSelectedAlert(null)
       setAlertSR({})
       const note = rows.length===0
-        ? ` — try lowering Min Edge Score (currently ${minScore}%+); a high bar can legitimately mean zero matches right now`
+        ? ` — try lowering Min Edge Score (currently ${minScoreRef.current}%+); a high bar can legitimately mean zero matches right now`
         : ''
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScore}%+ threshold${note}`,...p.slice(0,99)])
+      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScoreRef.current}%+ threshold${note}`,...p.slice(0,99)])
     } catch (e) {
       setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
       runAutoScan()
