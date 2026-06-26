@@ -108,7 +108,17 @@ const getOptionHistory = async (occSymbol, startDate, endDate, tracker) => {
     `/markets/history?symbol=${occSymbol}&interval=daily&start=${startDate}&end=${endDate}`,
     tracker
   )
-  return d?.history?.day || []
+  const days = d?.history?.day
+  if (!days) return []
+  // FIX: confirmed live — Tradier returns a bare object (not an array) for
+  // /markets/history when the range covers exactly one day, same pattern
+  // already known from the batch quotes endpoint (sp500.js) and already
+  // guarded in getOptionTimesales below. Missing this here caused the
+  // resolver to silently skip days that DID have crossable price data,
+  // misreading a real stop-loss hit as "no data this day" — caught during
+  // manual verification against a backdated test row (AAPL, June 25) before
+  // this shipped to the full backlog.
+  return Array.isArray(days) ? days : [days]
 }
 // 1-min bars for an OCC option symbol, for one calendar day at a time.
 // startDateTime/endDateTime format: 'YYYY-MM-DD HH:MM' (ET, per Tradier docs).
