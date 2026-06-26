@@ -291,6 +291,16 @@ module.exports = async function handler(req, res) {
         reasons: r.reasons, warnings: r.warnings, hard_blocks: r.hardBlocks,
         sector: r.sector, industry: r.industry, market_cap: r.marketCap,
         earnings_date: r.earningsDate, expiry_display: r.expiryDisplay,
+        // expiry_raw — ISO date (e.g. "2026-07-17"), as opposed to
+        // expiry_display's human-readable form ("Jul 17, 2026"). Added
+        // because pushToJournal (App.jsx) was forwarding expiry_display
+        // into trades.expiration, which buildOccSymbol cannot parse —
+        // confirmed live: produced a garbage OCC symbol, Tradier correctly
+        // found no quote for it, the verdict-check cron logged it as
+        // "no_quote" rather than scoring the position. r.expiryRaw already
+        // exists on scanTicker's return object (scanLogic.js) — this was a
+        // forward-the-existing-field fix, not new computation.
+        expiry_raw: r.expiryRaw,
         direction_decision: r.directionDecision || null,
         scanned_at: scannedAt.toISOString(), expires_at: expiresAt.toISOString(),
       }

@@ -2150,6 +2150,13 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       setAlertHistory(rows.map(row => ({
         ticker: row.ticker, tradeType: row.trade_type, score: row.score,
         expiryDisplay: row.expiry_display, strikeStr: row.strike_str,
+        // expiryRaw — ISO date, needed by buildOccSymbol (verdict-check
+        // cron). row.expiry_display alone cannot be parsed back into a
+        // valid OCC symbol — confirmed live as a real bug (LLY trade,
+        // item-5 testing): pushToJournal was forwarding the display string
+        // into trades.expiration, producing a garbage OCC symbol and a
+        // false "no_quote" skip instead of a real verdict score.
+        expiryRaw: row.expiry_raw,
         entry: row.entry, target: row.target, stop: row.stop,
         bid: row.bid, ask: row.ask, mid: row.mid, delta: row.delta,
         // FIX: this object never had a `price` field at all — scan_results
@@ -2294,7 +2301,21 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       exit_price:       null,
       pnl:              '',
       contracts:        1,
-      expiration:       r.expiryDisplay||'',
+      // expiration — sent to the backend (api/user/trades.js stores this as
+      // trades.expiration), so it MUST be the raw ISO date, not a display
+      // string. Was r.expiryDisplay ("Jul 2, 2026") -- confirmed live as a
+      // real bug: buildOccSymbol (verdict-check cron) can't parse that into
+      // a valid OCC symbol, producing a false "no_quote" skip instead of a
+      // real verdict score (LLY trade, item-5 testing). r.expiryRaw is the
+      // ISO form, added to both call sites (loadOrRefreshAlerts and
+      // setScanResult) this same round.
+      //
+      // expiry (no underscore, below) is DELIBERATELY LEFT as the display
+      // string — confirmed it's rendered directly in the Trades tab UI
+      // (t.expiry at the trade-row detail line), so changing it to ISO
+      // would break that display. Two different fields for two different
+      // jobs, not an oversight.
+      expiration:       r.expiryRaw||r.expiryDisplay||'',
       expiry:           r.expiryDisplay||'',
       strike:           strikeNum,
       strikeDisplay:    r.strikeStr||'',
