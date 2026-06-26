@@ -4,6 +4,7 @@ import AppNav from './components/AppNav'
 import MorningBrief from './components/MorningBrief'
 import TweetShare from './components/TweetShare'
 import AdminDashboard from './components/AdminDashboard'
+import SignalOutcomesTable from './components/SignalOutcomesTable'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
@@ -4392,6 +4393,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Signal Outcomes — Phase 3 of the success-rate tracking project.
+                Full signal-level table over signal_history, resolved by the
+                outcome resolver cron (api/cron/resolve-outcomes.js). */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Signal Outcomes</span>
+              </div>
+              <SignalOutcomesTable getToken={getAuthToken} theme={C} />
             </div>
 
           </div>

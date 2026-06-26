@@ -1,0 +1,248 @@
+import { useState, useEffect, useCallback } from 'react';
+
+// ── Signal Outcomes table (Phase 3 of the success-rate tracking project) ────
+// Full signal-level view of resolved (and unresolved) signal_history rows.
+// Backed by /api/admin/signal-outcomes — see that file for the query
+// contract (pagination, sort, filter params).
+
+const OUTCOME_STYLE = {
+  WIN:             { label: 'WIN',     bg: 'green' },
+  LOSS:            { label: 'LOSS',    bg: 'red' },
+  EXPIRED_PARTIAL: { label: 'PARTIAL', bg: 'orange' },
+  EXPIRED_FLAT:    { label: 'FLAT',    bg: 'dim' },
+};
+
+function OutcomeBadge({ outcome, C }) {
+  if (!outcome) {
+    return (
+      <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 20, fontWeight: 500, background: C.cardAlt, color: C.dim }}>
+        OPEN
+      </span>
+    );
+  }
+  const s = OUTCOME_STYLE[outcome];
+  if (!s) {
+    // Defensive fallback — e.g. resolution_method:'data_unavailable' rows
+    // have outcome still null at the DB level, so this shouldn't normally
+    // fire, but an unknown enum value should be visible, not silently blank.
+    return <span style={{ fontSize: 10, color: C.dim }}>{outcome}</span>;
+  }
+  const color = C[s.bg] || C.dim;
+  return (
+    <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 20, fontWeight: 600, background: `${color}20`, color, letterSpacing: 0.3 }}>
+      {s.label}
+    </span>
+  );
+}
+
+function SortableHeader({ label, column, sortBy, sortDir, onSort, C, align }) {
+  const active = sortBy === column;
+  return (
+    <th
+      onClick={() => onSort(column)}
+      style={{
+        textAlign: align || 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600,
+        letterSpacing: 0.4, textTransform: 'uppercase', color: active ? C.text : C.dim,
+        cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+      }}
+    >
+      {label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+    </th>
+  );
+}
+
+export default function SignalOutcomesTable({ getToken, theme }) {
+  const C = theme || {};
+  const resolvedGetToken = getToken || (async () => null);
+
+  const [rows, setRows] = useState([]);
+  const [pagination, setPagination] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState('scanned_at');
+  const [sortDir, setSortDir] = useState('desc');
+  const [timeframe, setTimeframe] = useState('');
+  const [outcomeFilter, setOutcomeFilter] = useState('');
+  const [tickerFilter, setTickerFilter] = useState('');
+  // Separate input state from the actual applied filter so typing a ticker
+  // doesn't fire a request on every keystroke.
+  const [tickerInput, setTickerInput] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const token = await resolvedGetToken();
+      const params = new URLSearchParams({
+        page: String(page), pageSize: '50', sortBy, sortDir,
+      });
+      if (timeframe) params.set('timeframe', timeframe);
+      if (outcomeFilter) params.set('outcome', outcomeFilter);
+      if (tickerFilter) params.set('ticker', tickerFilter);
+
+      const res = await fetch(`/api/admin/signal-outcomes?${params}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const json = await res.json();
+      setRows(json.rows || []);
+      setPagination(json.pagination);
+      setStats(json.stats);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, sortBy, sortDir, timeframe, outcomeFilter, tickerFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onSort = (column) => {
+    if (sortBy === column) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(column); setSortDir('desc');
+    }
+    setPage(1);
+  };
+
+  const applyTickerFilter = () => {
+    setTickerFilter(tickerInput.trim().toUpperCase());
+    setPage(1);
+  };
+
+  const selectStyle = {
+    fontSize: 12, padding: '6px 10px', borderRadius: 6,
+    border: `1px solid ${C.border}`, background: C.cardAlt, color: C.text,
+  };
+
+  const cell = { padding: '8px 10px', fontSize: 12, color: C.text, whiteSpace: 'nowrap' };
+
+  return (
+    <div>
+      {/* Filter bar */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <select value={timeframe} onChange={e => { setTimeframe(e.target.value); setPage(1); }} style={selectStyle}>
+          <option value="">All timeframes</option>
+          <option value="Quick (5–14 DTE)">Quick Play</option>
+          <option value="Swing (21–45 DTE)">Swing Trade</option>
+          <option value="LEAP (90–180 DTE)">LEAP Option</option>
+          <option value="Deep LEAP (180–365 DTE)">Deep LEAP</option>
+        </select>
+        <select value={outcomeFilter} onChange={e => { setOutcomeFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          <option value="">All outcomes</option>
+          <option value="WIN">Win</option>
+          <option value="LOSS">Loss</option>
+          <option value="EXPIRED_PARTIAL">Expired (partial)</option>
+          <option value="EXPIRED_FLAT">Expired (flat)</option>
+          <option value="UNRESOLVED">Still open</option>
+        </select>
+        <input
+          value={tickerInput}
+          onChange={e => setTickerInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && applyTickerFilter()}
+          placeholder="Ticker…"
+          style={{ ...selectStyle, width: 100 }}
+        />
+        <button onClick={applyTickerFilter} style={{ ...selectStyle, cursor: 'pointer' }}>Filter</button>
+        {tickerFilter && (
+          <button
+            onClick={() => { setTickerFilter(''); setTickerInput(''); setPage(1); }}
+            style={{ ...selectStyle, cursor: 'pointer', color: C.dim }}
+          >
+            ✕ {tickerFilter}
+          </button>
+        )}
+        <button onClick={load} disabled={loading} style={{ ...selectStyle, cursor: 'pointer', marginLeft: 'auto' }}>
+          {loading ? 'Loading…' : '↻ Refresh'}
+        </button>
+      </div>
+
+      {/* Stats summary for current filter */}
+      {stats && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12 }}>
+          <span style={{ color: C.text, fontWeight: 600 }}>
+            Win rate: {stats.winRate !== null ? `${stats.winRate}%` : '—'}
+            <span style={{ color: C.dim, fontWeight: 400 }}> ({stats.wins}W / {stats.lossesForRate}L total — {stats.losses} actual stop-outs, {stats.expiredPartial + stats.expiredFlat} counted as losses from expiry)</span>
+          </span>
+          <span style={{ color: C.dim }}>Partial: {stats.expiredPartial}</span>
+          <span style={{ color: C.dim }}>Flat: {stats.expiredFlat}</span>
+          <span style={{ color: C.dim }}>Open: {stats.unresolved}</span>
+          <span style={{ color: C.dim }}>Total in filter: {stats.totalInFilter}</span>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 12, color: C.red, background: `${C.red}12`, border: `1px solid ${C.red}30`, borderRadius: 6, padding: '10px 12px', marginBottom: 10 }}>
+          Error: {error}
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+          <thead style={{ background: C.bgAlt, borderBottom: `1px solid ${C.border}` }}>
+            <tr>
+              <SortableHeader label="Ticker" column="ticker" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
+              <SortableHeader label="Timeframe" column="timeframe" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
+              <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Type</th>
+              <SortableHeader label="Score" column="score" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} align="right" />
+              <SortableHeader label="Scanned" column="scanned_at" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
+              <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Outcome</th>
+              <SortableHeader label="P&L %" column="pnl_pct_at_expiry" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} align="right" />
+              <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Method</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && !loading && (
+              <tr><td colSpan={8} style={{ ...cell, textAlign: 'center', color: C.dim, padding: '20px 10px' }}>No signals match this filter</td></tr>
+            )}
+            {rows.map((r, i) => (
+              <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}20`, background: i % 2 === 0 ? 'transparent' : C.cardAlt }}>
+                <td style={{ ...cell, fontWeight: 600, color: C.blue, fontFamily: "'IBM Plex Mono', monospace" }}>{r.ticker}</td>
+                <td style={cell}>{r.tf_label}</td>
+                <td style={{ ...cell, color: r.trade_type?.toLowerCase().includes('put') ? C.red : C.green }}>{r.trade_type}</td>
+                <td style={{ ...cell, textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace" }}>{r.score}</td>
+                <td style={{ ...cell, color: C.dim, fontSize: 11 }}>{new Date(r.scanned_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                <td style={cell}><OutcomeBadge outcome={r.outcome} C={C} /></td>
+                <td style={{ ...cell, textAlign: 'right', color: r.pnl_pct_at_expiry > 0 ? C.green : r.pnl_pct_at_expiry < 0 ? C.red : C.dim, fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {r.pnl_pct_at_expiry !== null && r.pnl_pct_at_expiry !== undefined ? `${(r.pnl_pct_at_expiry * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td style={{ ...cell, color: C.dim, fontSize: 11 }}>{r.resolution_method || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {pagination && pagination.totalPages > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 12 }}>
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            style={{ ...selectStyle, cursor: page <= 1 ? 'default' : 'pointer', opacity: page <= 1 ? 0.5 : 1 }}
+          >
+            ← Prev
+          </button>
+          <span style={{ fontSize: 12, color: C.dim }}>
+            Page {pagination.page} of {pagination.totalPages} ({pagination.totalRows} total)
+          </span>
+          <button
+            onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+            disabled={page >= pagination.totalPages}
+            style={{ ...selectStyle, cursor: page >= pagination.totalPages ? 'default' : 'pointer', opacity: page >= pagination.totalPages ? 0.5 : 1 }}
+          >
+            Next →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
