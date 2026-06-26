@@ -2259,6 +2259,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       breakevenReqPct:  String(r.breakevenPct||''),
       hardBlockCount:   String((r.hardBlocks||[]).length),
       grade:            r.grade||'',
+      // target/stop — NEWLY FORWARDED (see api/user/trades.js change, same
+      // session): r.target/r.stop already exist on every scan result (same
+      // fields scan_results persists as target/stop) but were never read
+      // into this payload before now, so every logged trade had nothing to
+      // re-evaluate against later. parsePrice handles the "$4.10"-style
+      // formatted-string case, same as entryNum above -- r.target/r.stop are
+      // typically already-formatted display strings here, not raw numbers
+      // (confirmed by the existing entry/mid handling just above this block).
+      target:           (() => { const n = parsePrice(r.target); return isNaN(n) ? null : n })(),
+      stop:             (() => { const n = parsePrice(r.stop);   return isNaN(n) ? null : n })(),
     }
 
     if (!t.ticker) {

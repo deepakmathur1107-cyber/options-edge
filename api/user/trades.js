@@ -126,6 +126,17 @@ module.exports = async function handler(req, res) {
                       : b.entry_price  != null ? String(b.entry_price) : null,
       entry_price:      b.entry_price  != null ? num(b.entry_price)
                       : b.entry        != null ? num(b.entry) : null,
+      // target_price/stop_price — captured at entry so a future hold/close
+      // verdict engine (item 5) has a concrete level to re-evaluate against,
+      // instead of having to invent a new target/stop at check-time using
+      // only current data. Accepts the scanner's field names (target/stop,
+      // matching scan_results/signal_history's own naming) as well as a
+      // generic targetPrice/stopPrice for manual trade-log entries that
+      // didn't originate from a scan signal. Null is a valid, expected value
+      // for manual entries with no target/stop set -- NOT backfilled or
+      // guessed here.
+      target_price:     num(b.target ?? b.targetPrice ?? b.target_price),
+      stop_price:        num(b.stop ?? b.stopPrice ?? b.stop_price),
       status:           b.status       || 'Open',
       notes:            b.notes        || null,
       // Optional scoring fields from scanner
