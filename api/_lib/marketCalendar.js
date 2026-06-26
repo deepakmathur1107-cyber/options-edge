@@ -69,4 +69,21 @@ function isMarketHours(date) {
   return mins >= 9 * 60 + 30 && mins < 16 * 60
 }
 
-module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts }
+// ── New for the outcome resolver (Phase 2) ──────────────────────────────────
+// Returns an array of 'YYYY-MM-DD' strings for every trading day in
+// [startDate, endDate], inclusive, skipping weekends and NYSE holidays.
+// Used by the resolver to walk a signal's lifetime one real trading day at a
+// time instead of naive calendar-day arithmetic (see resolver spec, §5).
+function tradingDaysBetween(startDate, endDate) {
+  const start = startDate instanceof Date ? startDate : new Date(startDate + 'T12:00:00')
+  const end   = endDate instanceof Date ? endDate : new Date(endDate + 'T12:00:00')
+  const days = []
+  const cur = new Date(start)
+  while (cur <= end) {
+    if (isTradingDay(cur)) days.push(ymd(cur))
+    cur.setDate(cur.getDate() + 1)
+  }
+  return days
+}
+
+module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts, tradingDaysBetween }
