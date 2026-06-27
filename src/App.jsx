@@ -5,6 +5,7 @@ import MorningBrief from './components/MorningBrief'
 import TweetShare from './components/TweetShare'
 import AdminDashboard from './components/AdminDashboard'
 import SignalOutcomesTable from './components/SignalOutcomesTable'
+import TradeOutcomesTable from './components/TradeOutcomesTable'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
@@ -4580,6 +4581,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Signal Outcomes</span>
               </div>
               <SignalOutcomesTable getToken={getAuthToken} theme={C} />
+            </div>
+
+            {/* Trade Outcomes — item 2 (final design). Autonomous resolution
+                of logged paper trades, separate from signal_history's own
+                track record (see api/cron/resolve-trade-outcomes.js and
+                migration-create-trade-outcomes.sql for why this is a
+                separate table/resolver, not folded into signal_history). */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Trade Outcomes</span>
+              </div>
+              <TradeOutcomesTable getToken={getAuthToken} theme={C} />
             </div>
 
           </div>

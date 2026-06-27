@@ -9,19 +9,19 @@
       "schedule": "0 13 * * 1-5"
     },
     {
-      "path": "/api/cron/scan?tf=Quick (5–14 DTE)",
+      "path": "/api/cron/scan?tf=Quick (5\u201314 DTE)",
       "schedule": "*/15 10-22 * * 1-5"
     },
     {
-      "path": "/api/cron/scan?tf=Swing (21–45 DTE)",
+      "path": "/api/cron/scan?tf=Swing (21\u201345 DTE)",
       "schedule": "*/15 10-22 * * 1-5"
     },
     {
-      "path": "/api/cron/scan?tf=LEAP (90–180 DTE)",
+      "path": "/api/cron/scan?tf=LEAP (90\u2013180 DTE)",
       "schedule": "0 10-22 * * 1-5"
     },
     {
-      "path": "/api/cron/scan?tf=Deep LEAP (180–365 DTE)",
+      "path": "/api/cron/scan?tf=Deep LEAP (180\u2013365 DTE)",
       "schedule": "0 10-22 * * 1-5"
     },
     {
@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/verdict-check?dryRun=false",
       "schedule": "*/15 10-22 * * 1-5"
+    },
+    {
+      "path": "/api/cron/resolve-trade-outcomes",
+      "schedule": "30 23 * * 1-5"
     }
   ],
   "functions": {
