@@ -173,7 +173,15 @@ const safeChgPct = (q) => {
   const mid = (bid+ask)/2
   const bidAskPct = ((mid-prev)/prev)*100
 
-  if (validReported === 0) return { pct: bidAskPct, estimated: true }
+  // Only override a genuine 0% with the bid/ask estimate during pre-market —
+  // that's the one window where Tradier's change_percentage is known to be
+  // frozen at 0 while the stock has actually moved (see comment above). Once
+  // the market is closed (incl. weekends/after-hours), bid/ask spreads on
+  // index quotes go stale and wide, and a 0% reported change is genuinely
+  // correct — using bidAskPct here produces a spurious phantom % (confirmed
+  // live on SPX: bid/ask midpoint vs. prevclose gave -0.24% on a flat
+  // Saturday close where the real change was 0%).
+  if (validReported === 0 && isPreMarket()) return { pct: bidAskPct, estimated: true }
 
   const diverges = Math.abs(Math.abs(reported) - Math.abs(bidAskPct)) > 1.0
   if (!diverges) return { pct: validReported, estimated: false }
