@@ -66,7 +66,7 @@ export default function TradeOutcomesTable({ getToken, theme }) {
   const [error, setError] = useState(null);
 
   const [page, setPage] = useState(1);
-  const [sortBy, setSortBy] = useState('created_at');
+  const [sortBy, setSortBy] = useState('resolved_at');
   const [sortDir, setSortDir] = useState('desc');
   const [outcomeFilter, setOutcomeFilter] = useState('');
   const [tickerFilter, setTickerFilter] = useState('');
@@ -184,7 +184,8 @@ export default function TradeOutcomesTable({ getToken, theme }) {
             <tr>
               <SortableHeader label="Ticker" column="ticker" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
               <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Type</th>
-              <SortableHeader label="Logged" column="created_at" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
+              <SortableHeader label="Resolved" column="resolved_at" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} />
+              <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Logged</th>
               <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Outcome</th>
               <SortableHeader label="P&L %" column="pnl_pct_at_expiry" sortBy={sortBy} sortDir={sortDir} onSort={onSort} C={C} align="right" />
               <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: C.dim }}>Method</th>
@@ -192,7 +193,7 @@ export default function TradeOutcomesTable({ getToken, theme }) {
           </thead>
           <tbody>
             {rows.length === 0 && !loading && (
-              <tr><td colSpan={6} style={{ ...cell, textAlign: 'center', color: C.dim, padding: '20px 10px' }}>No trades match this filter</td></tr>
+              <tr><td colSpan={7} style={{ ...cell, textAlign: 'center', color: C.dim, padding: '20px 10px' }}>No trades match this filter</td></tr>
             )}
             {rows.map((r) => {
               const t = r.trades || {};
@@ -200,7 +201,8 @@ export default function TradeOutcomesTable({ getToken, theme }) {
                 <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}20` }}>
                   <td style={{ ...cell, fontWeight: 600, color: C.blue, fontFamily: "'IBM Plex Mono', monospace" }}>{t.ticker || '—'}</td>
                   <td style={{ ...cell, color: (t.option_type || '').toLowerCase().includes('put') ? C.red : C.green }}>{t.option_type || '—'}</td>
-                  <td style={{ ...cell, color: C.dim, fontSize: 11 }}>{r.created_at ? new Date(r.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td style={{ ...cell, color: C.dim, fontSize: 11 }}>{r.resolved_at ? new Date(r.resolved_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                  <td style={{ ...cell, color: C.dim, fontSize: 11 }}>{t.created_at ? new Date(t.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td style={cell}><OutcomeBadge outcome={r.outcome} C={C} /></td>
                   <td style={{ ...cell, textAlign: 'right', color: r.pnl_pct_at_expiry > 0 ? C.green : r.pnl_pct_at_expiry < 0 ? C.red : C.dim, fontFamily: "'IBM Plex Mono', monospace" }}>
                     {r.pnl_pct_at_expiry !== null && r.pnl_pct_at_expiry !== undefined ? `${(r.pnl_pct_at_expiry * 100).toFixed(0)}%` : '—'}

@@ -21,7 +21,7 @@ const supabase = createClient(
 );
 
 const ALLOWED_SORT_COLUMNS = new Set([
-  'created_at', 'resolved_at', 'pnl_pct_at_expiry', 'ticker',
+  'resolved_at', 'pnl_pct_at_expiry', 'ticker',
 ]);
 const ALLOWED_OUTCOMES = new Set([
   'WIN', 'LOSS', 'EXPIRED_PARTIAL', 'EXPIRED_FLAT', 'UNRESOLVED',
@@ -47,9 +47,9 @@ module.exports = async (req, res) => {
     // 'ticker' (lives on trades, not trade_outcomes) — Supabase's
     // .order() can't sort by a column on the embedded/joined table in a
     // single query the way this needs, so ticker-sort is handled as a
-    // post-fetch JS sort on the current page only. created_at/resolved_at/
+    // post-fetch JS sort on the current page only. resolved_at/
     // pnl_pct_at_expiry sort natively via trade_outcomes' own .order().
-    const sortBy   = ALLOWED_SORT_COLUMNS.has(req.query.sortBy) ? req.query.sortBy : 'created_at';
+    const sortBy   = ALLOWED_SORT_COLUMNS.has(req.query.sortBy) ? req.query.sortBy : 'resolved_at';
     const sortDir  = req.query.sortDir === 'asc' ? true : false;
 
     const ticker  = req.query.ticker ? req.query.ticker.toUpperCase() : null;
@@ -66,7 +66,7 @@ module.exports = async (req, res) => {
     // ON DELETE CASCADE, but defensive) doesn't silently show as a blank row.
     let query = supabase
       .from('trade_outcomes')
-      .select('*, trades!inner(ticker, option_type, strike, expiration, entry_price, target_price, stop_price, conviction, timeframe)', { count: 'exact' });
+      .select('*, trades!inner(ticker, option_type, strike, expiration, entry_price, target_price, stop_price, conviction, timeframe, created_at)', { count: 'exact' });
 
     if (outcome === 'UNRESOLVED') {
       query = query.is('outcome', null);
@@ -77,13 +77,16 @@ module.exports = async (req, res) => {
 
     if (sortBy === 'ticker') {
       // Can't sort by an embedded column server-side here -- order by
-      // created_at as a stable base, then re-sort the returned page by
-      // ticker in JS below. This means ticker-sort is only stable WITHIN
-      // a page, not globally across pages -- an accepted limitation
+      // resolved_at as a stable base (real column on trade_outcomes itself;
+      // FIXED here after a live error caught a wrong assumption that
+      // trade_outcomes had a created_at column -- it doesn't, only
+      // resolved_at/hit_target_at/hit_stop_at), then re-sort the returned
+      // page by ticker in JS below. This means ticker-sort is only stable
+      // WITHIN a page, not globally across pages -- an accepted limitation
       // (same scale assumption as signal-outcomes.js's stats query: fine
       // at today's volume, would need a proper view/function if
       // trade_outcomes ever grows large enough for this to matter).
-      query = query.order('created_at', { ascending: false });
+      query = query.order('resolved_at', { ascending: false });
     } else {
       query = query.order(sortBy, { ascending: sortDir });
     }
