@@ -166,6 +166,51 @@ module.exports = async function handler(req, res) {
           }
         }
       }
+
+      // Suggest-only close prompts. Fires on hit_target/hit_stop
+      // REGARDLESS of isTransition above — a trade can stay flagged across
+      // many consecutive checks while still having no UNRESOLVED
+      // suggestion, if the user already confirmed/dismissed an earlier
+      // one. Reuses verdict.currentMid/target_price/stop_price already
+      // fetched by checkVerdict above for the flagging decision — NOT a
+      // second resolver hitting Tradier independently.
+      //
+      // REBUILT (Sat morning) after discovering an earlier, debugged
+      // version of this never actually shipped — it existed in-sandbox but
+      // wasn't carried into the deploy round that followed. This version
+      // uses explicit check-then-insert (NOT upsert+onConflict), per two
+      // real bugs found and fixed while originally drafting this: (1)
+      // onConflict/ignoreDuplicates are .upsert() options, not .insert()
+      // options; (2) PostgREST's onConflict cannot target a partial
+      // (WHERE-qualified) unique index at all -- confirmed against
+      // PostgREST's own open feature-request issue for this. The migration
+      // for this table has NO partial unique index this time; dedup is
+      // purely this check-then-insert, application-level.
+      const hitTargetOrStop = (verdict.flagReasons || []).some(r => r === 'hit_target' || r === 'hit_stop')
+      if (hitTargetOrStop && !dryRun) {
+        const reason = verdict.flagReasons.includes('hit_target') ? 'hit_target' : 'hit_stop'
+        const { data: existingPending } = await client
+          .from('trade_close_suggestions')
+          .select('id')
+          .eq('trade_id', trade.id)
+          .eq('status', 'pending')
+          .maybeSingle()
+
+        if (!existingPending) {
+          const { error: suggestErr } = await client
+            .from('trade_close_suggestions')
+            .insert({
+              trade_id: trade.id,
+              reason,
+              trigger_mid: verdict.currentMid,
+              target_price: trade.target_price,
+              stop_price: trade.stop_price,
+            })
+          if (suggestErr) {
+            console.warn(`[cron/verdict-check] suggestion insert failed for trade ${trade.id} (${trade.ticker}):`, suggestErr.message)
+          }
+        }
+      }
     } catch (e) {
       errors++
       console.error(`[cron/verdict-check] unhandled error for trade ${trade.id} (${trade.ticker}):`, e.message)

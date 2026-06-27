@@ -150,7 +150,59 @@ export default function TradeLog(props) {
     finally    { setLoading(false)  }
   }
 
-  useEffect(() => { loadTrades() }, [])
+  // suggestions — pending trade_close_suggestions for this user's trades.
+  // Fetched once on page load alongside loadTrades, NOT per-row on demand
+  // like verdictHistory — there are typically few of these at once and a
+  // user should see them immediately on opening the page, not have to
+  // click into each trade to discover one exists.
+  const [suggestions, setSuggestions] = useState([])
+  const [suggestionActionLoading, setSuggestionActionLoading] = useState(null)
+
+  async function loadSuggestions() {
+    try {
+      const h = await authHeaders()
+      const res = await fetch('/api/user/trade-suggestions', { headers:h })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json()
+      setSuggestions(d.suggestions ?? [])
+    } catch(e) {
+      // Deliberately not surfacing this as a page-level error -- a failed
+      // suggestions fetch shouldn't block the trade log itself from
+      // showing. Logged for visibility, not shown to the user.
+      console.error('[TradeLog] failed to load suggestions:', e.message)
+    }
+  }
+
+  async function actOnSuggestion(suggestionId, action) {
+    setSuggestionActionLoading(suggestionId)
+    try {
+      const h = await authHeaders()
+      const res = await fetch(`/api/user/trade-suggestions?id=${suggestionId}`, {
+        method: 'PUT',
+        headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      // Remove the acted-on suggestion locally rather than re-fetching the
+      // whole list -- it's already resolved server-side, no need to round-
+      // trip again just to learn that.
+      setSuggestions(prev => prev.filter(s => s.id !== suggestionId))
+      // A confirm closes the underlying trade server-side -- reload the
+      // trade list so the now-closed trade reflects its new status/exit
+      // price immediately, rather than showing stale "Open" until the
+      // next manual refresh.
+      if (action === 'confirm') await loadTrades()
+    } catch(e) {
+      setError(e.message)
+    } finally {
+      setSuggestionActionLoading(null)
+    }
+  }
+
+  useEffect(() => { loadTrades(); loadSuggestions() }, [])
 
   async function handleAdd() {
     setFormError(null)
@@ -423,6 +475,57 @@ export default function TradeLog(props) {
         {/* ════════════ TRADE LOG SECTION ════════════ */}
         {section==='log' && (
           <div className="slide-down">
+
+            {/* Pending close suggestions — suggest-only per session design:
+                a trade hitting target/stop never auto-closes. Shown
+                immediately on page load (loadSuggestions runs alongside
+                loadTrades), not buried per-row, since these are
+                time-sensitive prompts the user should see right away. */}
+            {suggestions.length > 0 && (
+              <div style={{marginBottom:16,display:'flex',flexDirection:'column',gap:8}}>
+                {suggestions.map(s => {
+                  const t = s.trades || {}
+                  const isTarget = s.reason === 'hit_target'
+                  return (
+                    <div key={s.id} style={{
+                      background:isTarget?`${C.green}10`:`${C.red}10`,
+                      border:`1px solid ${isTarget?C.green:C.red}40`,
+                      borderRadius:8,padding:'10px 14px',
+                      display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',
+                    }}>
+                      <span style={{fontSize:16}}>{isTarget ? '🎯' : '🛑'}</span>
+                      <span style={{fontSize:13,color:C.text,flex:1}}>
+                        <strong style={{color:C.blue}}>{t.ticker}</strong> {isTarget ? 'hit target' : 'hit stop'} at{' '}
+                        <strong>${parseFloat(s.trigger_mid).toFixed(2)}</strong>
+                        {' — '}mark this trade as closed?
+                      </span>
+                      <button
+                        disabled={suggestionActionLoading===s.id}
+                        onClick={()=>actOnSuggestion(s.id,'confirm')}
+                        style={{
+                          background:C.green,border:'none',color:C.bg,fontWeight:700,
+                          padding:'6px 14px',borderRadius:6,fontSize:12,cursor:'pointer',
+                          opacity:suggestionActionLoading===s.id?0.6:1,
+                        }}
+                      >
+                        {suggestionActionLoading===s.id ? '…' : 'Confirm close'}
+                      </button>
+                      <button
+                        disabled={suggestionActionLoading===s.id}
+                        onClick={()=>actOnSuggestion(s.id,'dismiss')}
+                        style={{
+                          background:'transparent',border:`1px solid ${C.border}`,color:C.dim,
+                          padding:'6px 14px',borderRadius:6,fontSize:12,cursor:'pointer',
+                          opacity:suggestionActionLoading===s.id?0.6:1,
+                        }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             {/* Toolbar */}
             <div style={{
