@@ -6,6 +6,8 @@ import TweetShare from './components/TweetShare'
 import AdminDashboard from './components/AdminDashboard'
 import SignalOutcomesTable from './components/SignalOutcomesTable'
 import TradeOutcomesTable from './components/TradeOutcomesTable'
+import TrackRecordCard from './components/TrackRecordCard'
+import ClusterDistributionPanel from './components/ClusterDistributionPanel'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
@@ -2769,6 +2771,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             )
           })()}
 
+          {/* ── Track Record — item 1. Engine-wide win rate, honest empty
+              state until real resolved data exists. Backed by
+              api/track-record.js (built earlier this session, public
+              endpoint, no auth — this is a marketing-honest stat, not
+              admin-only data). Placed here, in Dash's hero area alongside
+              the two market reads, per the original session brief: Dash =
+              aggregate summary, Scan = per-signal context. */}
+          <TrackRecordCard C={C} />
+
           <div className="dash-grid">
           <div className="dash-left">
 
@@ -4593,6 +4604,19 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Trade Outcomes</span>
               </div>
               <TradeOutcomesTable getToken={getAuthToken} theme={C} />
+            </div>
+
+            {/* Cluster Distribution — item 4 tuning support. Turns the
+                manual SQL query (item4-cluster-tuning-check.sql) into a
+                real view, so checking whether CLUSTER_MIN_COUNT still
+                looks right is "load this section" instead of "write SQL
+                by hand." Does not suggest a new value — surfaces the
+                distribution, the judgment call stays human. */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                <span style={{fontSize:12,color:C.orange,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>🔀 Cluster Distribution</span>
+              </div>
+              <ClusterDistributionPanel getToken={getAuthToken} theme={C} />
             </div>
 
           </div>
