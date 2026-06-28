@@ -397,7 +397,7 @@ module.exports = async function handler(req, res) {
         if (emailToUse) {
           const { error: backfillErr } = await supabase
             .from('alert_prefs')
-            .update({ alert_email: emailToUse })
+            .update({ alert_email: emailToUse, updated_at: new Date().toISOString() })
             .eq('clerk_user_id', user.clerk_user_id)
           if (backfillErr) console.error(`[alerts/send] alert_email backfill failed for ${user.clerk_user_id}:`, backfillErr.message)
         }
