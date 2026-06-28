@@ -329,7 +329,23 @@ function scoreConviction(p) {
   // fired (fix #1), not a flat constant that could let a 42%-capped chasing
   // setup drift back up to 48% if enough other bonuses stacked on top. ──
   if (hardBlockCap !== null) score = Math.min(score, hardBlockCap)
+
+  // 95 ceiling — deliberate, not arbitrary: this is a heuristic conviction
+  // score (technicals + IV + breakeven math + catalyst proxies), not a
+  // guarantee, and a UI that can show "100" invites a false sense of
+  // certainty the underlying signal can't back up. Reserving the top 5
+  // points is a small, deliberate "even our best setup isn't certain" tell.
+  // Previously this clamp fired silently (no warning, unlike the 72 cap
+  // just above) -- confirmed live: ~1% of all scans hit this ceiling
+  // (71 of ~7,225 in a 4-day window), common enough that silent clamping
+  // meant a true 95 and a clamped-down 130 looked identical to the user
+  // with no way to tell which. Warning added for the same transparency
+  // reason the no-catalyst cap already has one.
+  const preCeilingScore = score
   score = Math.min(95, Math.max(20, score))
+  if (preCeilingScore > 95) {
+    warnings.push(`Score capped at 95 — this setup scored even higher (${preCeilingScore}) before the ceiling, but conviction scores are capped to avoid implying certainty.`)
+  }
 
   return { score, reasons, warnings, hardBlocks }
 }
