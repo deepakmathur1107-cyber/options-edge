@@ -234,7 +234,7 @@ module.exports = async function handler(req, res) {
       if (!quote || !expDates.length) { scanned++; return null }
       const price = parseFloat(quote.last || quote.prevclose || 0)
       if (!price) { scanned++; return null }
-      const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
+      const { date: expiryRaw } = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
       const chain = await getChain(ticker, expiryRaw, rateTracker)
       if (!chain.length) { scanned++; return null }
 
@@ -301,6 +301,7 @@ module.exports = async function handler(req, res) {
         // exists on scanTicker's return object (scanLogic.js) — this was a
         // forward-the-existing-field fix, not new computation.
         expiry_raw: r.expiryRaw,
+        is_fallback_expiry: r.isFallbackExpiry || false,
         direction_decision: r.directionDecision || null,
         scanned_at: scannedAt.toISOString(), expires_at: expiresAt.toISOString(),
       }
@@ -323,6 +324,7 @@ module.exports = async function handler(req, res) {
         underlying_price: r.priceRaw, iv: r.ivRaw, delta: r.deltaRaw,
         chg_pct: parseFloat(r.chgPct) || null,
         volume: r.volume, open_interest: r.oi, dte_at_signal: r.dte,
+        is_fallback_expiry: r.isFallbackExpiry || false,
         profit_target_pct: r.profitTargetPct, stop_loss_pct: r.stopLossPct,
         sector: r.sector, industry: r.industry, market_cap: r.marketCap,
         earnings_date: r.earningsDate,

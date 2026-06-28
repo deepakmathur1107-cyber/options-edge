@@ -107,6 +107,17 @@ const TF_CONFIG = {
   },
 };
 
+// Returns {date, dte, isFallback}. dte here is the SAME midnight-truncated
+// calculation used to pick the expiry — callers that need a dte for storage
+// or scoring should reuse this value rather than recomputing one against a
+// fresh `new Date()`, which (using current hour/minute) can round to a
+// different integer than this function used for in-range filtering, causing
+// the stored dte to silently disagree with the dte that drove the bucket
+// selection. isFallback is true whenever no listed expiry actually falls
+// inside [minDTE, maxDTE] and the closest-to-midpoint expiry was used
+// instead — callers MUST propagate this so rows get flagged rather than
+// silently mislabeled with a timeframe bucket whose DTE window the picked
+// expiry doesn't actually satisfy.
 const pickExpiry = (dates, minDTE, maxDTE) => {
   const now = new Date(); now.setHours(0,0,0,0);
   const withDTE = dates.map(d => {
@@ -115,9 +126,10 @@ const pickExpiry = (dates, minDTE, maxDTE) => {
     return {date:d, dte};
   }).filter(x=>x.dte>0);
   const inRange = withDTE.filter(x=>x.dte>=minDTE && x.dte<=maxDTE);
-  if (inRange.length) return inRange[0].date;
+  if (inRange.length) return {date: inRange[0].date, dte: inRange[0].dte, isFallback: false};
   const mid=(minDTE+maxDTE)/2;
-  return withDTE.reduce((best,x)=>Math.abs(x.dte-mid)<Math.abs(best.dte-mid)?x:best, withDTE[0]).date;
+  const best = withDTE.reduce((best,x)=>Math.abs(x.dte-mid)<Math.abs(best.dte-mid)?x:best, withDTE[0]);
+  return {date: best.date, dte: best.dte, isFallback: true};
 };
 
 const findLeg = (arr, tgt) =>
@@ -277,7 +289,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     const price = parseFloat(quote.last||quote.prevclose||0);
     if (!price) return null;
     if (!expDates.length) return null;
-    const expiryRaw = pickExpiry(expDates, tfCfg2.minDTE, tfCfg2.maxDTE);
+    const { date: expiryRaw, dte: pickedDte, isFallback: isFallbackExpiry } = pickExpiry(expDates, tfCfg2.minDTE, tfCfg2.maxDTE);
     if (!chain.length) return null;
 
     const chgInfo = safeChgPct(quote);
@@ -289,8 +301,15 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     const volRatio = vol/(avg||1);
     const now2 = new Date();
     const isMorning2 = isOpeningWindow();
-    const expDate2 = new Date(expiryRaw+'T12:00:00');
-    const dte2 = Math.round((expDate2-now2)/(1000*60*60*24));
+    // dte2 reuses pickExpiry's own midnight-truncated dte (see pickExpiry's
+    // comment) instead of recomputing against now2 — previously this used
+    // expDate2/now2 directly, which could round to a different integer than
+    // the dte pickExpiry used to decide in-range vs. fallback, since now2
+    // includes the current hour/minute while pickExpiry's now is midnight-
+    // truncated. That mismatch is what let e.g. a Swing-bucket row get
+    // stored with a dte technically outside [21,45] despite pickExpiry
+    // having selected an expiry it considered in-range.
+    const dte2 = pickedDte;
 
     const hi52 = parseFloat(quote.week_52_high||price);
     const lo52 = parseFloat(quote.week_52_low||price);
@@ -397,6 +416,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // td.mid/price/strike above are pre-formatted display strings; resolution
       // math and Tradier contract re-lookup need the raw numbers/date instead.
       expiryRaw: expiryRaw,
+      isFallbackExpiry: isFallbackExpiry,
       midRaw: td.mid,
       bidRaw: td.bid,
       askRaw: td.ask,
