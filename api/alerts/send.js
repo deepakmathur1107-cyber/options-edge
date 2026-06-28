@@ -20,6 +20,43 @@ const supabase = createClient(
 
 const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'AAPL']
 
+// getClerkEmail — fallback for users who enabled email_alerts but never
+// typed an alert_email into Alert Settings. Clerk already has an email on
+// file for every account (you can't sign up without one) — this fetches
+// the user's PRIMARY email via Clerk's Backend API rather than asking them
+// to re-enter something Clerk already knows, per product decision
+// (2026-06-28): "if left empty on manual then use from Clerk."
+// Uses CLERK_SECRET_KEY, same credential auth.js already uses for JWKS —
+// no new secret needed. Returns null (not throws) on any failure, so a
+// Clerk hiccup degrades to "skip this user's email this run," same fail-
+// soft posture every other external call in this file already has
+// (fetchQuote/fetchChainWithExpiry/sendTg/sendSms all swallow and continue
+// rather than aborting the whole run for one user's failure).
+async function getClerkEmail(clerkUserId) {
+  const key = process.env.CLERK_SECRET_KEY
+  if (!key) return null
+  try {
+    const r = await fetch(`https://api.clerk.com/v1/users/${clerkUserId}`, {
+      headers: { Authorization: `Bearer ${key}` },
+    })
+    if (!r.ok) return null
+    const user = await r.json()
+    // primary_email_address_id points into email_addresses[] — same shape
+    // documented in Clerk's Backend API user object. Fall back to the
+    // first verified address if primary_email_address_id is somehow unset
+    // (seen in Clerk's own docs as a possible state for accounts created
+    // via certain OAuth flows).
+    const addrs = user?.email_addresses || []
+    const primary = addrs.find(a => a.id === user.primary_email_address_id)
+      || addrs.find(a => a.verification?.status === 'verified')
+      || addrs[0]
+    return primary?.email_address || null
+  } catch (e) {
+    console.error(`[getClerkEmail] failed for ${clerkUserId}:`, e.message)
+    return null
+  }
+}
+
 function parseSymbols(raw) {
   if (!raw) return []
   const s = typeof raw === 'string' ? raw.trim() : String(raw)
@@ -347,9 +384,38 @@ module.exports = async function handler(req, res) {
       const grade   = gradeFromScore(userAlerts[0].score)
       const subject = `OptionsEdge: ${userAlerts.length} ${grade.letter}-grade alert${userAlerts.length > 1 ? 's' : ''} today`
       let notified = false
-      if (user.email_alerts && user.alert_email) { const ok = await sendEmail(user.alert_email, subject, buildEmailHtml(userAlerts, marketCtx)); if (ok) { notified = true; console.log(`Email → ${user.alert_email}`) } }
+
+      // Email — fall back to Clerk's account email if the user enabled
+      // alerts but never typed one into Alert Settings. Persisted back to
+      // alert_prefs.alert_email on success so this is a one-time fetch per
+      // user, not a Clerk API call on every single cron run forever, and so
+      // the value becomes visible (and overridable) in Alert Settings
+      // afterward rather than only ever existing transiently in memory.
+      let emailToUse = user.alert_email
+      if (user.email_alerts && !emailToUse) {
+        emailToUse = await getClerkEmail(user.clerk_user_id)
+        if (emailToUse) {
+          const { error: backfillErr } = await supabase
+            .from('alert_prefs')
+            .update({ alert_email: emailToUse })
+            .eq('clerk_user_id', user.clerk_user_id)
+          if (backfillErr) console.error(`[alerts/send] alert_email backfill failed for ${user.clerk_user_id}:`, backfillErr.message)
+        }
+      }
+
+      if (user.email_alerts && emailToUse) { const ok = await sendEmail(emailToUse, subject, buildEmailHtml(userAlerts, marketCtx)); if (ok) { notified = true; console.log(`Email → ${emailToUse}`) } }
       if (user.sms_on && user.phone_number)       { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx)); if (ok) notified = true }
-      if (user.tg_token && user.tg_chat_id) {
+      // Telegram — ADMIN-ONLY per explicit product decision (2026-06-28):
+      // unlike email/sms_on, this channel has no per-user opt-in toggle in
+      // alert_prefs at all — having a tg_token saved was the ONLY gate,
+      // meaning any user who ever linked Telegram was permanently
+      // subscribed with no way to opt out from Alert Settings. Restricting
+      // to ADMIN_IDS closes that real consent gap rather than building a
+      // new toggle for a channel that isn't meant to reach regular users.
+      // Reuses the SAME ADMIN_IDS already computed above (line ~311) for
+      // the subscription-bypass check — one source of truth for "is this
+      // an admin," not a second, parallel definition.
+      if (ADMIN_IDS.includes(user.clerk_user_id) && user.tg_token && user.tg_chat_id) {
         // FIX: tg_token is now stored encrypted — decrypt before use.
         const tgToken = decryptSecret(user.tg_token)
         if (tgToken) { const ok = await sendTg(tgToken, user.tg_chat_id, buildTgText(userAlerts, marketCtx)); if (ok) notified = true }
