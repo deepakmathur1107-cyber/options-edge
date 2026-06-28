@@ -3988,19 +3988,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
       {/* ═══════════════ TOOLS / SETTINGS SLIDE-IN PANEL ════════════════════ */}
       {showTools&&(
-        <div style={{position:'fixed',inset:0,zIndex:200}}>
-          {/* Backdrop */}
-          <div onClick={()=>setShowTools(false)} style={{position:'absolute',inset:0,background:'rgba(0,0,0,.65)'}}/>
-          {/* Panel */}
+        <div style={{position:'fixed',inset:0,zIndex:200,background:C.bg,display:'flex',flexDirection:'column'}}>
+          {/* Panel — full page, matching Dash/Scan/Trades/Admin rather than
+              a dimmed-backdrop drawer. The backdrop click-to-dismiss is
+              gone since there's no dashboard visible behind it anymore;
+              the CLOSE button below is the way out. */}
           <div style={{
-            position:'absolute',right:0,top:0,bottom:0,
-            width:'min(520px,100vw)',
-            background:C.bg,borderLeft:`1px solid ${C.border}`,transition:'background .25s',
             display:'flex',flexDirection:'column',
-            animation:'slideIn .22s ease',
-            boxShadow:'-8px 0 32px rgba(0,0,0,.2)',
+            flex:1, minHeight:0,
           }}>
-            <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
             {/* Panel header */}
             <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:C.bgAlt,flexShrink:0}}>

@@ -974,18 +974,19 @@ export default function TradeLog(props) {
               </div>
             )}
 
-            {/* Win/loss summary */}
+            {/* Win/loss summary — WIN RATE and TOTAL P&L intentionally omitted
+                here since they're already shown in the fixed page header
+                above; this row exists to surface the win/loss split that
+                the header doesn't break out. */}
             {closedTrades.length>0 && (
               <div style={{
                 display:'grid',
-                gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))',
+                gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',
                 gap:10, marginTop:16,
               }}>
                 {[
                   { label:'WINS',      value:wins.length,   color:C.green },
                   { label:'LOSSES',    value:losses.length, color:C.red   },
-                  { label:'WIN RATE',  value:winRate!==null?`${winRate}%`:'—', color:winRate>=50?C.green:C.red },
-                  { label:'TOTAL P&L', value:fmtUSD(totalPnl), color:totalPnl>=0?C.green:C.red },
                 ].map(s => (
                   <div key={s.label} style={{
                     background:C.card, border:`1px solid ${C.border}`,
