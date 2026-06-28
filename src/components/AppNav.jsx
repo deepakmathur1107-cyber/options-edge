@@ -20,7 +20,6 @@ export default function AppNav({
   isDark, C, setIsDark,
   userInitial, openPortal, onSignOut,
   isAdmin, tradierMode, autoOn,
-  showTools, setShowTools,
 }) {
   const location    = useLocation()
   // Trades used to be treated as a separate "sub-page" (Back-to-/app link
@@ -140,9 +139,13 @@ export default function AppNav({
               ≡&nbsp;TRADES
             </Link>
 
+            {/* TOOLS used to be a separate toggle calling setShowTools, which
+                rendered a position:fixed overlay covering this entire nav bar
+                — now it's a real tab value like dash/scan, so it's folded
+                into the same button pattern instead of special-cased. */}
             <button className="oe-navbtn oe-toptab"
-              onClick={() => setShowTools(p => !p)}
-              style={topTab(showTools)}>
+              onClick={() => setTab('tools')}
+              style={topTab(tab === 'tools')}>
               ⚙&nbsp;TOOLS
             </button>
 
@@ -250,7 +253,7 @@ export default function AppNav({
             { id:'tools',  icon:'⚙', label:'TOOLS'  },
             ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),
           ].map(t => {
-            const active = t.id === 'tools' ? showTools : t.id === 'trades' ? isTradesPage : tab === t.id
+            const active = t.id === 'trades' ? isTradesPage : tab === t.id
             const col    = active ? C.green : C.dim
 
             if (t.link) return (
@@ -265,7 +268,7 @@ export default function AppNav({
 
             return (
               <button key={t.id}
-                onClick={() => t.id === 'tools' ? setShowTools(p=>!p) : setTab(t.id)}
+                onClick={() => setTab(t.id)}
                 style={mobileTab(active)}>
                 <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
                 <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>

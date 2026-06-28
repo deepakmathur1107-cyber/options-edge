@@ -428,8 +428,6 @@ export default function TradeLog(props) {
         {...props}
         tab="trades"
         setTab={(id) => navigate(`/app?tab=${id}`)}
-        showTools={false}
-        setShowTools={() => navigate('/app?tab=tools')}
       />
 
       <div style={{maxWidth:'min(92vw,1440px)', margin:'0 auto', padding:'28px 24px'}}>

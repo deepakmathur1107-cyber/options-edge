@@ -794,18 +794,21 @@ export default function App(props={}) {
   // ── main tab & tools panel ──
   const [searchParams] = useSearchParams()
   // Allows navigating here from a separate page/route (e.g. TradeLog's own
-  // AppNav instance, which has no shared `tab`/`showTools` state to call
-  // setTab/setShowTools into) via a real link to /app?tab=scan or
-  // /app?tab=tools, landing on the requested tab instead of always
-  // defaulting to Dash. Falls back to 'dash' for any value that isn't one
-  // of the three real tab ids, so a malformed or stale URL param can't put
-  // the app in a blank/broken state. Tools is a separate boolean
-  // (showTools), not part of `tab` — initialized from the same param.
+  // AppNav instance, which has no shared `tab` state to call setTab into)
+  // via a real link to /app?tab=scan or /app?tab=tools, landing on the
+  // requested tab instead of always defaulting to Dash. Falls back to
+  // 'dash' for any value that isn't one of the four real tab ids, so a
+  // malformed or stale URL param can't put the app in a blank/broken
+  // state. 'tools' used to be a separate boolean (showTools) layered on
+  // top as a position:fixed full-screen overlay rather than a real tab —
+  // that's what caused the nav bar (and the rest of AppNav) to visually
+  // disappear behind it whenever Tools was open, and forced a dedicated
+  // CLOSE button instead of just clicking another tab. Folded into `tab`
+  // here so Tools behaves exactly like Dash/Scan/Admin.
   const tabParam = searchParams.get('tab')
-  const initialTab = ['dash','scan','admin'].includes(tabParam) ? tabParam : 'dash'
+  const initialTab = ['dash','scan','admin','tools'].includes(tabParam) ? tabParam : 'dash'
   const [tab,        setTab]        = useState(initialTab)
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
-  const [showTools,  setShowTools]  = useState(tabParam === 'tools')
   const [toolsTab,   setToolsTab]   = useState('settings')
   const [feedbackText,    setFeedbackText]    = useState('')
   const [feedbackType,    setFeedbackType]    = useState('suggestion')
@@ -2653,7 +2656,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         }
       `}</style>
 
-      <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn} showTools={showTools} setShowTools={setShowTools}/>
+      <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn}/>
 
       {/* /ES /NQ price bar — hidden on Dashboard, where the horizontal price
           cards already show the same SPX/NDX data; still shown on every other
@@ -3986,25 +3989,26 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       )}
 
 
-      {/* ═══════════════ TOOLS / SETTINGS SLIDE-IN PANEL ════════════════════ */}
-      {showTools&&(
-        <div style={{position:'fixed',inset:0,zIndex:200,background:C.bg,display:'flex',flexDirection:'column'}}>
-          {/* Panel — full page, matching Dash/Scan/Trades/Admin rather than
-              a dimmed-backdrop drawer. The backdrop click-to-dismiss is
-              gone since there's no dashboard visible behind it anymore;
-              the CLOSE button below is the way out. */}
+      {/* ── TOOLS TAB ──────────────────────────────────────────────────── */}
+      {/* Previously a position:fixed;inset:0;zIndex:200 overlay gated on a
+          separate showTools boolean — that covered the entire viewport
+          including AppNav (still mounted underneath, just visually hidden
+          by the higher z-index), which is why Tools had no visible nav bar
+          and needed its own CLOSE button to get back to Dash specifically,
+          rather than letting the person click any other tab like every
+          other section of the app. Folded into the real `tab` state so
+          Tools behaves exactly like Dash/Scan/Admin: nav bar stays visible,
+          clicking another tab leaves Tools normally, no CLOSE button. The
+          TOOLS title + CLOSE button are removed too — the nav bar already
+          shows TOOLS as the active tab, same as Dash/Scan/Admin never
+          duplicate their own name as an in-page header. */}
+      {tab==='tools'&&(
+        <div style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
           <div style={{
             display:'flex',flexDirection:'column',
-            flex:1, minHeight:0,
           }}>
 
-            {/* Panel header */}
-            <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',background:C.bgAlt,flexShrink:0}}>
-              <span style={{fontFamily:"'Fraunces',serif",fontSize:18,letterSpacing:0.3,color:C.green}}>TOOLS</span>
-              <button className="hv" onClick={()=>setShowTools(false)} style={{background:'transparent',border:`1px solid ${C.border}`,color:C.dim,padding:'4px 10px',borderRadius:3,fontSize:11,cursor:'pointer'}}>✕ CLOSE</button>
-            </div>
-
-            {/* Panel sub-tabs */}
+            {/* Sub-tabs */}
             {/* Collapsed from 5 to 3 — Checklist/Strategy/Exit Rules merged into
                 one "Reference" tab. These three were mostly static lookup
                 content (Checklist has live interaction, the other two are
@@ -4014,7 +4018,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 consolidation. Settings and Futures keep their own tabs since
                 they see real repeat use (alert prefs / Telegram) or have a
                 planned growth path (Futures → $49 Pro+ Macro Pulse tier). */}
-            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel}}>
+            <div style={{display:'flex',gap:4,padding:'8px 12px',borderBottom:`1px solid ${C.border}`,flexWrap:'wrap',flexShrink:0,background:C.panel,borderRadius:'8px 8px 0 0'}}>
               {[
                 {id:'settings',  l:'Settings'},
                 {id:'reference', l:'Reference'},
