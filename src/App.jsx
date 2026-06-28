@@ -4598,7 +4598,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
         {/* ── ADMIN TAB ────────────────────────────────────────────────── */}
         {tab==='admin' && isAdmin && (
-          <div className="si" style={{maxWidth:700,margin:'0 auto',padding:'0 16px'}}>
+          <div className="si" style={{maxWidth:'min(92vw,1440px)',margin:'0 auto',padding:'0 16px'}}>
 
             {/* Full admin dashboard — KPIs, signups, feature usage, health.
                 Manages its own data fetch/loading/error state internally. */}

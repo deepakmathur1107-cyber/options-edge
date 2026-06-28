@@ -207,6 +207,16 @@ export default function AdminDashboard({ getToken, theme }) {
     gap: 10,
   };
 
+  // Two-column pairing for App Health and Signup Trend/Recent Signups --
+  // auto-fit/minmax instead of a fixed '1fr 1fr' so it collapses to one
+  // column on narrow viewports automatically, the same responsive pattern
+  // grid4 already uses above, rather than needing a manual breakpoint.
+  const grid2 = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 10,
+  };
+
   if (error) return (
     <div style={{ padding: '2rem', color: C.red, fontFamily: 'Inter, sans-serif', textAlign: 'center' }}>
       <div style={{ fontSize: 14 }}>Failed to load metrics: {error}</div>
@@ -215,7 +225,7 @@ export default function AdminDashboard({ getToken, theme }) {
   );
 
   return (
-    <div style={{ padding: '1.5rem', fontFamily: 'Inter, sans-serif', color: C.text, maxWidth: 960, margin: '0 auto' }}>
+    <div style={{ padding: '1.5rem', fontFamily: 'Inter, sans-serif', color: C.text, maxWidth: 1320, margin: '0 auto' }}>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -275,7 +285,7 @@ export default function AdminDashboard({ getToken, theme }) {
       </div>
 
       <div style={sectionLabel}>App health</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div style={grid2}>
         <div style={card}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Feature usage</div>
           <FeatureBars C={C} features={data?.features} />
@@ -286,14 +296,18 @@ export default function AdminDashboard({ getToken, theme }) {
         </div>
       </div>
 
-      <div style={sectionLabel}>Signup trend (last 14 days)</div>
-      <div style={card}>
-        {chartJsReady && data?.signupsByDay ? <SignupChart C={C} data={data.signupsByDay} /> : <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.dim, fontSize: 13 }}>Loading chart…</div>}
-      </div>
-
-      <div style={sectionLabel}>Recent signups</div>
-      <div style={card}>
-        <RecentUsers C={C} users={data?.recentUsers} />
+      <div style={sectionLabel}>Activity</div>
+      <div style={grid2}>
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Signup trend (last 14 days)</div>
+          {chartJsReady && data?.signupsByDay ? <SignupChart C={C} data={data.signupsByDay} /> : <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.dim, fontSize: 13 }}>Loading chart…</div>}
+        </div>
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Recent signups</div>
+          <div style={{ maxHeight: 192, overflowY: 'auto' }}>
+            <RecentUsers C={C} users={data?.recentUsers} />
+          </div>
+        </div>
       </div>
 
       <style>{`
