@@ -2819,12 +2819,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
           {/* ── Track Record — item 1. Engine-wide win rate, honest empty
               state until real resolved data exists. Backed by
-              api/track-record.js (built earlier this session, public
-              endpoint, no auth — this is a marketing-honest stat, not
-              admin-only data). Placed here, in Dash's hero area alongside
-              the two market reads, per the original session brief: Dash =
-              aggregate summary, Scan = per-signal context. */}
-          <TrackRecordCard C={C} />
+              api/track-record.js (public endpoint, no auth — the API itself
+              stays open). TEMPORARILY admin-only on the frontend (2026-06-28):
+              Deepak wants to validate the resolved data himself before this
+              is shown to real users — see session decision. isAdmin gate
+              matches the same pattern already used for tgToken/TweetShare
+              elsewhere in this file; remove this gate (go back to showing it
+              to everyone) once validation is done and it's ready to ship. */}
+          {isAdmin && <TrackRecordCard C={C} />}
 
           <div className="dash-grid">
           <div className="dash-left">
