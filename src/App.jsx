@@ -7,6 +7,7 @@ import AdminDashboard from './components/AdminDashboard'
 import SignalOutcomesTable from './components/SignalOutcomesTable'
 import TradeOutcomesTable from './components/TradeOutcomesTable'
 import TrackRecordCard from './components/TrackRecordCard'
+import ConvictionCorrelationCard from './components/ConvictionCorrelationCard'
 import ClusterDistributionPanel from './components/ClusterDistributionPanel'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
@@ -2827,6 +2828,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               elsewhere in this file; remove this gate (go back to showing it
               to everyone) once validation is done and it's ready to ship. */}
           {isAdmin && <TrackRecordCard C={C} />}
+          {/* ── Conviction Correlation — built same session, same
+              admin-only validation gate as Track Record above. Remove this
+              gate at the same time Track Record's is removed, once both
+              have been checked against real Monday data. */}
+          {isAdmin && <ConvictionCorrelationCard C={C} />}
 
           <div className="dash-grid">
           <div className="dash-left">
