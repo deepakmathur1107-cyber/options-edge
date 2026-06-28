@@ -221,7 +221,15 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
   if (!best) return null;
   const b = Math.max(0,parseFloat(best.bid||0));
   const a = Math.max(0,parseFloat(best.ask||0));
-  const m = (b+a)/2;
+  // Rounded to 2 decimals here, not just in the f2()-formatted display
+  // strings below — m itself is returned raw (mid:m) and flows through
+  // midRaw into pushToJournal -> trades.entry_price/exit_price as a raw
+  // NUMBER, not a display string. Confirmed live: a journaled trade had
+  // exit_price = 3.8499999999999996 from this exact unrounded (b+a)/2.
+  // Same bug class as the documented formatted-string-vs-raw-number issue,
+  // just inverted — the raw value needed rounding, only the display
+  // strings (via f2) were getting it.
+  const m = Math.round(((b+a)/2) * 100) / 100;
   if (m<=0) return null;
   const f2 = v => Math.max(0,v).toFixed(2);
   const allOI  = Math.max(...side.map(o=>parseFloat(o.open_interest||0)), 1);
