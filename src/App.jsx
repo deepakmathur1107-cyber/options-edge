@@ -966,8 +966,29 @@ export default function App(props={}) {
     finally { setTgSaving(false) }
   }
 
+  // isValidE164 — checks SHAPE only (leading +, digits only, sensible
+  // length), per ITU E.164 / Twilio's own documented format requirement.
+  // Deliberately does NOT guess or auto-prepend a country code on the
+  // user's behalf — this product has no stated US-only restriction (Clerk/
+  // Stripe/Twilio are all global-capable), so assuming +1 would silently
+  // corrupt any non-US number. Strips cosmetic formatting (spaces, dashes,
+  // parens) before checking, since people naturally type "+1 (224)
+  // 245-9622" — that's a formatting choice, not an invalid number, and
+  // should be normalized rather than rejected. Twilio's own docs are
+  // explicit that no regex can confirm a number actually exists/works —
+  // this only confirms it's SHAPED correctly; an actual send attempt is
+  // still the real test.
+  function isValidE164(raw) {
+    const stripped = (raw || '').replace(/[\s\-().]/g, '')
+    return /^\+[1-9]\d{1,14}$/.test(stripped)
+  }
   const saveAlertPrefs = async()=>{
-    setAlertPrefsSaving(true); setAlertPrefsErr('')
+    setAlertPrefsErr('')
+    if (alertPrefs.sms_alerts && !isValidE164(alertPrefs.phone_number)) {
+      setAlertPrefsErr('Phone number must include a country code, e.g. +1 224 245 9622 (US) or +44 7911 123456 (UK) — no assumed country.')
+      return
+    }
+    setAlertPrefsSaving(true)
     // Keep minScore in sync when saving
     setMinScore(alertPrefs.min_edge_score)
     try {
@@ -4215,9 +4236,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       <div style={{marginBottom:14}}>
                         <Field C={C} label="Phone Number" type="tel" value={alertPrefs.phone_number}
                           onChange={v=>setAlertPrefs(p=>({...p,phone_number:v}))}
-                          placeholder="+1 312 555 0100"/>
+                          placeholder="+1 224 245 9622"/>
                         <div style={{fontSize:11,color:C.dim,marginTop:6,lineHeight:1.5}}>
-                          Include country code (e.g. +1 for US). Standard SMS rates may apply.
+                          Must include your country code (e.g. +1 US/Canada, +44 UK, +91 India). Standard SMS rates may apply.
                         </div>
                       </div>
                     )}

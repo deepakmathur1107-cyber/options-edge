@@ -19,6 +19,18 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
+// isValidE164 — server-side backstop, identical logic to App.jsx's client-
+// side check. Defensive: the frontend already blocks a bad save, but this
+// is the actual enforcement point — any other caller (a future mobile
+// client, a script, a bug in a later frontend change) must still go
+// through this check before a malformed number can ever reach the DB or
+// be handed to Twilio. Deliberately no auto-prepended country code, same
+// reasoning as the frontend — this product has no US-only restriction.
+function isValidE164(raw) {
+  const stripped = (raw || '').replace(/[\s\-().]/g, '')
+  return /^\+[1-9]\d{1,14}$/.test(stripped)
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
@@ -133,6 +145,16 @@ module.exports = async function handler(req, res) {
       .map(s => s.toUpperCase().trim())
       .filter(Boolean)
       .join(',')
+
+    // Reject rather than silently store a phone number Twilio would just
+    // fail on later — same check as the frontend, enforced here as the
+    // actual backstop (see isValidE164's comment above for why no country
+    // code is ever assumed).
+    if (body.sms_alerts && !isValidE164(body.phone_number)) {
+      return res.status(400).json({
+        error: 'Phone number must include a country code (e.g. +1, +44, +91) — no country is assumed.',
+      })
+    }
 
     const payload = {
       clerk_user_id:  clerkId,
