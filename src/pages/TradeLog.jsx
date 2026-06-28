@@ -328,6 +328,62 @@ export default function TradeLog(props) {
   const losses   = statsEligible.filter(t=>calcPnl(t)<=0)
   const winRate  = statsEligible.length ? Math.round(wins.length/statsEligible.length*100) : null
 
+  // ── Streak — most-recently-CLOSED trade first, not most-recently-LOGGED.
+  // Two trades opened the same day but closed on different days should
+  // order by when their outcome became known, not when they were entered
+  // — closed_at is the right anchor, created_at (the API's own default
+  // order) is the wrong one for this specific calculation. Falls back to
+  // created_at only if closed_at is somehow missing on an older row, same
+  // defensive pattern fmtExpiry already uses elsewhere in this file for a
+  // similar "newer rows have the right field, older ones might not" gap.
+  const byRecentClose = [...statsEligible].sort((a, b) => {
+    const aTime = new Date(a.closed_at || a.created_at).getTime()
+    const bTime = new Date(b.closed_at || b.created_at).getTime()
+    return bTime - aTime
+  })
+  let streakCount = 0
+  let streakType  = null // 'win' | 'loss' | null
+  for (const t of byRecentClose) {
+    const isWin = calcPnl(t) > 0
+    if (streakType === null) {
+      streakType = isWin ? 'win' : 'loss'
+      streakCount = 1
+    } else if ((isWin && streakType === 'win') || (!isWin && streakType === 'loss')) {
+      streakCount++
+    } else {
+      break
+    }
+  }
+
+  // ── This week vs last week — same hasValidExit-filtered population,
+  // bucketed by closed_at into two real calendar weeks (Mon-Sun, matching
+  // how a trader actually thinks about "this week"), not a rolling 7-day
+  // window. Returns null (not 0%) for a week with zero eligible closes —
+  // same "don't fabricate a number from an empty set" rule track-record.js
+  // and conviction-correlation.js already both follow.
+  function startOfWeek(d) {
+    const date = new Date(d)
+    const day = date.getDay() // 0=Sun..6=Sat
+    const diff = day === 0 ? -6 : 1 - day // shift to Monday
+    date.setDate(date.getDate() + diff)
+    date.setHours(0,0,0,0)
+    return date
+  }
+  const now = new Date()
+  const thisWeekStart = startOfWeek(now)
+  const lastWeekStart = new Date(thisWeekStart); lastWeekStart.setDate(lastWeekStart.getDate() - 7)
+  const thisWeekRows = statsEligible.filter(t => {
+    const d = new Date(t.closed_at || t.created_at)
+    return d >= thisWeekStart
+  })
+  const lastWeekRows = statsEligible.filter(t => {
+    const d = new Date(t.closed_at || t.created_at)
+    return d >= lastWeekStart && d < thisWeekStart
+  })
+  const winRateOf = rows => rows.length ? Math.round(rows.filter(t=>calcPnl(t)>0).length/rows.length*100) : null
+  const thisWeekWinRate = winRateOf(thisWeekRows)
+  const lastWeekWinRate = winRateOf(lastWeekRows)
+
   const displayed = filter==='open'   ? openTrades
                   : filter==='closed' ? closedTrades
                   : trades
@@ -466,6 +522,15 @@ export default function TradeLog(props) {
               value: winRate !== null ? `${winRate}%` : '—',
               color: winRate === null ? C.dim : winRate>=50 ? C.green : C.red,
             },
+            {
+              // Streak — only shown once there's at least one eligible
+              // closed trade; '—' rather than '0' for the zero-trades case,
+              // same "don't fabricate a number from nothing" rule as every
+              // other stat here.
+              label:'Streak',
+              value: streakType ? `${streakCount}${streakType==='win'?'W':'L'}` : '—',
+              color: streakType === null ? C.dim : streakType==='win' ? C.green : C.red,
+            },
           ].map(s => (
             <div key={s.label} style={statCard(s.color)}>
               <div style={{
@@ -480,6 +545,26 @@ export default function TradeLog(props) {
             </div>
           ))}
         </div>
+
+        {/* ── This week vs last week — only renders once at least ONE of
+            the two weeks has an eligible closed trade; both weeks empty
+            (a user who hasn't closed anything yet) shows nothing at all
+            rather than a hollow "— vs —" comparison with no information
+            in it. */}
+        {(thisWeekWinRate !== null || lastWeekWinRate !== null) && (
+          <div style={{
+            fontSize:12, color:C.dim, marginTop:-16, marginBottom:24,
+            fontFamily:"'Inter', sans-serif",
+          }}>
+            This week: <strong style={{color:thisWeekWinRate===null?C.dim:thisWeekWinRate>=50?C.green:C.red}}>
+              {thisWeekWinRate !== null ? `${thisWeekWinRate}%` : 'no closes yet'}
+            </strong>
+            {' '}vs last week:{' '}
+            <strong style={{color:lastWeekWinRate===null?C.dim:lastWeekWinRate>=50?C.green:C.red}}>
+              {lastWeekWinRate !== null ? `${lastWeekWinRate}%` : 'no closes'}
+            </strong>
+          </div>
+        )}
 
         {/* ── Section tabs ── */}
         <div style={{display:'flex', gap:8, marginBottom:24}}>
