@@ -900,7 +900,7 @@ export default function App(props={}) {
   const clColor = clScore>=80?C.green:clScore>=60?C.orange:C.red
 
   // ── alert preferences (Settings tab — source of truth) ──
-  const [alertPrefs,       setAlertPrefs]       = useState({ email_alerts:false, alert_email:'', min_edge_score:50, symbols:['SPY','QQQ'] })
+  const [alertPrefs,       setAlertPrefs]       = useState({ email_alerts:false, alert_email:'', sms_alerts:false, phone_number:'', min_edge_score:50, symbols:['SPY','QQQ'] })
   const [alertPrefsLoaded, setAlertPrefsLoaded] = useState(false)
   const [alertPrefsSaving, setAlertPrefsSaving] = useState(false)
   const [alertPrefsSaved,  setAlertPrefsSaved]  = useState(false)
@@ -4190,6 +4190,35 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         <Field C={C} label="Alert Email" value={alertPrefs.alert_email}
                           onChange={v=>setAlertPrefs(p=>({...p,alert_email:v}))}
                           placeholder={userEmail||'you@example.com'}/>
+                      </div>
+                    )}
+
+                    {/* SMS Alerts — same toggle+conditional-field pattern as
+                        Email Alerts above. prefs.js already reads/writes
+                        sms_alerts/phone_number (confirmed: sms_on column,
+                        sms_alerts wire key) and already gates enabling it
+                        behind an active subscription server-side (line
+                        ~115 of prefs.js) — this is wiring the existing,
+                        already-functional backend into the UI that was
+                        previously missing it, not adding new backend logic. */}
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:alertPrefs.sms_alerts?10:14,marginTop:14}}>
+                      <span style={{fontSize:11,color:C.text,fontWeight:600}}>SMS Alerts</span>
+                      <button className="hv" onClick={()=>setAlertPrefs(p=>({...p,sms_alerts:!p.sms_alerts}))} style={{
+                        width:38,height:20,borderRadius:10,border:'none',cursor:'pointer',
+                        background:alertPrefs.sms_alerts?C.green:'#1a2e3e',
+                        position:'relative',transition:'background .2s',flexShrink:0,
+                      }}>
+                        <span style={{position:'absolute',top:2,left:alertPrefs.sms_alerts?20:2,width:16,height:16,borderRadius:'50%',background:'#fff',transition:'left .2s'}}/>
+                      </button>
+                    </div>
+                    {alertPrefs.sms_alerts&&(
+                      <div style={{marginBottom:14}}>
+                        <Field C={C} label="Phone Number" type="tel" value={alertPrefs.phone_number}
+                          onChange={v=>setAlertPrefs(p=>({...p,phone_number:v}))}
+                          placeholder="+1 312 555 0100"/>
+                        <div style={{fontSize:11,color:C.dim,marginTop:6,lineHeight:1.5}}>
+                          Include country code (e.g. +1 for US). Standard SMS rates may apply.
+                        </div>
                       </div>
                     )}
 
