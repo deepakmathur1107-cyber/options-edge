@@ -46,13 +46,20 @@ function FeatureBars({ features, C }) {
   );
 }
 
-function SystemStatus({ ok, C }) {
+function SystemStatus({ health, C }) {
+  // health (systemHealth from the API) now reflects real checks for all 5
+  // services -- confirmed live (screenshot, June 28) that all 5 dots
+  // previously showed green unconditionally regardless of actual status,
+  // since none of them were genuinely checked, including Auto-scanner
+  // (an earlier draft of this fix incorrectly assumed scanner was already
+  // real via the old systemOk field -- it wasn't; systemOk was hardcoded
+  // true in this file's entire history).
   const services = [
-    { label: 'Market Data API', ok: true },
-    { label: 'Supabase', ok: true },
-    { label: 'Redis cache', ok: true },
-    { label: 'Resend email', ok: true },
-    { label: 'Auto-scanner', ok: ok !== false },
+    { label: 'Market Data API', ok: health?.tradier !== false },
+    { label: 'Supabase',        ok: health?.supabase !== false },
+    { label: 'Redis cache',     ok: health?.redis !== false },
+    { label: 'Resend email',    ok: health?.resend !== false },
+    { label: 'Auto-scanner',    ok: health?.scanner !== false },
   ];
   return (
     <div>
@@ -256,7 +263,7 @@ export default function AdminDashboard({ getToken, theme }) {
         </div>
         <div style={card}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>System status</div>
-          <SystemStatus C={C} ok={data?.systemOk} />
+          <SystemStatus C={C} health={data?.systemHealth} />
         </div>
       </div>
 

@@ -1,10 +1,113 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getAuth, ADMIN_IDS } = require('../_lib/auth');
+const { TRADIER_TOKEN, TRADIER_BASE } = require('../_lib/tradierClient');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+// Real per-service health checks for the Admin Monitor's System status card.
+// Previously this was hardcoded `ok: true` for every service except
+// Auto-scanner — confirmed live (screenshot, June 28) that all 5 dots
+// showed green regardless of actual service health, since 4 of the 5
+// were never actually checked. Each check below is read-only, cheap, and
+// has its own timeout via AbortController so one slow/down service can't
+// hang the whole /api/admin/metrics response — Promise.allSettled means a
+// rejected check just reports unhealthy, not a 500 for the whole endpoint.
+const HEALTH_TIMEOUT_MS = 4000;
+
+async function withTimeout(fn) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  try {
+    return await fn(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function checkTradier() {
+  // /markets/clock is Tradier's lightest real endpoint — confirms auth +
+  // connectivity without pulling a quote or chain.
+  const res = await withTimeout(signal =>
+    fetch(`${TRADIER_BASE}/markets/clock`, {
+      headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' },
+      signal,
+    })
+  );
+  return res.ok;
+}
+
+async function checkSupabase() {
+  // Trivial single-row read against a table guaranteed to exist and stay
+  // small — proves the DB connection/credentials work without scanning
+  // anything meaningful. subscriptions is already queried elsewhere in
+  // this same file, so it's known-present.
+  const { error } = await supabase.from('subscriptions').select('clerk_id').limit(1);
+  return !error;
+}
+
+async function checkRedis() {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return false;
+  const res = await withTimeout(signal =>
+    fetch(`${url}/ping`, { headers: { Authorization: `Bearer ${token}` }, signal })
+  );
+  return res.ok;
+}
+
+async function checkResend() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return false;
+  // GET /domains is read-only and doesn't send anything -- sending a real
+  // test email on every dashboard load would be wasteful and would spam
+  // the verified sender's send history for no reason.
+  const res = await withTimeout(signal =>
+    fetch('https://api.resend.com/domains', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal,
+    })
+  );
+  return res.ok;
+}
+
+async function checkScanner() {
+  // Correcting an assumption made while writing checkSystemHealth above:
+  // systemOk (the field this previously reused) was hardcoded `true` in
+  // this file's entire history -- it was never a real scanner signal, so
+  // Auto-scanner's dot was exactly as fake as the other four, not "already
+  // real" as initially assumed. Real signal instead: has scan_results
+  // gotten a write recently? Cron runs every 15 min during market hours
+  // (10-22 UTC, Mon-Fri per vercel.json) -- a 45-min staleness threshold
+  // gives 3 missed ticks of slack before flagging unhealthy, so a single
+  // slow run doesn't false-positive. NOTE: this will correctly show stale
+  // outside market hours/weekends -- that's accurate, not a bug, but
+  // worth knowing if this ever gets checked on a Sunday and looks "down."
+  const { data, error } = await supabase
+    .from('scan_results')
+    .select('scanned_at')
+    .order('scanned_at', { ascending: false })
+    .limit(1);
+  if (error || !data?.length) return false;
+  const ageMs = Date.now() - new Date(data[0].scanned_at).getTime();
+  return ageMs < 45 * 60 * 1000;
+}
+
+async function checkSystemHealth() {
+  const [tradier, supabaseOk, redis, resend, scanner] = await Promise.allSettled([
+    checkTradier(), checkSupabase(), checkRedis(), checkResend(), checkScanner(),
+  ]);
+  const ok = r => r.status === 'fulfilled' && r.value === true;
+  return {
+    tradier: ok(tradier),
+    supabase: ok(supabaseOk),
+    redis: ok(redis),
+    resend: ok(resend),
+    scanner: ok(scanner),
+  };
+}
 
 module.exports = async (req, res) => {
   // FIX: was '*' — admin/revenue data must never be readable cross-origin.
@@ -24,6 +127,10 @@ module.exports = async (req, res) => {
   }
 
   try {
+    // Kicked off immediately, awaited near the end -- runs concurrently
+    // with the DB queries below instead of adding its own latency on top.
+    const healthPromise = checkSystemHealth();
+
     const now = new Date();
     const startOfToday  = new Date(now); startOfToday.setHours(0, 0, 0, 0);
     const startOfWeek   = new Date(now); startOfWeek.setDate(now.getDate() - 7);
@@ -97,11 +204,18 @@ module.exports = async (req, res) => {
       s.updated_at && new Date(s.updated_at) >= startOfToday
     ).length;
 
+    const systemHealth = await healthPromise;
+
     return res.status(200).json({
       totalUsers, paidUsers, trialUsers,
       activeToday, newThisWeek, expiringTrials,
       signupsByDay, recentUsers, features,
-      systemOk: true,
+      systemHealth,
+      // All 5 services are now genuinely checked (see checkSystemHealth) —
+      // previously this was hardcoded true unconditionally, including for
+      // the scanner, which this comment's earlier draft incorrectly
+      // assumed was already real.
+      systemOk: Object.values(systemHealth).every(Boolean),
       generatedAt: now.toISOString(),
     });
 
