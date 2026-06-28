@@ -71,34 +71,50 @@ module.exports = async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
 
     // ── Summary stats for the CURRENT filter set (not just the current page) ──
-    // A second lightweight query, same filters, just aggregated. Kept separate
-    // from the paginated row fetch so the page-of-50 query stays fast and the
-    // stats reflect "all rows matching this filter," not just what's visible.
+    // Previously this fetched every matching row's `outcome` column into Node
+    // and .filter()'d it client-side -- the comment above used to say "fine
+    // at today's volume (a few hundred rows)," but signal_history has since
+    // grown to 17,000+ rows, well past Supabase/PostgREST's default 1000-row
+    // cap on unbounded selects. That meant statsRows silently truncated at
+    // 1000 whenever a filter (or no filter at all) matched more than that --
+    // wins/losses/winRate/totalInFilter were all quietly wrong, with no
+    // error or indication anything was capped. Confirmed live: "Total in
+    // filter: 1000" showing under "All timeframes / All outcomes" with no
+    // filter applied, against a table holding 17,240+ rows.
     //
-    // SCALING NOTE: unlike the row query above, this one is NOT paginated —
-    // it pulls every matching row's `outcome` column to compute the
-    // breakdown. Fine at today's volume (a few hundred rows), but if
-    // signal_history grows into the tens of thousands, this should become a
-    // single SQL aggregate (COUNT...GROUP BY outcome) via a Postgres
-    // function/view instead of fetching all rows into Node to .filter() them.
-    // Not done now because it adds a migration for a problem that doesn't
-    // exist yet at current scale.
-    let statsQuery = supabase.from('signal_history').select('outcome');
-    if (timeframe) statsQuery = statsQuery.eq('timeframe', timeframe);
-    if (ticker)     statsQuery = statsQuery.eq('ticker', ticker);
-    // NOTE: outcome filter is intentionally NOT applied to the stats query —
-    // we want the win/loss/expired breakdown across the whole filtered set
-    // regardless of which outcome bucket the table itself is currently
-    // showing, so switching the outcome filter doesn't also change the
-    // baseline you're comparing against.
-    const { data: statsRows, error: statsErr } = await statsQuery;
-    if (statsErr) return res.status(500).json({ error: statsErr.message });
+    // Fixed by using count-only queries (head:true) per outcome bucket --
+    // these return just a row count from Postgres without transferring any
+    // row data, so there's no 1000-row transfer limit to hit and no need to
+    // pull rows into Node just to .filter() them.
+    const countFor = async (outcomeFilter) => {
+      let q = supabase.from('signal_history').select('*', { count: 'exact', head: true });
+      if (timeframe) q = q.eq('timeframe', timeframe);
+      if (ticker)     q = q.eq('ticker', ticker);
+      if (outcomeFilter === null) q = q.is('outcome', null);
+      else                        q = q.eq('outcome', outcomeFilter);
+      const { count, error } = await q;
+      if (error) throw error;
+      return count || 0;
+    };
 
-    const wins            = statsRows.filter(r => r.outcome === 'WIN').length;
-    const losses          = statsRows.filter(r => r.outcome === 'LOSS').length;
-    const expiredPartial  = statsRows.filter(r => r.outcome === 'EXPIRED_PARTIAL').length;
-    const expiredFlat     = statsRows.filter(r => r.outcome === 'EXPIRED_FLAT').length;
-    const unresolved      = statsRows.filter(r => r.outcome === null).length;
+    let wins, losses, expiredPartial, expiredFlat, unresolved, totalInFilter;
+    try {
+      const [w, l, ep, ef, u, total] = await Promise.all([
+        countFor('WIN'), countFor('LOSS'), countFor('EXPIRED_PARTIAL'),
+        countFor('EXPIRED_FLAT'), countFor(null),
+        (async () => {
+          let q = supabase.from('signal_history').select('*', { count: 'exact', head: true });
+          if (timeframe) q = q.eq('timeframe', timeframe);
+          if (ticker)     q = q.eq('ticker', ticker);
+          const { count, error } = await q;
+          if (error) throw error;
+          return count || 0;
+        })(),
+      ]);
+      wins = w; losses = l; expiredPartial = ep; expiredFlat = ef; unresolved = u; totalInFilter = total;
+    } catch (statsErr) {
+      return res.status(500).json({ error: statsErr.message });
+    }
     // Phase 0 lock (explicit): EXPIRED_PARTIAL is excluded from the win-rate
     // NUMERATOR — it never counts as a WIN, full stop.
     // DENOMINATOR decision (made explicitly during Phase 3 build, since
@@ -120,7 +136,7 @@ module.exports = async (req, res) => {
         wins, losses, expiredPartial, expiredFlat, unresolved,
         lossesForRate, // losses + expiredPartial + expiredFlat — matches the winRate denominator below; use this (not raw `losses`) when displaying a breakdown next to winRate
         winRate, // null if no decided trades yet — never render as 0%
-        totalInFilter: statsRows.length,
+        totalInFilter,
       },
     });
   } catch (e) {

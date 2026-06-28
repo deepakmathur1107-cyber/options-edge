@@ -669,6 +669,41 @@ function Pill({ label, active, color, onClick, C: lC }) {
   )
 }
 
+// ─── Collapsible Section ────────────────────────────────────────────────────
+// Built for the Admin tab's "data & debugging" group (Feedback, Signal
+// Outcomes, Trade Outcomes, Cluster Distribution) — previously these four
+// rendered as flat, identically-weighted cards stacked directly below the
+// main AdminDashboard summary, every single time the tab opened, regardless
+// of whether there was anything to look at. For a daily-glance use case
+// that means scrolling past four heavy tables (one with a hardcoded 1000-row
+// cap) every time just to confirm nothing's wrong. Collapsed by default;
+// `summary` stays visible even when closed so collapsing doesn't hide
+// whether something actually needs attention today.
+function CollapsibleSection({ title, icon, color, summary, defaultOpen=false, children, C: lC }) {
+  const themeC = lC || C
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div style={{background:themeC.card,border:`1px solid ${themeC.border}`,borderRadius:10,marginBottom:12,boxShadow:themeC.shadow,overflow:'hidden'}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{
+        width:'100%',background:'transparent',border:'none',cursor:'pointer',
+        padding:'14px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',
+        fontFamily:'inherit',textAlign:'left',
+      }}>
+        <span style={{fontSize:12,color:color||themeC.dim,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>{icon} {title}</span>
+        <span style={{display:'flex',alignItems:'center',gap:10}}>
+          {summary && <span style={{fontSize:11,color:themeC.dim,fontWeight:400,letterSpacing:0}}>{summary}</span>}
+          <span style={{fontSize:11,color:themeC.dim,transition:'transform .15s',transform:open?'rotate(180deg)':'none',display:'inline-block'}}>▾</span>
+        </span>
+      </button>
+      {open && (
+        <div style={{padding:'0 20px 16px'}}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── P&L Sparkline ────────────────────────────────────────────────────────────
 function PnLChart({ trades, C: lC }) {
   const themeC = lC || C
@@ -4569,10 +4604,17 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 Manages its own data fetch/loading/error state internally. */}
             <AdminDashboard getToken={getAuthToken} theme={C} />
 
-            {/* Feedback Viewer */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <span style={{fontSize:12,color:C.purple,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>💬 User Feedback</span>
+            {/* ── DATA & DEBUGGING (collapsed by default) ───────────────────
+                Feedback, Signal Outcomes, Trade Outcomes, and Cluster
+                Distribution are investigation tools, not daily-glance
+                metrics -- grouped here so a daily check of the Admin tab
+                doesn't mean scrolling past four heavy tables (Signal
+                Outcomes alone shows up to 1000 rows) every single time. */}
+            <div style={{fontSize:11,fontWeight:500,letterSpacing:'0.08em',color:C.dim,textTransform:'uppercase',margin:'1.5rem 0 0.75rem'}}>Data &amp; debugging</div>
+
+            <CollapsibleSection title="User Feedback" icon="💬" color={C.purple} C={C}
+              summary={adminFeedback.length>0 ? `${adminFeedback.length} loaded` : 'not loaded'}>
+              <div style={{display:'flex',justifyContent:'flex-end',marginBottom:10}}>
                 <button className="hv" onClick={loadAdminFeedback} disabled={adminFbLoading} style={{background:`${C.purple}18`,border:`1px solid ${C.purple}40`,color:C.purple,padding:'4px 12px',borderRadius:4,fontSize:11,cursor:'pointer',letterSpacing:.5}}>
                   {adminFbLoading?'Loading…':'↺ LOAD'}
                 </button>
@@ -4590,29 +4632,23 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{fb.message}</div>
                 </div>
               ))}
-            </div>
+            </CollapsibleSection>
 
             {/* Signal Outcomes — Phase 3 of the success-rate tracking project.
                 Full signal-level table over signal_history, resolved by the
                 outcome resolver cron (api/cron/resolve-outcomes.js). */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-                <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Signal Outcomes</span>
-              </div>
+            <CollapsibleSection title="Signal Outcomes" icon="📊" color={C.green} C={C}>
               <SignalOutcomesTable getToken={getAuthToken} theme={C} />
-            </div>
+            </CollapsibleSection>
 
             {/* Trade Outcomes — item 2 (final design). Autonomous resolution
                 of logged paper trades, separate from signal_history's own
                 track record (see api/cron/resolve-trade-outcomes.js and
                 migration-create-trade-outcomes.sql for why this is a
                 separate table/resolver, not folded into signal_history). */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-                <span style={{fontSize:12,color:C.green,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>📊 Trade Outcomes</span>
-              </div>
+            <CollapsibleSection title="Trade Outcomes" icon="📊" color={C.green} C={C}>
               <TradeOutcomesTable getToken={getAuthToken} theme={C} />
-            </div>
+            </CollapsibleSection>
 
             {/* Cluster Distribution — item 4 tuning support. Turns the
                 manual SQL query (item4-cluster-tuning-check.sql) into a
@@ -4620,12 +4656,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 looks right is "load this section" instead of "write SQL
                 by hand." Does not suggest a new value — surfaces the
                 distribution, the judgment call stays human. */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-                <span style={{fontSize:12,color:C.orange,letterSpacing:1,fontWeight:700,textTransform:'uppercase'}}>🔀 Cluster Distribution</span>
-              </div>
+            <CollapsibleSection title="Cluster Distribution" icon="🔀" color={C.orange} C={C}>
               <ClusterDistributionPanel getToken={getAuthToken} theme={C} />
-            </div>
+            </CollapsibleSection>
 
           </div>
         )}

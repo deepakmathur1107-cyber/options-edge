@@ -47,7 +47,7 @@ export default function ClusterDistributionPanel({ getToken, theme }) {
     <div>
       {data.lessHistoryThanRequested && (
         <div style={{ fontSize: 12, color: C.orange, background: `${C.orange}10`, border: `1px solid ${C.orange}30`, borderRadius: 6, padding: '8px 12px', marginBottom: 12 }}>
-          Requested {data.requestedDays} days of history, but only {data.distinctDaysFound} day(s) of signal_history actually exist yet — the distribution below reflects only what's really there, not a full {data.requestedDays}-day picture. Re-check once more trading days have accumulated.
+          Showing {data.distinctDaysFound} day(s) of signal_history (requested {data.requestedDays}) — not a full {data.requestedDays}-day picture yet. More trading days will fill this in.
         </div>
       )}
       <div style={{ fontSize: 12, color: C.dim, marginBottom: 10 }}>

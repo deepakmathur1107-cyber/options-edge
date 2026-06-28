@@ -217,21 +217,40 @@ export default function AdminDashboard({ getToken, theme }) {
   return (
     <div style={{ padding: '1.5rem', fontFamily: 'Inter, sans-serif', color: C.text, maxWidth: 960, margin: '0 auto' }}>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, animation: 'pulse-dot 2s infinite' }} />
           <span style={{ fontSize: 16, fontWeight: 600, fontFamily: "'Fraunces',serif", letterSpacing: '0.05em', color: C.green }}>
             ADMIN MONITOR
           </span>
         </div>
-        <button
-          onClick={loadMetrics}
-          disabled={loading}
-          style={{ fontSize: 12, color: C.dim, cursor: 'pointer', background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 6 }}
-        >
-          <span style={{ display: 'inline-block', animation: loading ? 'spin 1s linear infinite' : 'none' }}>↻</span>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Compact health summary -- the one thing worth seeing before any
+              scrolling on a daily check. Previously System Status only
+              appeared at the bottom of App Health, several screens down. */}
+          {data?.systemHealth && (() => {
+            const services = Object.values(data.systemHealth)
+            const healthyCount = services.filter(Boolean).length
+            const allHealthy = healthyCount === services.length
+            return (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.dim,
+                padding: '4px 10px', border: `1px solid ${C.border}`, borderRadius: 6,
+              }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: allHealthy ? C.green : C.orange }} />
+                {allHealthy ? 'All systems normal' : `${healthyCount}/${services.length} systems normal`}
+              </div>
+            )
+          })()}
+          <button
+            onClick={loadMetrics}
+            disabled={loading}
+            style={{ fontSize: 12, color: C.dim, cursor: 'pointer', background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <span style={{ display: 'inline-block', animation: loading ? 'spin 1s linear infinite' : 'none' }}>↻</span>
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
       </div>
       {lastUpdated && <div style={{ fontSize: 11, color: C.dim, marginBottom: '1rem' }}>Last updated: {lastUpdated}</div>}
 
