@@ -248,7 +248,7 @@ export default function TradeLog(props) {
         headers:{ 'Content-Type':'application/json', ...h },
         body: JSON.stringify({
           exit_price: parseFloat(closeForm.exit_price),
-          status:     'closed',
+          status:     'Closed',
           closed_at:  new Date().toISOString(),
         }),
       })

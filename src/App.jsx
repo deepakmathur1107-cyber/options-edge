@@ -1021,7 +1021,7 @@ export default function App(props={}) {
       aw:    wins.length?wins.reduce((s,t)=>s+parseFloat(t.pnl||0),0)/wins.length:0,
       al:    losses.length?Math.abs(losses.reduce((s,t)=>s+parseFloat(t.pnl||0),0)/losses.length):0,
       total: closed.length,
-      open:  trades.filter(t=>t.status==='Open').length,
+      open:  trades.filter(t=>(t.status||'').toLowerCase()==='open').length,
     }
   })()
 

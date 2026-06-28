@@ -36,6 +36,33 @@ function parseBody(req) {
 function num(v)  { const n = parseFloat(v);  return isNaN(n) ? null : n }
 function int_(v) { const n = parseInt(v);    return isNaN(n) ? null : n }
 
+// trades.status has historically been written with inconsistent casing
+// ('Open', 'closed', 'Closed') by different callers over time. Normalize
+// to the canonical title-case values here so every write path — manual
+// close, scanner push-to-journal, future auto-close logic — lands on the
+// same casing, instead of relying on each caller to get it right.
+// Unrecognized values pass through as-is rather than being coerced, so a
+// genuinely new status surfaces instead of silently disappearing into a
+// wrong bucket.
+const STATUS_MAP = { open: 'Open', closed: 'Closed', inactive: 'inactive' }
+function normStatus(v) {
+  if (v == null) return v
+  const mapped = STATUS_MAP[String(v).toLowerCase()]
+  return mapped || v
+}
+
+// trades.type has mixed short-form casing ('call'/'Call') AND a separate
+// short-form vs. long-form naming split ('Call' vs 'Long Call') from
+// different eras of the app. This only fixes the casing half — it does
+// NOT collapse 'Call'/'Put' into 'Long Call'/'Long Put', since that would
+// be reinterpreting what older rows mean, not just respelling them.
+const TYPE_CASE_MAP = { call: 'Call', put: 'Put' }
+function normType(v) {
+  if (v == null) return v
+  const mapped = TYPE_CASE_MAP[String(v).toLowerCase()]
+  return mapped || v
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
@@ -116,7 +143,7 @@ module.exports = async function handler(req, res) {
       ticker,
       // TradeLog sends option_type ('call'/'put'); scanner sends type ('Call'/'Put')
       option_type:      (b.option_type || b.type  || 'call').toLowerCase(),
-      type:             (b.type        || b.option_type || 'call'),
+      type:             normType(b.type || b.option_type || 'call'),
       action:           b.action       || 'buy',
       strike:           b.strike       != null ? String(b.strike) : null,
       expiration:       b.expiration   || b.expiry || null,
@@ -145,7 +172,7 @@ module.exports = async function handler(req, res) {
       // on null-timeframe trades rather than default to a guessed profile
       // (session decision: skip explicitly, do not approximate).
       timeframe:        b.timeframe || null,
-      status:           b.status       || 'Open',
+      status:           normStatus(b.status) || 'Open',
       notes:            b.notes        || null,
       // Optional scoring fields from scanner
       conviction:       num(b.conviction),
@@ -182,7 +209,8 @@ module.exports = async function handler(req, res) {
     const updates = { updated_at: new Date().toISOString() }
     if (b.exit_price  != null) { updates.exit_price  = num(b.exit_price);  updates.close_price = String(b.exit_price) }
     if (b.close_price != null) { updates.close_price = String(b.close_price); updates.exit_price = num(b.close_price) }
-    if (b.status      != null)   updates.status      = b.status
+    if (b.status      != null)   updates.status      = normStatus(b.status)
+    if (b.type        != null)   updates.type        = normType(b.type)
     if (b.closed_at   != null)   updates.closed_at   = b.closed_at
     if (b.close_date  != null)   updates.close_date  = b.close_date
     if (b.pnl         != null)   updates.pnl         = num(b.pnl)
