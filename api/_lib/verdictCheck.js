@@ -127,7 +127,14 @@ async function checkVerdict(trade, tracker) {
     return { skipped: true, reason: 'no_quote', tradeId: trade.id, occSymbol }
   }
 
-  const currentMid = (parseFloat(contractQuote.bid || 0) + parseFloat(contractQuote.ask || 0)) / 2
+  // Rounded to 2 decimals immediately — (bid+ask)/2 in JS float math can
+  // produce artifacts like 3.8499999999999996 (confirmed live in
+  // verdict_checks.current_mid). Rounding here, not just before insert,
+  // matters because currentMid also feeds hitTarget/hitStop comparisons
+  // and breakevenPrice math below — leaving it unrounded there risks a
+  // boundary comparison being decided by a sub-cent float artifact rather
+  // than the actual cent-denominated price a trader would see.
+  const currentMid = Math.round(((parseFloat(contractQuote.bid || 0) + parseFloat(contractQuote.ask || 0)) / 2) * 100) / 100
   if (!currentMid || currentMid <= 0) {
     return { skipped: true, reason: 'no_usable_price', tradeId: trade.id, occSymbol }
   }

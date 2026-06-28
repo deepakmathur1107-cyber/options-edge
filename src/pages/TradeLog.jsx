@@ -37,6 +37,19 @@ function calcPnl(trade) {
   return side === 'sell' ? (entry - exit)*qty*100 : (exit - entry)*qty*100
 }
 
+// A trade only has a real, computable P&L if calcPnl didn't have to bail
+// (missing/zero entry or exit price). Previously, closed-trade stats fell
+// back to `parseFloat(t.pnl ?? 0)` whenever calcPnl returned null — since
+// trades.pnl is never actually populated on close (confirmed: both of the
+// 2 live closed trades have pnl=null), that fallback resolved to 0, which
+// then silently counted as a LOSS in win-rate math (losses filter is
+// `<=0`) rather than being excluded as "unknown." Harmless today only
+// because both real closed trades happen to have exit_price set — this
+// guards against that breaking once trades are closed at higher volume
+// (e.g. by the autonomous paper-trade close logic) where a bug or edge
+// case could write status='Closed' without exit_price.
+const hasValidExit = trade => calcPnl(trade) !== null
+
 const EMPTY_FORM = {
   symbol:'', option_type:'call', action:'buy',
   strike:'', expiration:'', contracts:'1', entry_price:'', notes:'',
@@ -46,7 +59,7 @@ const EMPTY_CLOSE = { exit_price:'' }
 // ── Equity Curve ──────────────────────────────────────────────────────────────
 function EquityCurve({ trades, C }) {
   const closed = trades
-    .filter(t => (t.status??'').toLowerCase()==='closed' || t.exit_price)
+    .filter(t => ((t.status??'').toLowerCase()==='closed' || t.exit_price) && hasValidExit(t))
     .slice().reverse()
   if (closed.length < 2) return (
     <div style={{
@@ -60,7 +73,7 @@ function EquityCurve({ trades, C }) {
   const W=500, H=100
   const cumPnl = closed.reduce((acc,t)=>{
     const prev = acc[acc.length-1]?.y ?? 0
-    const p = calcPnl(t) ?? parseFloat(t.pnl ?? 0)
+    const p = calcPnl(t)
     acc.push({ y: prev+p })
     return acc
   },[])
@@ -305,19 +318,27 @@ export default function TradeLog(props) {
   const openTrades   = trades.filter(t => (t.status??'').toLowerCase()!=='closed' && !t.exit_price)
   const closedTrades = trades.filter(t => (t.status??'').toLowerCase()==='closed'  || !!t.exit_price)
 
-  const totalPnl = closedTrades.reduce((s,t)=>{
-    const p = calcPnl(t); return s + (p ?? parseFloat(t.pnl??0))
-  }, 0)
-  const wins     = closedTrades.filter(t=>(calcPnl(t)??parseFloat(t.pnl??0))>0)
-  const losses   = closedTrades.filter(t=>(calcPnl(t)??parseFloat(t.pnl??0))<=0)
-  const winRate  = closedTrades.length ? Math.round(wins.length/closedTrades.length*100) : null
+  // Stats below only consider trades where P&L is actually computable
+  // (entry AND exit price present) — see hasValidExit's comment. A closed
+  // trade missing exit_price is excluded from win/loss/total math rather
+  // than being silently scored as a $0 loss.
+  const statsEligible = closedTrades.filter(hasValidExit)
+  const totalPnl = statsEligible.reduce((s,t)=> s + calcPnl(t), 0)
+  const wins     = statsEligible.filter(t=>calcPnl(t)>0)
+  const losses   = statsEligible.filter(t=>calcPnl(t)<=0)
+  const winRate  = statsEligible.length ? Math.round(wins.length/statsEligible.length*100) : null
 
   const displayed = filter==='open'   ? openTrades
                   : filter==='closed' ? closedTrades
                   : trades
 
   // ── Backtest helpers ───────────────────────────────────────────────────────
-  const pnlOf   = t => calcPnl(t) ?? parseFloat(t.pnl??0)
+  // pnlOf returns null for trades calcPnl can't compute (missing exit price)
+  // rather than falling back to a stored pnl that's never actually populated
+  // — see hasValidExit's comment above for why that fallback silently miscounted
+  // as a $0 loss. wr/totPL/avgPL filter those out explicitly so a caller that
+  // forgets to pre-filter still gets correct math instead of deflated stats.
+  const pnlOf   = t => calcPnl(t)
   const convOf  = t => parseFloat(t.conviction??0)
   const ivOf    = t => parseFloat(t.iv??t.iv_at_entry??0)
   const chgOf   = t => parseFloat(t.chgPctAtEntry??t.chg_pct_at_entry??0)
@@ -325,9 +346,9 @@ export default function TradeLog(props) {
   const hbOf    = t => parseInt(t.hardBlockCount??t.hard_block_count??0)
   const hasConv = t => t.conviction && !isNaN(convOf(t))
 
-  const wr    = arr => arr.length ? Math.round(arr.filter(t=>pnlOf(t)>0).length/arr.length*100) : null
-  const totPL = arr => arr.reduce((s,t)=>s+pnlOf(t), 0)
-  const avgPL = arr => arr.length ? totPL(arr)/arr.length : 0
+  const wr    = arr => { const e=arr.filter(hasValidExit); return e.length ? Math.round(e.filter(t=>pnlOf(t)>0).length/e.length*100) : null }
+  const totPL = arr => arr.filter(hasValidExit).reduce((s,t)=>s+pnlOf(t), 0)
+  const avgPL = arr => { const e=arr.filter(hasValidExit); return e.length ? totPL(e)/e.length : 0 }
 
   const hi90      = closedTrades.filter(t=>hasConv(t)&&convOf(t)>=90)
   const hi70      = closedTrades.filter(t=>hasConv(t)&&convOf(t)>=70&&convOf(t)<90)
@@ -337,8 +358,8 @@ export default function TradeLog(props) {
   const passed    = closedTrades.filter(t=>hasConv(t)&&!wouldBlock(t))
   const avgWin    = wins.length   ? Math.abs(avgPL(wins))   : 0
   const avgLoss   = losses.length ? Math.abs(avgPL(losses)) : 0
-  const expectancy= closedTrades.length
-    ? (wins.length/closedTrades.length)*avgWin - (losses.length/closedTrades.length)*avgLoss
+  const expectancy= statsEligible.length
+    ? (wins.length/statsEligible.length)*avgWin - (losses.length/statsEligible.length)*avgLoss
     : 0
 
   const btList = btFilter==='90plus'  ? closedTrades.filter(t=>convOf(t)>=90)
