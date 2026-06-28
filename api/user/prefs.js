@@ -123,8 +123,19 @@ module.exports = async function handler(req, res) {
 
     const body = req.body || {}
 
+    // SMS — ADMIN-ONLY for now, per explicit product decision (2026-06-28):
+    // Twilio is still on a trial account and costs real money per message
+    // even once upgraded. The frontend already hides this toggle from
+    // non-admins, but that alone doesn't stop a direct POST to this
+    // endpoint — this is the actual enforcement point, same reasoning as
+    // why the Telegram admin-only restriction lives in alerts/send.js
+    // itself rather than only in the UI that calls it.
+    if (!isAdmin && body.sms_alerts) {
+      return res.status(403).json({ error: 'SMS alerts are not yet available — coming soon.' })
+    }
+
     // Only active subscribers (or admins) can enable alert delivery
-    if (!isAdmin && (body.email_alerts || body.sms_alerts)) {
+    if (!isAdmin && body.email_alerts) {
       const { createClient } = require('@supabase/supabase-js')
       const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
       const { data: sub } = await sb

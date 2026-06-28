@@ -404,7 +404,15 @@ module.exports = async function handler(req, res) {
       }
 
       if (user.email_alerts && emailToUse) { const ok = await sendEmail(emailToUse, subject, buildEmailHtml(userAlerts, marketCtx)); if (ok) { notified = true; console.log(`Email → ${emailToUse}`) } }
-      if (user.sms_on && user.phone_number)       { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx)); if (ok) notified = true }
+      // SMS — ADMIN-ONLY for now, per explicit product decision
+      // (2026-06-28): Twilio is still trial, costs real money per message,
+      // and isn't worth opening to real users until there's enough volume
+      // (10+) to justify it. prefs.js already blocks a non-admin from
+      // ENABLING sms_alerts going forward — this is the send-time backstop
+      // for any row that already had sms_on set before that gate existed.
+      // Same reasoning/pattern as the Telegram admin-only restriction
+      // directly below.
+      if (ADMIN_IDS.includes(user.clerk_user_id) && user.sms_on && user.phone_number) { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx)); if (ok) notified = true }
       // Telegram — ADMIN-ONLY per explicit product decision (2026-06-28):
       // unlike email/sms_on, this channel has no per-user opt-in toggle in
       // alert_prefs at all — having a tg_token saved was the ONLY gate,

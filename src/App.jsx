@@ -4214,16 +4214,24 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       </div>
                     )}
 
-                    {/* SMS Alerts — same toggle+conditional-field pattern as
-                        Email Alerts above. prefs.js already reads/writes
-                        sms_alerts/phone_number (confirmed: sms_on column,
-                        sms_alerts wire key) and already gates enabling it
-                        behind an active subscription server-side (line
-                        ~115 of prefs.js) — this is wiring the existing,
-                        already-functional backend into the UI that was
-                        previously missing it, not adding new backend logic. */}
+                    {/* SMS Alerts — ADMIN-ONLY for now, per explicit product
+                        decision (2026-06-28): Twilio is still on a trial
+                        account (confirmed: trial segment-limit rejection,
+                        error NO23bca221... in Twilio's own message logs,
+                        2026-06-28) and costs real money per message even
+                        once upgraded — not worth exposing to real users
+                        until there's a meaningful base (10+) to justify
+                        the spend. isAdmin gate matches the same pattern
+                        already used for tgToken/TweetShare elsewhere in
+                        this file. Code/backend below is otherwise fully
+                        wired and correct (prefs.js validates + persists
+                        sms_alerts/phone_number, alerts/send.js sends via
+                        Twilio) — only the UI is gated, so re-enabling this
+                        for everyone later is a one-line change (remove the
+                        isAdmin&& wrapper), not a rebuild. */}
+                    {isAdmin && (<>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:alertPrefs.sms_alerts?10:14,marginTop:14}}>
-                      <span style={{fontSize:11,color:C.text,fontWeight:600}}>SMS Alerts</span>
+                      <span style={{fontSize:11,color:C.text,fontWeight:600}}>SMS Alerts <span style={{color:C.dim,fontWeight:400,fontSize:10}}>(admin only)</span></span>
                       <button className="hv" onClick={()=>setAlertPrefs(p=>({...p,sms_alerts:!p.sms_alerts}))} style={{
                         width:38,height:20,borderRadius:10,border:'none',cursor:'pointer',
                         background:alertPrefs.sms_alerts?C.green:'#1a2e3e',
@@ -4242,6 +4250,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         </div>
                       </div>
                     )}
+                    </>)}
 
                     {/* Schedule info */}
                     <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'10px 12px',marginBottom:14,display:'flex',gap:10,alignItems:'flex-start'}}>
