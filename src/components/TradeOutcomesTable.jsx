@@ -166,7 +166,8 @@ export default function TradeOutcomesTable({ getToken, theme }) {
           </span>
           <span style={{ color: C.dim }}>Partial: {stats.expiredPartial}</span>
           <span style={{ color: C.dim }}>Flat/decay: {stats.expiredFlat}</span>
-          <span style={{ color: C.dim }}>Open: {stats.unresolved}</span>
+          <span style={{ color: C.dim }}>Open: {stats.stillOpen}</span>
+          <span style={{ color: C.dim }}>Awaiting data: {stats.dataUnavailable}</span>
           <span style={{ color: C.dim }}>Total in filter: {stats.totalInFilter}</span>
         </div>
       )}

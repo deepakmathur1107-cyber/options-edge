@@ -226,7 +226,27 @@ module.exports = async function handler(req, res) {
     }
     try {
       const update = await resolveOne(trade, rateTracker)
-      if (update._stillOpen) { stillOpen++; continue }
+      if (update._stillOpen) {
+        stillOpen++
+        // Upsert a row so the admin Trade Outcomes panel can actually see
+        // this trade as open. Previously this branch did nothing -- a
+        // still-open trade never got a trade_outcomes row at all, which
+        // meant the panel's "Open" count (outcome IS NULL) only ever
+        // reflected _noUsableData retry rows, NOT genuinely open trades.
+        // resolution_method='still_open' distinguishes this from a
+        // _noUsableData row (also outcome=null, but means "couldn't fetch
+        // a price quote yet," a different state) -- both currently look
+        // identical under a bare `outcome IS NULL` filter without this.
+        // outcome stays null deliberately: the CHECK constraint on this
+        // column only allows WIN/LOSS/EXPIRED_PARTIAL/EXPIRED_FLAT, and
+        // "still open" isn't a resolved outcome, so null is correct here,
+        // not a 5th enum value.
+        const { error: stillOpenErr } = await client
+          .from('trade_outcomes')
+          .upsert({ trade_id: trade.id, outcome: null, resolution_method: 'still_open' }, { onConflict: 'trade_id' })
+        if (stillOpenErr) console.error(`[resolve-trade-outcomes] failed to upsert still-open row for trade ${trade.id}:`, stillOpenErr.message)
+        continue
+      }
 
       if (update._noUsableData) {
         // Need the CURRENT attempt count -- query existing trade_outcomes

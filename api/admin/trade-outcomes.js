@@ -106,7 +106,7 @@ module.exports = async (req, res) => {
     // Stats query — same shape/reasoning as signal-outcomes.js: a second,
     // unpaginated query over the CURRENT filter (minus the outcome filter
     // itself, so switching outcome filters doesn't change the baseline).
-    let statsQuery = supabase.from('trade_outcomes').select('outcome, trades!inner(ticker)');
+    let statsQuery = supabase.from('trade_outcomes').select('outcome, resolution_method, trades!inner(ticker)');
     if (ticker) statsQuery = statsQuery.eq('trades.ticker', ticker);
     const { data: statsRows, error: statsErr } = await statsQuery;
     if (statsErr) return res.status(500).json({ error: statsErr.message });
@@ -115,7 +115,20 @@ module.exports = async (req, res) => {
     const losses         = statsRows.filter(r => r.outcome === 'LOSS').length;
     const expiredPartial = statsRows.filter(r => r.outcome === 'EXPIRED_PARTIAL').length;
     const expiredFlat    = statsRows.filter(r => r.outcome === 'EXPIRED_FLAT').length;
-    const unresolved     = statsRows.filter(r => r.outcome === null).length;
+    // unresolved used to mean "outcome IS NULL," which only ever covered
+    // _noUsableData retry rows in practice (still-open trades never wrote
+    // a row at all, before resolve-trade-outcomes.js's still-open upsert
+    // fix). Now that still-open trades DO write a row, outcome IS NULL
+    // covers two genuinely different states distinguished only by
+    // resolution_method -- split here so the panel doesn't conflate
+    // "healthy, just hasn't hit target/stop yet" with "stuck retrying,
+    // can't get a price quote." stillOpen keeps the same field name the
+    // frontend already reads (stats.unresolved) for backward compat, but
+    // now means specifically "open," with dataUnavailable broken out
+    // separately.
+    const stillOpenRows  = statsRows.filter(r => r.outcome === null && r.resolution_method === 'still_open').length;
+    const dataUnavailable = statsRows.filter(r => r.outcome === null && r.resolution_method !== 'still_open').length;
+    const unresolved     = stillOpenRows + dataUnavailable;
     // Same strict win-rate convention as signal-outcomes.js, applied here
     // for consistency between the two tables — NOT re-derived independently,
     // intentionally kept identical: only a clean WIN counts toward the
@@ -130,6 +143,7 @@ module.exports = async (req, res) => {
       pagination: { page, pageSize, totalRows: count, totalPages: Math.ceil((count || 0) / pageSize) },
       stats: {
         wins, losses, expiredPartial, expiredFlat, unresolved,
+        stillOpen: stillOpenRows, dataUnavailable,
         lossesForRate, winRate,
         totalInFilter: statsRows.length,
       },
