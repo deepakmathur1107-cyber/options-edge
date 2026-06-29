@@ -1,6 +1,6 @@
 /**
  * api/brief.js
- * GET  /api/brief                — serve cached brief (auto-regenerates if ≥2hrs old, 7am-4pm CT)
+ * GET  /api/brief                — serve cached brief (auto-regenerates if ≥2hrs old, 8am-5pm ET)
  * GET  /api/brief?news=1         — return latest Finnhub headlines (for ticker strip, no auth)
  * GET  /api/brief?ticker=NVDA&.. — S&R levels + AI ticker brief for manual scan
  * POST /api/brief                — generate fresh brief (cron or admin trigger via x-cron-secret)
@@ -19,12 +19,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-// ── Is it within the active brief window? (7am–4pm CT, trading days) ────────
+// ── Is it within the active brief window? (8am-5pm ET, trading days) ───────
+// FIX: was anchored to America/Chicago (7am-4pm CT, which is the same
+// absolute window — CT/ET maintain a constant 1hr offset under DST, no
+// seasonal trap here) while every other market-timing check in this
+// codebase (marketSession.js's getSessionPhase/getMarketStatus,
+// scanLogic.js's isPreMarket/isOpeningWindow) correctly anchors to
+// America/New_York, the actual market's own timezone. Same root pattern
+// as the marketSession.js fix (2026-06-29) — consolidating onto one
+// reference timezone instead of leaving CT as an unexplained outlier in
+// just this one function.
 function inBriefWindow(now) {
   if (!isTradingDay(now)) return false
-  const p    = tzParts(now, 'America/Chicago')
+  const p    = tzParts(now, 'America/New_York')
   const mins = parseInt(p.hour, 10) * 60 + parseInt(p.minute, 10)
-  return mins >= 7 * 60 && mins < 16 * 60
+  return mins >= 8 * 60 && mins < 17 * 60
 }
 
 // ── Build the Claude prompt with real data injected ──────────────────────────
@@ -134,10 +143,17 @@ async function generateAndStore(now) {
   return { brief, generatedAt: now.toISOString() }
 }
 
-// ── Same-calendar-day check (CT) ─────────────────────────────────────────────
+// ── Same-calendar-day check (ET) ─────────────────────────────────────────────
+// FIX: was anchored to America/Chicago — see inBriefWindow's comment above
+// for the full reasoning. This one matters more than a display label: it
+// decides whether a brief counts as "today's" or gets treated as stale and
+// regenerated. A brief generated late in the ET trading day could land on
+// a different calendar date in CT than in ET around midnight boundaries —
+// a real correctness risk for this function specifically, not just a
+// cosmetic inconsistency.
 function sameDay(isoA, isoB) {
   const fmt = d => new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit'
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(new Date(d))
   return fmt(isoA) === fmt(isoB)
 }

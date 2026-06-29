@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+// fmtLocalTime — same pattern as App.jsx/MorningBrief.jsx (2026-06-29):
+// auto-detects the viewer's own timezone and labels it explicitly, instead
+// of a bare toLocaleTimeString() with no zone shown at all. Admin-only
+// page, so lower stakes than the user-facing fixes, but the same
+// unlabeled-time bug, worth closing for consistency rather than leaving
+// one inconsistent exception in the codebase.
+const TZ_ABBREV = { 'America/New_York':'ET','America/Chicago':'CT','America/Denver':'MT','America/Los_Angeles':'PT' };
+function fmtLocalTime(date) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${timeStr} ${TZ_ABBREV[tz] || tz}`;
+}
+
 // Categorical colors for the feature-usage bars — deliberately NOT theme
 // tokens. These distinguish 5 different features from each other (a legend),
 // not bullish/bearish/neutral states, so forcing them through C.green/C.blue
@@ -168,7 +181,7 @@ export default function AdminDashboard({ getToken, theme }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
-      setLastUpdated(new Date().toLocaleTimeString());
+      setLastUpdated(fmtLocalTime(new Date()));
     } catch (e) {
       setError(e.message);
     } finally {
