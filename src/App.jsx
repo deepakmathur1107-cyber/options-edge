@@ -2790,16 +2790,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            (color, badge, units) without needing a column label above it. ── */
         @media(max-width:639px){
           .alert-table-header{display:none}
-          .alert-row-mobile{flex-wrap:wrap!important;row-gap:6px!important}
-          .alert-row-ticker{width:auto!important;order:1}
-          .alert-row-grade{width:auto!important;order:2;margin-left:auto}
-          .alert-row-conviction{width:auto!important;order:3;flex:1 1 100%!important}
-          .alert-row-contract{flex:1 1 auto!important;order:4;width:auto!important}
-          .alert-row-moneyness{order:5;flex:1 1 100%!important;margin-top:2px}
-          .alert-row-tf{order:6}
-          .alert-row-dte{width:auto!important;order:7}
-          .alert-row-mid{width:auto!important;order:8;margin-left:auto}
-          .alert-row-staleness{width:auto!important;order:9;flex:1 1 100%!important;justify-content:flex-start!important;margin-top:2px}
+          .alert-card-mobile{display:block}
+          .alert-row-mobile-only{display:none}
+        }
+        @media(min-width:640px){
+          .alert-card-mobile{display:none}
         }
       `}</style>
 
@@ -3755,7 +3750,115 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                             CSS for both states lives in the shared <style>
                             block above; only classNames are added here so
                             the desktop JSX/markup itself is untouched. */}
-                        <div className="hv alert-row-mobile" onClick={()=>{
+                        {/* ── Mobile card (< 640px) — a REAL card layout, not
+                            the desktop row reordered via flex-wrap/order.
+                            That approach (every element still individually
+                            positioned via CSS order, see the now-removed
+                            .alert-row-* mobile rules) read as a fragmented
+                            table on a phone: ticker alone on one line, a
+                            bare unlabeled conviction number floating at the
+                            far right, the moneyness tag styled like a greyed
+                            -out disabled input, the timeframe pill clipped
+                            to "Swing Tra…" — every problem visible in a real
+                            screenshot at 389px width (2026-06-29), not
+                            theoretical. This groups information by what it
+                            MEANS instead of by which desktop column it used
+                            to be: ticker+grade together (the headline),
+                            contract on its own full-width line (never
+                            truncated), a labeled conviction bar, moneyness+
+                            mid paired since they're both "price right now,"
+                            and timeframe+DTE+staleness together as
+                            de-emphasized supporting context. Desktop's row
+                            above is completely untouched — this is a
+                            sibling, shown only via CSS below 640px, not a
+                            modification of the same markup. */}
+                        <div className="alert-card-mobile" onClick={()=>{
+                          const next = isSelected?null:i
+                          setSelectedAlert(next)
+                          if (next!==null && !alertSR[next]) {
+                            setAlertSR(p=>({...p,[next]:{loading:true,data:null}}))
+                            getAuthToken().then(authTok=>{
+                              const headers = authTok ? { Authorization: `Bearer ${authTok}` } : {}
+                              const qp = new URLSearchParams({
+                                ticker: al.ticker, skipBrief: '1',
+                                price: String(parseFloat(String(al.mid||'').replace(/[^0-9.\-]/g,'')) || ''),
+                                chgPct: String(parseFloat(String(al.chgPct||'0').replace(/[^0-9.\-]/g,'')) || 0),
+                                iv: String(al.iv||0), dte: String(al.dte||30),
+                                score: String(al.score||50), tradeType: al.tradeType||'Call',
+                              })
+                              return fetch(`/api/brief?${qp}`, { headers }).then(r=>r.json())
+                            }).then(d=>{
+                              setAlertSR(p=>({...p,[next]:{loading:false,data:d?.sr||null}}))
+                            }).catch(()=>{
+                              setAlertSR(p=>({...p,[next]:{loading:false,data:null}}))
+                            })
+                          }
+                        }} style={{
+                          padding:'12px 14px',
+                          borderRadius:isSelected?'10px 10px 0 0':10,
+                          marginBottom:isSelected?0:8,
+                          cursor:'pointer',
+                          background:isSelected?`${scoreCol}10`:C.bgDeep,
+                          border:`1px solid ${isSelected?scoreCol:C.border}`,
+                          borderLeft:`4px solid ${scoreCol}`,
+                          transition:'all .15s',
+                        }}>
+                          {/* Row 1 — the headline: ticker + grade, the two
+                              things worth seeing before anything else */}
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                            <span style={{fontFamily:"'Fraunces',serif",fontSize:19,fontWeight:600,color:scoreCol,letterSpacing:0.3}}>${al.ticker}</span>
+                            <div style={{display:'flex',alignItems:'center',gap:8}}>
+                              {staleness&&<span title="Time since this result was scanned" style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:staleCol,fontFamily:"'IBM Plex Mono',monospace"}}>
+                                <span style={{width:5,height:5,borderRadius:'50%',background:staleCol,flexShrink:0,display:'inline-block'}}/>{staleness.label}
+                              </span>}
+                              <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:4,padding:'2px 8px',color:scoreCol,fontWeight:700,fontSize:13}}>{grade}</span>
+                            </div>
+                          </div>
+
+                          {/* Row 2 — the contract, full width, never clipped */}
+                          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13.5,color:C.text,marginBottom:8}}>{al.tradeType} {al.strikeStr}</div>
+
+                          {/* Row 3 — conviction bar, now WITH a label so the
+                              number means something at a glance instead of
+                              floating unexplained at the row's far edge */}
+                          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                            <span style={{fontSize:10,color:C.dim,letterSpacing:0.5,flexShrink:0}}>CONVICTION</span>
+                            <div style={{flex:1,height:5,background:C.border,borderRadius:3,overflow:'hidden'}}>
+                              <div style={{height:'100%',width:`${al.score||0}%`,background:`linear-gradient(90deg,${scoreCol}80,${scoreCol})`,borderRadius:3}}/>
+                            </div>
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,color:scoreCol,fontWeight:700,flexShrink:0}}>{al.score}%</span>
+                          </div>
+
+                          {/* Row 4 — moneyness + mid, paired since both
+                              answer "where is this priced right now."
+                              Moneyness restyled from a greyed-out-input look
+                              to a real, legible data chip — it was as
+                              important as anything else on the card but read
+                              as disabled/placeholder text before. */}
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                            {moneyness ? (
+                              <span title={`Stock was $${al.underlyingPrice.toFixed(2)} at scan time`} style={{fontSize:12,fontWeight:600,color:moneyness.itm?C.orange:C.green,fontFamily:"'IBM Plex Mono',monospace"}}>
+                                ${al.underlyingPrice.toFixed(2)} <span style={{fontWeight:400,opacity:0.75}}>· {moneyness.itm?'ITM':'OTM'} {Math.abs(moneyness.pct).toFixed(1)}%</span>
+                              </span>
+                            ) : <span/>}
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:15,fontWeight:700,color:C.text}}>{al.mid||'—'}</span>
+                          </div>
+
+                          {/* Row 5 — supporting context: timeframe + DTE,
+                              de-emphasized since these matter less than
+                              what's above. Timeframe pill no longer clipped
+                              ("Swing Tra…") — full label, sized to fit
+                              rather than truncated to a fixed width. */}
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                            {al.tfLabel&&<span style={{fontSize:11,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'2px 8px',borderRadius:3,whiteSpace:'nowrap'}}>{al.tfLabel}</span>}
+                            <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.dim}}>{al.dte||'—'} DTE</span>
+                            <span style={{fontSize:11,color:C.dim}}>{isSelected?'▲ less':'▼ more'}</span>
+                          </div>
+                        </div>
+
+                        {/* Desktop row — unchanged from before, hidden on
+                            mobile via CSS (.alert-row-mobile-only below) */}
+                        <div className="hv alert-row-mobile alert-row-mobile-only" onClick={()=>{
                           const next = isSelected?null:i
                           setSelectedAlert(next)
                           // Fetch S/R (no AI brief — auto-scanner has no space for it) the first
@@ -3823,7 +3926,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         </div>
                         {/* Expanded detail */}
                         {isSelected&&(
-                          <div style={{background:C.bgDeep,border:`1px solid ${scoreCol}40`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'12px 14px',marginBottom:4}}>
+                          <div style={{background:C.bgDeep,border:`1px solid ${scoreCol}40`,borderTop:'none',borderRadius:'0 0 10px 10px',padding:'12px 14px',marginBottom:8}}>
                             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:10}}>
                               {[
                                 {l:'ENTRY',  v:al.entry},
