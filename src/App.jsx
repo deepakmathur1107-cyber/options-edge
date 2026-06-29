@@ -2791,7 +2791,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         @media(max-width:639px){
           .alert-table-header{display:none}
           .alert-card-mobile{display:block}
-          .alert-row-mobile-only{display:none}
+          .alert-row-mobile-only{display:none!important}
         }
         @media(min-width:640px){
           .alert-card-mobile{display:none}
