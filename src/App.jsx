@@ -2863,10 +2863,19 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             const sessionColor = sessionPhase==='open' ? C.green : sessionPhase==='closed' ? C.dim : C.orange
             return (
           <>
-          {/* ── Session badge — same boundaries as MorningBrief's own status, so the two never disagree ── */}
-          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12,fontSize:11,color:C.dim}}>
-            <span style={{width:6,height:6,borderRadius:'50%',background:sessionColor,display:'inline-block'}}/>
-            <span style={{color:sessionColor,fontWeight:700,letterSpacing:1,fontFamily:"'IBM Plex Mono',monospace"}}>{sessionLabel}</span>
+          {/* ── Session badge — same boundaries as MorningBrief's own status, so the two never disagree ──
+              FIX: at narrow mobile widths (~390px), "MARKET OPEN" was wrapping
+              mid-phrase to "MARKET / OPEN" because the row had no flex-wrap and
+              the label itself had no whiteSpace:nowrap — the browser's default
+              line-break behavior just picked wherever it ran out of horizontal
+              room, which happened to land inside the two-word label rather than
+              the (also-present, and fine to wrap) explanatory text after it.
+              Confirmed live on a real 389px viewport (2026-06-29). flexWrap on
+              the row + nowrap on the label fixes this without touching desktop,
+              where there was always enough width for everything on one line. ── */}
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12,fontSize:11,color:C.dim,flexWrap:'wrap'}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:sessionColor,display:'inline-block',flexShrink:0}}/>
+            <span style={{color:sessionColor,fontWeight:700,letterSpacing:1,fontFamily:"'IBM Plex Mono',monospace",whiteSpace:'nowrap'}}>{sessionLabel}</span>
             <span style={{color:C.dim}}>— affects how fresh each read below can be</span>
           </div>
 
