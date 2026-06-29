@@ -182,10 +182,22 @@ module.exports = async function handler(req, res) {
   const rateTracker = newRateTracker()
 
   const BATCH_LIMIT = parseInt(req.query.limit, 10) || 50
+  // Per explicit decision (2026-06-29): only walk the PRIMARY row of each
+  // signal lifecycle — the same real contract can have 30+ rows from
+  // re-qualifying every 15-60 min throughout the day (confirmed live: one
+  // contract hit 36x in a single day), and resolving every single one of
+  // those would both waste Tradier rate-limit budget on duplicate work AND
+  // — more importantly — overweight persistent setups in the win-rate
+  // calculation by exactly that multiple. is_lifecycle_primary=true marks
+  // the first scan of each real signal, the economically correct entry
+  // point. The outcome gets propagated to every row in the lifecycle below
+  // (not just the primary), so QA queries against any individual row still
+  // see the real, correct final result.
   const { data: rows, error: fetchErr } = await client
     .from('signal_history')
     .select('*')
     .is('outcome', null)
+    .eq('is_lifecycle_primary', true)
     .order('scanned_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
@@ -226,7 +238,13 @@ module.exports = async function handler(req, res) {
         }
         continue
       }
-      const { error } = await client.from('signal_history').update(update).eq('id', row.id)
+      // Propagate to every row sharing this lifecycle, not just the primary
+      // row we walked — the duplicate scans of this same real signal
+      // (still kept for QA history, see scan.js's lifecycle comment) should
+      // show the same real, final outcome if anyone queries them
+      // individually, not stay perpetually null just because only the
+      // primary row was ever actually resolved.
+      const { error } = await client.from('signal_history').update(update).eq('signal_lifecycle_id', row.signal_lifecycle_id)
       if (error) {
         errors++
         console.error(`[resolve-outcomes] update failed for id=${row.id} (${row.ticker}):`, error.message)
