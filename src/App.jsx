@@ -2789,7 +2789,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            anymore — each value already carries its own visual context
            (color, badge, units) without needing a column label above it. ── */
         @media(max-width:639px){
-          .alert-table-header{display:none}
+          .alert-table-header{display:none!important}
           .alert-card-mobile{display:block}
           .alert-row-mobile-only{display:none!important}
         }

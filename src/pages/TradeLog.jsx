@@ -476,6 +476,24 @@ export default function TradeLog(props) {
         .tl-btn:hover{opacity:.8;transition:opacity .15s}
         .tl-btn{cursor:pointer;transition:all .15s}
         @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+        /* ── Stat tile mobile layout — real phone screenshot (2026-06-29)
+            showed these as tall, mostly-empty cards: a single number sitting
+            inside the same 18-20px padding tuned for a multi-column desktop
+            grid. At real phone content widths, minmax(180px,1fr) forces
+            exactly one column, so that padding (fine around a 180px-wide
+            tile) reads as a lot of dead space around a full-width one.
+            Rather than touch the grid threshold (it's fine at tablet/small-
+            desktop widths), switch each tile's INTERNAL layout below 480px:
+            label+value side-by-side in a slim row instead of stacked
+            vertically, tighter padding, smaller value text — same
+            information, far less wasted height, so the actual trade list
+            below isn't pushed off the first screen by five tall stat cards. */
+        @media(max-width:480px){
+          .tl-stat-card{padding:10px 14px!important;display:flex!important;alignItems:center!important;justifyContent:space-between!important}
+          .tl-stat-label{margin-bottom:0!important;font-size:11px!important}
+          .tl-stat-value{font-size:20px!important}
+          .tl-perf-grid{grid-template-columns:repeat(2,1fr)!important}
+        }
         .slide-down{animation:slideDown .2s ease}
       `}</style>
 
@@ -532,13 +550,13 @@ export default function TradeLog(props) {
               color: streakType === null ? C.dim : streakType==='win' ? C.green : C.red,
             },
           ].map(s => (
-            <div key={s.label} style={statCard(s.color)}>
-              <div style={{
+            <div key={s.label} className="tl-stat-card" style={statCard(s.color)}>
+              <div className="tl-stat-label" style={{
                 fontSize:11, color:C.dim, letterSpacing:0.8, marginBottom:10,
                 fontFamily:"'Inter', sans-serif", fontWeight:600,
                 textTransform:'uppercase',
               }}>{s.label}</div>
-              <div style={{
+              <div className="tl-stat-value" style={{
                 fontFamily:"'Fraunces',serif",
                 fontSize:30, color:s.color, letterSpacing:0.3, lineHeight:1,
               }}>{s.value}</div>
@@ -1124,7 +1142,7 @@ export default function TradeLog(props) {
             ) : (
               <>
                 {/* Summary stats */}
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+                <div className="tl-perf-grid" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
                   {[
                     { label:'TOTAL P&L',   value:fmtUSD(totPL(closedTrades)), color:totPL(closedTrades)>=0?C.green:C.red },
                     { label:'WIN RATE',    value:(wr(closedTrades)??0)+'%',    color:(wr(closedTrades)??0)>=60?C.green:(wr(closedTrades)??0)>=45?C.orange:C.red },
@@ -1133,9 +1151,9 @@ export default function TradeLog(props) {
                     { label:'AVG LOSS',    value:losses.length?'-$'+avgLoss.toFixed(0):'—', color:C.red },
                     { label:'W / L',       value:`${wins.length}W / ${losses.length}L`, color:C.dim },
                   ].map((s,i) => (
-                    <div key={i} style={statCard(s.color)}>
-                      <div style={{fontSize:11,color:C.dim,fontWeight:600,letterSpacing:0.5,marginBottom:8,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>{s.label}</div>
-                      <div style={{fontFamily:"'Fraunces',serif",fontSize:24,color:s.color,letterSpacing:0.5}}>{s.value}</div>
+                    <div key={i} className="tl-stat-card" style={statCard(s.color)}>
+                      <div className="tl-stat-label" style={{fontSize:11,color:C.dim,fontWeight:600,letterSpacing:0.5,marginBottom:8,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>{s.label}</div>
+                      <div className="tl-stat-value" style={{fontFamily:"'Fraunces',serif",fontSize:24,color:s.color,letterSpacing:0.5}}>{s.value}</div>
                     </div>
                   ))}
                 </div>
