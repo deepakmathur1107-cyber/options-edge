@@ -1142,6 +1142,15 @@ export default function App(props={}) {
   // scanTFRef/alertTfFilterRef above.
   const minScoreRef = useRef(minScore)
   useEffect(()=>{ minScoreRef.current = minScore },[minScore])
+  // minScoreDebounceRef — separate from minScoreRef above. That ref keeps
+  // the recurring auto-scan interval reading the LIVE threshold; this one
+  // debounces a fresh fetch of cached results when the slider moves, so
+  // results on screen actually reflect wherever the slider currently sits
+  // rather than only updating on the next scheduled refresh or a manual
+  // Start click. Debounced (300ms) rather than firing on every onChange
+  // tick, since a range input fires repeatedly while being dragged — one
+  // fetch per "settled" position, not one per pixel of drag.
+  const minScoreDebounceRef = useRef(null)
 
   // ── futures (tools panel) ──
   const [futSym,     setFutSym]     = useState('ES')
@@ -2275,6 +2284,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         // key, and tfLabel would silently miss every lookup.
         tfKey: row.timeframe,
         alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
+        // scannedAtMs — the REAL timestamp, kept alongside the display
+        // string above. alertedAt alone (a bare locale time, no date) can't
+        // reliably answer "how long ago was this" — reconstructing a Date
+        // by re-parsing a locale-formatted string back is exactly the
+        // fragile string-roundtrip pattern flagged elsewhere in this file
+        // (see the iv/chgPct formatted-string bugs above). This is the
+        // actual Date, computed once here from the real row.scanned_at,
+        // so the staleness display below has a real number to subtract
+        // from Date.now() rather than re-parsing display text.
+        scannedAtMs: new Date(row.scanned_at).getTime(),
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -2315,6 +2334,22 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     }
   }
   useEffect(()=>()=>clearInterval(autoRef.current),[])
+
+  // ── Auto-load latest cached results on page visit, independent of
+  // Start/Stop. Per explicit product decision (2026-06-28): Start/Stop
+  // should only control whether the page keeps POLLING for new results
+  // every scanFreq minutes — it was previously also gating whether ANY
+  // results showed at all, meaning a first-time visitor saw a blank Scan
+  // tab with nothing to look at until they opted into a recurring interval
+  // just to see what was already sitting in the cache. This calls the same
+  // loadOrRefreshAlerts used by toggleAuto/the interval — one code path,
+  // not a second parallel fetch — so a stale-results message, an error,
+  // and the resulting alertHistory/scanClusters state all behave
+  // identically whether triggered by mount, Start, or the recurring timer.
+  // Deliberately does NOT call setAutoOn(true) or start the interval —
+  // that decision stays exclusively with the Start button, per the same
+  // product call.
+  useEffect(()=>{ loadOrRefreshAlerts() },[])
 
   // ─── Journal helpers ──────────────────────────────────────────────────────
   const addTrade=async()=>{
@@ -2710,6 +2745,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .alert-row-tf{order:5}
           .alert-row-dte{width:auto!important;order:6}
           .alert-row-mid{width:auto!important;order:7;margin-left:auto}
+          .alert-row-staleness{width:auto!important;order:8;flex:1 1 100%!important;justify-content:flex-start!important;margin-top:2px}
         }
       `}</style>
 
@@ -3400,6 +3436,40 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   <div style={{fontSize:11,color:C.subtext,marginTop:2}}>
                     Every {scanFreq} min · {minScore}%+ conviction · Full S&P 500
                   </div>
+                  {/* Batch-level freshness — distinct from the per-row "Xm
+                      ago" dots below. Those answer "how old is THIS row";
+                      this answers "is the whole list I'm looking at even
+                      worth trusting right now," which matters even more
+                      when auto-scanner is OFF and nothing is actively
+                      refreshing — the most likely moment for a user to be
+                      looking at results that quietly went stale without any
+                      individual row standing out as obviously old. Takes
+                      the single most recent scannedAtMs across the whole
+                      batch, not an average — one fresh row in an otherwise
+                      stale batch shouldn't make the summary claim "fresh." */}
+                  {alertHistory.length>0 && (()=>{
+                    // Math.max(...[]) returns -Infinity, not 0/NaN — and
+                    // -Infinity is TRUTHY in JS, so a plain `if (!newestMs)`
+                    // guard would NOT catch the case where every row in
+                    // alertHistory has a missing/zero scannedAtMs (e.g. any
+                    // cached rows from before this field existed). Filtering
+                    // to only positive finite values before taking Math.max
+                    // avoids ever producing -Infinity in the first place,
+                    // rather than trying to catch it after the fact.
+                    const validTimes = alertHistory.map(a=>a.scannedAtMs).filter(ms=>typeof ms==='number' && ms>0 && isFinite(ms))
+                    if (!validTimes.length) return null
+                    const newestMs = Math.max(...validTimes)
+                    const diffMin = Math.round((Date.now()-newestMs)/60000)
+                    const tier = diffMin<=20?'fresh':diffMin<60?'aging':'stale'
+                    const col = tier==='fresh'?C.green:tier==='aging'?C.orange:C.red
+                    const label = diffMin<1?'just now':diffMin<60?`${diffMin}m ago`:`${Math.round(diffMin/60)}h ago`
+                    return (
+                      <div style={{fontSize:10.5,color:col,marginTop:4,display:'flex',alignItems:'center',gap:5,fontFamily:"'IBM Plex Mono',monospace"}}>
+                        <span style={{width:5,height:5,borderRadius:'50%',background:col,display:'inline-block'}}/>
+                        Newest result: {label}{tier==='stale'&&!autoOn?' — auto-scanner is off, start it for live results':''}
+                      </div>
+                    )
+                  })()}
                 </div>
                 <button className="hv" onClick={toggleAuto} style={{
                   background: autoOn ? C.red : C.green, border:'none', color:'#1c1916',
@@ -3440,6 +3510,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     const v=Number(e.target.value)
                     setMinScore(v)
                     setAlertPrefs(p=>({...p,min_edge_score:v}))
+                    // Refresh displayed results at the new threshold without
+                    // requiring Start/Stop — debounced so dragging doesn't
+                    // fire a fetch per pixel. minScoreRef is updated by its
+                    // own effect above; loadOrRefreshAlerts reads that ref,
+                    // so by the time this timeout fires it'll already see
+                    // the new value even though this closure captured the
+                    // old `minScore` prop.
+                    clearTimeout(minScoreDebounceRef.current)
+                    minScoreDebounceRef.current = setTimeout(()=>{ loadOrRefreshAlerts() }, 300)
                   }}
                   style={{width:'100%',accentColor:C.green,cursor:'pointer'}}
                 />
@@ -3552,7 +3631,34 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
                     <span style={{width:14}}/>
                   </div>
-                  {alertHistory.map((al,i)=>({al,i})).filter(({al})=>!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)).map(({al,i})=>{
+                  {/* stalenessOf — turns a row's real scannedAtMs into a
+                      short "Xm/Xh ago" label plus a fresh/aging/stale color
+                      tier, so a user can tell at a glance whether a result
+                      is worth acting on without expanding the row. Reads
+                      scannedAtMs (the real timestamp, see loadOrRefreshAlerts)
+                      rather than re-parsing the alertedAt display string —
+                      same reasoning as that field's own comment. Tiers are
+                      deliberately coarse (fresh/aging/stale, not exact
+                      minutes-as-color) since the actual decision a user
+                      needs to make is "is this still close to when it was
+                      scored," not a precise duration. Plain local function,
+                      not a window global — scoped to this render only,
+                      recomputed fresh each time so "Xm ago" never goes
+                      stale itself while the page sits open. */}
+                  {(() => {
+                    const stalenessOf = (ms) => {
+                      if (!ms) return null
+                      const diffMin = Math.round((Date.now() - ms) / 60000)
+                      if (diffMin < 1) return { label: 'just now', tier: 'fresh' }
+                      if (diffMin < 60) return { label: `${diffMin}m ago`, tier: diffMin <= 20 ? 'fresh' : 'aging' }
+                      const diffHr = Math.round(diffMin / 60)
+                      if (diffHr < 24) return { label: `${diffHr}h ago`, tier: 'stale' }
+                      const diffDay = Math.round(diffHr / 24)
+                      return { label: `${diffDay}d ago`, tier: 'stale' }
+                    }
+                  return alertHistory.map((al,i)=>({al,i})).filter(({al})=>!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)).map(({al,i})=>{
+                    const staleness = stalenessOf(al.scannedAtMs)
+                    const staleCol = staleness?.tier==='fresh' ? C.green : staleness?.tier==='aging' ? C.orange : C.dim
                     const isSelected = selectedAlert===i
                     const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
                     const grade = al.score>=80?'A':al.score>=65?'B':'C'
@@ -3624,6 +3730,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                             <span style={{background:`${scoreCol}20`,border:`1px solid ${scoreCol}50`,borderRadius:3,padding:'1px 5px',color:scoreCol,fontWeight:700,fontSize:12}}>{grade}</span>
                           </div>
                           <span className="alert-row-mid" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,width:40,textAlign:'right'}}>{al.mid||'—'}</span>
+                          {staleness&&<span className="alert-row-staleness" title="Time since this result was scanned" style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:staleCol,width:54,justifyContent:'flex-end',flexShrink:0,fontFamily:"'IBM Plex Mono',monospace"}}>
+                            <span style={{width:5,height:5,borderRadius:'50%',background:staleCol,flexShrink:0,display:'inline-block'}}/>{staleness.label}
+                          </span>}
                           <span style={{fontSize:11,color:C.dim,width:14,textAlign:'center'}}>{isSelected?'▲':'▼'}</span>
                         </div>
                         {/* Expanded detail */}
@@ -3746,7 +3855,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         )}
                       </div>
                     )
-                  })}
+                  })
+                  })()}
                 </div>
               )}
 
