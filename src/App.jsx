@@ -1113,7 +1113,13 @@ export default function App(props={}) {
   const activeScanTickerRef = useRef('')
 
   // ── auto-scanner ──
-  const [autoOn,      setAutoOn]      = useState(false)
+  // Defaults to ON (was false) — per explicit decision (2026-06-29): the
+  // backend cron already refreshes scan_results on its own 15-min cadence
+  // regardless of whether anyone's looking; the frontend should match that
+  // by default rather than requiring a Start click just to keep pace with
+  // data that's already refreshing server-side either way. Stop still
+  // works exactly as before for anyone who wants to pause it.
+  const [autoOn,      setAutoOn]      = useState(true)
   // Optional filter on the Auto-scanner's mixed-timeframe results — null
   // means show all 4 together (the new default); a value narrows to one.
   // Independent of scanTF, which still drives Manual mode's own scan.
@@ -2294,6 +2300,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         // so the staleness display below has a real number to subtract
         // from Date.now() rather than re-parsing display text.
         scannedAtMs: new Date(row.scanned_at).getTime(),
+        // underlyingPrice — the REAL stock price at scan time, from the new
+        // scan_results.underlying_price column (see scan.js's own comment
+        // on why this was added). Lets a row show how far the strike sits
+        // from where the stock actually was when this was scored, instead
+        // of a strike number alone that can look deceptively close to the
+        // money — confirmed live: a $305 strike read as near-the-money at
+        // a glance when the real stock price was already ~$325, $20 ITM.
+        underlyingPrice: row.underlying_price ? Number(row.underlying_price) : null,
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -2335,21 +2349,25 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
   }
   useEffect(()=>()=>clearInterval(autoRef.current),[])
 
-  // ── Auto-load latest cached results on page visit, independent of
-  // Start/Stop. Per explicit product decision (2026-06-28): Start/Stop
-  // should only control whether the page keeps POLLING for new results
-  // every scanFreq minutes — it was previously also gating whether ANY
-  // results showed at all, meaning a first-time visitor saw a blank Scan
-  // tab with nothing to look at until they opted into a recurring interval
-  // just to see what was already sitting in the cache. This calls the same
-  // loadOrRefreshAlerts used by toggleAuto/the interval — one code path,
-  // not a second parallel fetch — so a stale-results message, an error,
-  // and the resulting alertHistory/scanClusters state all behave
-  // identically whether triggered by mount, Start, or the recurring timer.
-  // Deliberately does NOT call setAutoOn(true) or start the interval —
-  // that decision stays exclusively with the Start button, per the same
-  // product call.
-  useEffect(()=>{ loadOrRefreshAlerts() },[])
+  // ── Auto-load latest cached results on page visit, AND start the
+  // recurring refresh interval to match it — autoOn now defaults to true
+  // (see its useState above), so this effect's job is to make the running
+  // interval actually match that default state on first mount, the same
+  // way toggleAuto's "turning on" branch does when a user clicks Start.
+  // (Earlier version of this comment said the opposite — that starting the
+  // interval automatically was deliberately NOT done and stayed exclusively
+  // behind the Start button. That was last week's decision; today's
+  // decision is the reverse: the backend cron refreshes scan_results on
+  // its own 15-min cadence regardless of whether anyone's looking, so the
+  // frontend should match that by default too, not require an explicit
+  // click just to keep pace with data that's already moving either way.)
+  // Calls the same loadOrRefreshAlerts used by toggleAuto/the interval —
+  // one code path, not a second parallel fetch.
+  useEffect(()=>{
+    loadOrRefreshAlerts()
+    if (autoOn) autoRef.current = setInterval(loadOrRefreshAlerts, scanFreq*60*1000)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   // ─── Journal helpers ──────────────────────────────────────────────────────
   const addTrade=async()=>{
@@ -2742,10 +2760,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .alert-row-grade{width:auto!important;order:2;margin-left:auto}
           .alert-row-conviction{width:auto!important;order:3;flex:1 1 100%!important}
           .alert-row-contract{flex:1 1 auto!important;order:4;width:auto!important}
-          .alert-row-tf{order:5}
-          .alert-row-dte{width:auto!important;order:6}
-          .alert-row-mid{width:auto!important;order:7;margin-left:auto}
-          .alert-row-staleness{width:auto!important;order:8;flex:1 1 100%!important;justify-content:flex-start!important;margin-top:2px}
+          .alert-row-moneyness{order:5;flex:1 1 100%!important;margin-top:2px}
+          .alert-row-tf{order:6}
+          .alert-row-dte{width:auto!important;order:7}
+          .alert-row-mid{width:auto!important;order:8;margin-left:auto}
+          .alert-row-staleness{width:auto!important;order:9;flex:1 1 100%!important;justify-content:flex-start!important;margin-top:2px}
         }
       `}</style>
 
@@ -3662,6 +3681,26 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     const isSelected = selectedAlert===i
                     const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
                     const grade = al.score>=80?'A':al.score>=65?'B':'C'
+                    // moneyness — how far the strike sits from the REAL
+                    // underlying price at scan time. Confirmed-live gap
+                    // (PANW $305C, stock already at ~$325, $20 ITM, nothing
+                    // on the card showed it — see scan.js's underlying_price
+                    // comment for the full story). strikeStr is a display
+                    // string ("$305C" or, for spreads, "$305C / $310C") —
+                    // extracting just the first number is enough to anchor
+                    // the moneyness check to the long/primary leg; spreads'
+                    // second leg isn't relevant to "how far is THIS card's
+                    // headline strike from spot." Put/call direction matters
+                    // for which side counts as ITM — a put is ITM when spot
+                    // is BELOW strike, the opposite of a call.
+                    const strikeNum = al.strikeStr ? parseFloat(String(al.strikeStr).match(/\$?([0-9.]+)/)?.[1]) : null
+                    const isPut = (al.tradeType||'').toLowerCase().includes('put')
+                    let moneyness = null
+                    if (strikeNum && al.underlyingPrice) {
+                      const diff = isPut ? strikeNum - al.underlyingPrice : al.underlyingPrice - strikeNum
+                      const pct = (diff / al.underlyingPrice) * 100
+                      moneyness = { diff, pct, itm: diff > 0 }
+                    }
                     return (
                       <div key={i}>
                         {/* Row — desktop is the original fixed-width single
@@ -3718,6 +3757,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         }}>
                           <span className="alert-row-ticker" style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>${al.ticker}</span>
                           <span className="alert-row-contract" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
+                          {moneyness&&<span className="alert-row-moneyness" title={`Stock was $${al.underlyingPrice.toFixed(2)} at scan time`} style={{fontSize:10.5,color:moneyness.itm?C.orange:C.dim,border:`1px solid ${moneyness.itm?C.orange:C.border}50`,padding:'1px 6px',borderRadius:2,flexShrink:0,whiteSpace:'nowrap',fontFamily:"'IBM Plex Mono',monospace"}}>
+                            ${al.underlyingPrice.toFixed(2)} · {moneyness.itm?'ITM':'OTM'} {Math.abs(moneyness.pct).toFixed(1)}%
+                          </span>}
                           {al.tfLabel&&<span className="alert-row-tf" style={{fontSize:10.5,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 6px',borderRadius:2,flexShrink:0,width:78,textAlign:'center',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{al.tfLabel}</span>}
                           <span className="alert-row-dte" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:C.dim,width:28}}>{al.dte||'—'}D</span>
                           <div className="alert-row-conviction" style={{width:90,display:'flex',alignItems:'center',gap:4}}>

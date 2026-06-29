@@ -303,6 +303,18 @@ module.exports = async function handler(req, res) {
         expiry_raw: r.expiryRaw,
         is_fallback_expiry: r.isFallbackExpiry || false,
         direction_decision: r.directionDecision || null,
+        // underlying_price — the live stock price at scan time. Was already
+        // captured into signal_history (r.priceRaw, below) but never carried
+        // into scan_results, which is what the Scan tab UI actually reads
+        // (via /api/scan-cache) — so a user had no way to see how far a
+        // strike sat from the real, live price at the moment it was scored.
+        // Confirmed live: a PANW $305C scored at 95 conviction with the
+        // stock already at ~$325 (real, not stale — verified against
+        // Black-Scholes backward-solve, not assumed), and nothing on the
+        // card showed that gap. Forward-the-existing-field fix, same shape
+        // as expiry_raw's own comment above — r.priceRaw already existed,
+        // this was never computed here, just never written to this table.
+        underlying_price: r.priceRaw || null,
         scanned_at: scannedAt.toISOString(), expires_at: expiresAt.toISOString(),
       }
 
