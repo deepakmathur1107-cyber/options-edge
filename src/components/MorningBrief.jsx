@@ -22,12 +22,42 @@ const BIAS_ICON    = { Bullish: '▲', Neutral: '◆', Bearish: '▼' }
 // surfaces agree on the same pre-market/open/after-hours boundaries instead
 // of each computing it independently. ──
 import { getMarketStatus } from '../lib/marketSession'
+
+// localTz/TZ_ABBREV — was hardcoded to America/Chicago throughout this file
+// (sameDay, fmtTime, fmtDate, and the "readout generates at 7 AM CT" copy
+// below) regardless of who was actually looking at it — not a viewer-local
+// fallback, just a fixed CT for every user everywhere, almost certainly a
+// development leftover rather than an intentional choice. Per explicit
+// product decision (2026-06-29): auto-detect the viewer's own timezone
+// (Intl.DateTimeFormat, synchronous, no permission needed) and label it
+// clearly, same pattern as App.jsx's fmtLocalTime. Falls back to the raw
+// IANA zone name for anything outside the common US zones mapped here.
+const TZ_ABBREV = {
+  'America/New_York': 'ET', 'America/Chicago': 'CT', 'America/Denver': 'MT',
+  'America/Los_Angeles': 'PT', 'America/Anchorage': 'AKT', 'Pacific/Honolulu': 'HT',
+}
+const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+const localTzLabel = TZ_ABBREV[localTz] || localTz
 function sameDay(a,b){
-  const f=d=>new Intl.DateTimeFormat('en-US',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(d))
+  const f=d=>new Intl.DateTimeFormat('en-US',{timeZone:localTz,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(d))
   return f(a)===f(b)
 }
-function fmtTime(iso){if(!iso)return'';return new Date(iso).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT'}
-function fmtDate(iso){if(!iso)return'';return new Date(iso).toLocaleDateString('en-US',{timeZone:'America/Chicago',weekday:'short',month:'short',day:'numeric'})}
+function fmtTime(iso){if(!iso)return'';return new Date(iso).toLocaleTimeString('en-US',{timeZone:localTz,hour:'numeric',minute:'2-digit'})+' '+localTzLabel}
+function fmtDate(iso){if(!iso)return'';return new Date(iso).toLocaleDateString('en-US',{timeZone:localTz,weekday:'short',month:'short',day:'numeric'})}
+// generatesAtLabel — was a hardcoded "7 AM CT" string in two places below,
+// which was wrong even on its own terms: the brief cron (vercel.json:
+// "0 13 * * 1-5" = 13:00 UTC) is 8 AM CT during EDT (in effect now, June)
+// and only 7 AM CT during EST — the hardcoded string had silently gone
+// stale across a DST change, not just been wrong for non-CT viewers.
+// Anchoring to the real UTC schedule and converting dynamically self-
+// corrects across both DST and viewer timezone, instead of a string
+// someone has to remember to update twice a year.
+function generatesAtLabel() {
+  const anchor = new Date()
+  anchor.setUTCHours(13, 0, 0, 0)
+  const timeStr = anchor.toLocaleTimeString('en-US', { timeZone: localTz, hour: 'numeric', minute: '2-digit' })
+  return `${timeStr} ${localTzLabel}`
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function MorningBrief({ getToken, theme, isAdmin, onBriefLoaded }) {
@@ -172,7 +202,7 @@ export default function MorningBrief({ getToken, theme, isAdmin, onBriefLoaded }
       </div>
       <div style={{padding:'28px 18px',textAlign:'center'}}>
         <div style={{fontSize:30,marginBottom:8}}>🕐</div>
-        <div style={{fontSize:14,color:textColor,fontWeight:600,marginBottom:4}}>Readout generates at 7 AM CT</div>
+        <div style={{fontSize:14,color:textColor,fontWeight:600,marginBottom:4}}>Readout generates at {generatesAtLabel()}</div>
         {isAdmin && <button onClick={regenerate} disabled={regenerating} style={{marginTop:10,background:greenColor,color:'#000',border:'none',borderRadius:4,padding:'6px 16px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{regenerating?'Generating…':'Generate Now'}</button>}
       </div>
     </div>
@@ -232,7 +262,7 @@ export default function MorningBrief({ getToken, theme, isAdmin, onBriefLoaded }
       {/* ── Prev-day warning ───────────────────────────────────────────────── */}
       {isOldBrief && (
         <div style={{padding:'7px 18px',background:dark?'#f59e0b0d':'#fef9c3',borderBottom:`1px solid ${dark?'#f59e0b25':'#fde68a'}`,fontSize:11,color:dark?'#f59e0b':'#92400e',fontFamily:'IBM Plex Mono,monospace'}}>
-          ⚠ Showing {fmtDate(generatedAt)} readout — today's generates at 7 AM CT
+          ⚠ Showing {fmtDate(generatedAt)} readout — today's generates at {generatesAtLabel()}
         </div>
       )}
 

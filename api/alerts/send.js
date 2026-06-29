@@ -1,7 +1,12 @@
 /**
  * api/alerts/send.js — Vercel Serverless Function (Cron + Manual trigger)
  *
- * Cron: "0 14 * * 1-5"  (10 AM ET weekdays)
+ * Cron: "0 14 * * 1-5" (14:00 UTC) — this is 10 AM ET during EDT (summer)
+ * or 9 AM ET during EST (winter). The UTC schedule itself never changes
+ * and never needs touching across a DST flip; this comment is what used
+ * to silently go stale twice a year by stating a single fixed ET time
+ * without noting it only held for half the year — same class of bug
+ * fixed in App.jsx/MorningBrief.jsx's timestamp displays (2026-06-29).
  * Manual: GET /api/alerts/send  (trigger.js has been deleted — this file handles both)
  *
  * vercel.json cron path must be /api/alerts/send

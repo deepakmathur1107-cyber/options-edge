@@ -786,6 +786,41 @@ async function sendTelegram(message, token, chatId, authToken) {
   return res.json()
 }
 
+// fmtLocalTime — formats a timestamp in the VIEWER's own local timezone,
+// auto-detected (no setting, no permission prompt — Intl.DateTimeFormat's
+// resolvedOptions().timeZone is synchronous and universally supported),
+// always labeled so it's never ambiguous which zone is shown. Per explicit
+// product decision (2026-06-29): "do we have capability to find user's
+// timezone — if yes, do it per-user; otherwise EST." We do have it, so
+// this is the per-user path, not a hardcoded EST/ET fallback.
+//
+// Falls back to the raw IANA zone name (e.g. "Asia/Kolkata") for anything
+// outside the common US zones already mapped below — guessing a wrong
+// abbreviation for an unmapped zone would be worse than just showing the
+// zone's real name; "Asia/Kolkata" is unambiguous even if less familiar
+// than "ET" is to a US-based user.
+const TZ_ABBREV = {
+  'America/New_York': 'ET', 'America/Chicago': 'CT', 'America/Denver': 'MT',
+  'America/Los_Angeles': 'PT', 'America/Anchorage': 'AKT', 'Pacific/Honolulu': 'HT',
+}
+function fmtLocalTime(date) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return `${timeStr} ${TZ_ABBREV[tz] || tz}`
+}
+// fmtET — for anything specifically about MARKET SESSION state (is the
+// market open, how stale is this relative to the 9:30-4:00 ET session).
+// Always ET regardless of viewer location, since "market opened 6 minutes
+// ago" is only meaningful against the real market clock — a viewer in
+// Mumbai or LA still needs to know where things stand relative to 9:30 AM
+// ET specifically, not their own midnight or 6 AM. Distinct from
+// fmtLocalTime above, which is for "when did I personally look at this" —
+// a different question with a different correct answer.
+function fmtET(date) {
+  const timeStr = date.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })
+  return `${timeStr} ET`
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App(props={}) {
   // props.getToken — async function from Router that returns Clerk JWT
@@ -1828,7 +1863,7 @@ useEffect(() => {
         open:parseFloat(quote.open||price),
         resistance,support,topCalls,topPuts,chainLen,
         tradeSetups,expiry,priceSource,usingFutures,
-        fetchedAt:new Date().toLocaleTimeString(),
+        fetchedAt:fmtLocalTime(new Date()),
       })
     } catch(e) {
       setFutErr('❌ '+e.message)
@@ -2110,7 +2145,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     const tfCfgNow = TF_CONFIG[activeTF]||TF_CONFIG['Swing (21–45 DTE)']
     const shuffle=arr=>[...arr].sort(()=>Math.random()-.5)
     const tickers=shuffle(SP500)
-    const ts=new Date().toLocaleTimeString()
+    const ts=fmtLocalTime(new Date())
     setAutoLog(p=>[`[${ts}] ▶ Scanning ${tickers.length} tickers · ${tfCfgNow.badge} ${tfCfgNow.label} (${activeTF})`,...p.slice(0,99)])
 
 
@@ -2119,7 +2154,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       if (stopRef.current) break   // ← exit immediately when STOP pressed
       const r=await scanOneTicker(ticker, activeTF)
       if (stopRef.current) break   // ← also check after the async fetch returns
-      const ts2=new Date().toLocaleTimeString()
+      const ts2=fmtLocalTime(new Date())
       if (!r){setAutoLog(p=>[`[${ts2}] $${ticker}: no data`,...p.slice(0,99)]);continue}
       setAutoLog(p=>[`[${ts2}] $${ticker}: ${r.score}% ${r.tradeType} ${r.strikeStr} mid:${r.mid}`,...p.slice(0,99)])
 
@@ -2289,7 +2324,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         // verdict engine (item 5) looks up TF_WEIGHT_PROFILES by this exact
         // key, and tfLabel would silently miss every lookup.
         tfKey: row.timeframe,
-        alertedAt: new Date(row.scanned_at).toLocaleTimeString(),
+        alertedAt: fmtLocalTime(new Date(row.scanned_at)),
         // scannedAtMs — the REAL timestamp, kept alongside the display
         // string above. alertedAt alone (a bare locale time, no date) can't
         // reliably answer "how long ago was this" — reconstructing a Date
@@ -2319,9 +2354,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       const note = rows.length===0
         ? ` — try lowering Min Edge Score (currently ${minScoreRef.current}%+); a high bar can legitimately mean zero matches right now`
         : ''
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ${rows.length} result(s) · ${minScoreRef.current}%+ threshold${note}`,...p.slice(0,99)])
+      setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ${rows.length} result(s) · ${minScoreRef.current}%+ threshold${note}`,...p.slice(0,99)])
     } catch (e) {
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
+      setAutoLog(p=>[`[${fmtLocalTime(new Date())}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
       runAutoScan()
     }
   }
@@ -2333,15 +2368,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       setAutoOn(false)
       const tfNow = scanTFRef.current
       const tfLabel = TF_CONFIG[tfNow]?.label||tfNow
-      setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ◼ Stopped · was using ${tfLabel}`,...p.slice(0,99)])
+      setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ◼ Stopped · was using ${tfLabel}`,...p.slice(0,99)])
     } else {
       // Re-read live scanTF so START always picks up whatever is currently selected
       const tfNow = scanTFRef.current
       const tfCfgNow = TF_CONFIG[tfNow]||TF_CONFIG['Swing (21–45 DTE)']
       setAutoOn(true)
       setAutoLog([
-        `[${new Date().toLocaleTimeString()}] ▶ Started · ${tfCfgNow.badge} ${tfCfgNow.label}`,
-        `[${new Date().toLocaleTimeString()}] DTE window: ${tfNow} · every ${scanFreq} min · ${minScore}%+ threshold`,
+        `[${fmtLocalTime(new Date())}] ▶ Started · ${tfCfgNow.badge} ${tfCfgNow.label}`,
+        `[${fmtLocalTime(new Date())}] DTE window: ${tfNow} · every ${scanFreq} min · ${minScore}%+ threshold`,
       ])
       loadOrRefreshAlerts()
       autoRef.current=setInterval(loadOrRefreshAlerts,scanFreq*60*1000)
@@ -3507,7 +3542,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 </div>
                 <div>
                   <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
-                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${new Date().toLocaleTimeString()}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
+                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
@@ -4322,7 +4357,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         <button className="hv" onClick={async()=>{
                           setTgStatus('sending...')
                           const authTok=await getAuthToken().catch(()=>null)
-                          const r=await sendTelegram(`🤖 *OPTIONS EDGE*\n\nAdmin connected · Alerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleString()}_`,tgToken,tgChatId,authTok)
+                          const r=await sendTelegram(`🤖 *OPTIONS EDGE*\n\nAdmin connected · Alerts active at ${minScore}%+ conviction.\n\n_${new Date().toLocaleDateString('en-US')} ${fmtLocalTime(new Date())}_`,tgToken,tgChatId,authTok)
                           setTgStatus(r.ok?'✅ Sent!':'❌ Failed: '+(r.description||r.error||'check token'))
                           setTimeout(()=>setTgStatus(''),5000)
                         }} disabled={!tgToken||!tgChatId} style={{
