@@ -30,9 +30,19 @@ export function getSessionPhase(now=new Date()){
 
 export function getMarketStatus(now=new Date()){
   if(!isTradingDay(now)){
-    const p=tzP(now,'America/Chicago'),isHol=holidays(parseInt(p.year,10)).has(`${p.year}-${p.month}-${p.day}`)
+    // FIX: was independently re-deriving the date in America/Chicago here,
+    // while isTradingDay (called just above) and every other branch in this
+    // file anchor to America/New_York — the one real timezone that matters
+    // for "is the market open," since NYSE opens at 9:30 NY time regardless
+    // of where anyone viewing this app happens to be. Two different zones
+    // computing "what date/year is it" in the same function risked landing
+    // on different calendar days right around midnight ET vs midnight CT —
+    // a real edge case, not just a cosmetic inconsistency. Reusing New_York
+    // here matches isTradingDay's own anchor instead of introducing a third,
+    // disagreeing reference point.
+    const p=tzP(now,'America/New_York'),isHol=holidays(parseInt(p.year,10)).has(`${p.year}-${p.month}-${p.day}`)
     const nx=new Date(now);for(let i=1;i<=10;i++){nx.setDate(nx.getDate()+1);if(isTradingDay(nx))break}
-    return{open:false,reason:isHol?'Market holiday':'Weekend',nextLabel:nx.toLocaleDateString('en-US',{timeZone:'America/Chicago',weekday:'short',month:'short',day:'numeric'})}
+    return{open:false,reason:isHol?'Market holiday':'Weekend',nextLabel:nx.toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short',month:'short',day:'numeric'})}
   }
   const p=tzP(now,'America/New_York'),mins=parseInt(p.hour,10)*60+parseInt(p.minute,10)
   if(mins<9*60+30)return{open:false,reason:'Pre-market',nextLabel:'today at 9:30 AM ET'}
