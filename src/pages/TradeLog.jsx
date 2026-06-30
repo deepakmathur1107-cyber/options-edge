@@ -489,7 +489,7 @@ export default function TradeLog(props) {
             information, far less wasted height, so the actual trade list
             below isn't pushed off the first screen by five tall stat cards. */
         @media(max-width:480px){
-          .tl-stat-card{padding:10px 14px!important;display:flex!important;alignItems:center!important;justifyContent:space-between!important}
+          .tl-stat-card{padding:10px 14px!important;display:flex!important;align-items:center!important;justify-content:space-between!important}
           .tl-stat-label{margin-bottom:0!important;font-size:11px!important}
           .tl-stat-value{font-size:20px!important}
           .tl-perf-grid{grid-template-columns:repeat(2,1fr)!important}
