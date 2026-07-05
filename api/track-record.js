@@ -49,6 +49,7 @@ module.exports = async function handler(req, res) {
     let query = client
       .from('signal_history')
       .select('outcome')
+      .eq('is_lifecycle_primary', true)
       .not('outcome', 'is', null)
     if (tf) query = query.eq('timeframe', tf)
 
