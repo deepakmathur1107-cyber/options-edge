@@ -863,7 +863,7 @@ export default function App(props={}) {
   }
 
   // ── main tab & tools panel ──
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   // Allows navigating here from a separate page/route (e.g. TradeLog's own
   // AppNav instance, which has no shared `tab` state to call setTab into)
   // via a real link to /app?tab=scan or /app?tab=tools, landing on the
@@ -879,6 +879,25 @@ export default function App(props={}) {
   const tabParam = searchParams.get('tab')
   const initialTab = ['dash','scan','admin','tools'].includes(tabParam) ? tabParam : 'dash'
   const [tab,        setTab]        = useState(initialTab)
+  // Keep the URL's ?tab= param in sync with every tab change, not just the
+  // ones that arrive via TradeLog's separate navigate-based setTab. Without
+  // this, switching tabs locally (e.g. Dash -> Scan) never touched the URL,
+  // so if you'd previously landed here via ?tab=tools (from TradeLog's nav),
+  // that stale param sat frozen in the address bar forever — a refresh or
+  // shared link would silently put you back on Tools regardless of what was
+  // actually on screen. Uses replace (not push) since this is tab-switching
+  // within one view, not a real page navigation — Trades already gets its
+  // own history entry via its real <Link>, and that's the only case that
+  // should. Dash stays the clean default with no param, matching the
+  // pre-existing bare-/app behavior for that tab.
+  useEffect(() => {
+    const current = searchParams.get('tab')
+    if (tab === 'dash') {
+      if (current) setSearchParams({}, { replace: true })
+    } else if (current !== tab) {
+      setSearchParams({ tab }, { replace: true })
+    }
+  }, [tab])
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
   const [toolsTab,   setToolsTab]   = useState('settings')
   const [feedbackText,    setFeedbackText]    = useState('')
