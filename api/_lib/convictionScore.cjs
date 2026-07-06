@@ -167,14 +167,17 @@ function scoreConviction(p) {
   // flagged "too late, already moved" shouldn't also earn a volume bonus
   // for confirming the same move you just penalized it for.
   if (!isMorningWindow) {
-    const volPriceCoherent  = volRatio >= 1.5 && Math.abs(chgPct) >= 1.0 && !isChasing
+    const moveHelpsPosition = (optType === 'call' && chgPct > 0) || (optType === 'put' && chgPct < 0)
+    const volPriceCoherent  = volRatio >= 1.5 && Math.abs(chgPct) >= 1.0 && !isChasing && moveHelpsPosition
     const volPriceDivergent = volRatio >= 3.0 && Math.abs(chgPct) < 0.8
     if (volPriceDivergent) {
       score -= 8
       warnings.push(`Vol ${volRatio.toFixed(1)}x but stock barely moved (${chgPct.toFixed(1)}%) — likely institutional roll or distribution, not directional flow`)
     } else if (volPriceCoherent) {
       score += 12
-      reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent bullish signal`)
+      reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent ${chgPct>0?'bullish':'bearish'} signal`)
+    } else if (volRatio >= 1.5 && Math.abs(chgPct) >= 1.0 && !isChasing && !moveHelpsPosition) {
+      warnings.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — but that move is AGAINST this ${optType}, not confirming it`)
     } else if (volRatio >= 1.5 && !isChasing) {
       score += 4
       warnings.push(`Vol ${volRatio.toFixed(1)}x avg but price only ${chgPct.toFixed(1)}% — confirm this is directional before entering`)
@@ -189,8 +192,13 @@ function scoreConviction(p) {
   if (isIntraChasing) {
     warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday without a specific catalyst — chasing`)
   } else if (!isEarningsGap) {
-    if (Math.abs(chgPct) >= 1.5 && Math.abs(chgPct) <= 2.0) { score += 8; reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`) }
-    else if (Math.abs(chgPct) >= 0.8 && Math.abs(chgPct) < 1.5) { score += 4; reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`) }
+    const moveHelpsPosition = (optType === 'call' && chgPct > 0) || (optType === 'put' && chgPct < 0)
+    if (moveHelpsPosition) {
+      if (Math.abs(chgPct) >= 1.5 && Math.abs(chgPct) <= 2.0) { score += 8; reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% — clean directional move`) }
+      else if (Math.abs(chgPct) >= 0.8 && Math.abs(chgPct) < 1.5) { score += 4; reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`) }
+    } else if (Math.abs(chgPct) >= 0.8) {
+      warnings.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% move today is AGAINST this ${optType} — today's price action doesn't support the thesis`)
+    }
   }
 
   // ── Delta quality ─────────────────────────────────────────────────────────
