@@ -389,6 +389,24 @@ module.exports = async function handler(req, res) {
         signal_lifecycle_id: lifecycleId,
         is_lifecycle_primary: isLifecyclePrimary,
         scanned_at: scannedAt.toISOString(),
+        // Regime context at scan time — same spxChg/ndxChg values already
+        // computed above and fed into scoreConviction's tailwind/headwind
+        // term (see convictionScore.cjs), but never persisted before this.
+        // Logged only, not yet used to filter/score/gate anything new —
+        // per session decision: accumulate this across multiple scan days
+        // before drawing any conclusion from it, same discipline applied
+        // to every other finding this session. NOTE: this is a SAME-DAY
+        // (single trading session) index move, not a multi-day trend —
+        // it tells you the regime at the moment of entry, not the regime
+        // that plays out over a 21-45 DTE swing trade's actual holding
+        // period. Do not treat a lack of predictive power here as proof
+        // regime doesn't matter; it may just mean this particular window
+        // is too short for this timeframe. A longer-horizon version
+        // (e.g. 5-day SPX/NDX trend, VIX level) is a separate, slightly
+        // more expensive follow-up (new Tradier call) once this cheaper
+        // same-day version has been checked against real data.
+        regime_spx_chg_pct: spxChg,
+        regime_ndx_chg_pct: ndxChg,
       }
       const { error: histErr } = await client.from('signal_history').insert(historyRow)
       if (histErr) console.error(`[cron/scan] signal_history insert failed for ${ticker} (non-fatal):`, histErr.message)
