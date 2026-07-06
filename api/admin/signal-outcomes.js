@@ -87,7 +87,7 @@ module.exports = async (req, res) => {
     // row data, so there's no 1000-row transfer limit to hit and no need to
     // pull rows into Node just to .filter() them.
     const countFor = async (outcomeFilter) => {
-      let q = supabase.from('signal_history').select('*', { count: 'exact', head: true });
+      let q = supabase.from('signal_history').select('*', { count: 'exact', head: true }).eq('is_lifecycle_primary', true);
       if (timeframe) q = q.eq('timeframe', timeframe);
       if (ticker)     q = q.eq('ticker', ticker);
       if (outcomeFilter === null) q = q.is('outcome', null);
@@ -103,7 +103,7 @@ module.exports = async (req, res) => {
         countFor('WIN'), countFor('LOSS'), countFor('EXPIRED_PARTIAL'),
         countFor('EXPIRED_FLAT'), countFor(null),
         (async () => {
-          let q = supabase.from('signal_history').select('*', { count: 'exact', head: true });
+          let q = supabase.from('signal_history').select('*', { count: 'exact', head: true }).eq('is_lifecycle_primary', true);
           if (timeframe) q = q.eq('timeframe', timeframe);
           if (ticker)     q = q.eq('ticker', ticker);
           const { count, error } = await q;
