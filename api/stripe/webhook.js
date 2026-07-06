@@ -208,8 +208,16 @@ module.exports = async function handler(req, res) {
     }
   } catch (e) {
     console.error('Webhook handler error:', e.message)
-    // Always return 200 to prevent Stripe retries — log the error
-    return res.status(200).json({ received: true, warning: e.message })
+    // Return 500 (not 200) on unexpected processing errors so Stripe's
+    // built-in retry mechanism gets a chance to recover from a transient
+    // failure (e.g. a momentary Supabase outage) — retries persist with
+    // backoff for up to 3 days. Returning 200 here would tell Stripe the
+    // event was handled when it wasn't, permanently dropping it with no
+    // way to recover short of Stripe support manually replaying the event.
+    // Deliberate skips (missing clerk_id, wrong session mode, etc.) are
+    // handled inside each case via `break` and still return 200 below —
+    // those aren't errors, they're legitimate no-ops.
+    return res.status(500).json({ received: false, error: e.message })
   }
 
   return res.status(200).json({ received: true })
