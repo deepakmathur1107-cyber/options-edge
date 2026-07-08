@@ -226,6 +226,8 @@ module.exports = async function handler(req, res) {
     console.log(`[cron/scan] batch quotes: resolved ${quoteMap.size}/${tickers.length} tickers in ${Math.ceil(tickers.length/QUOTE_BATCH_SIZE)} Tradier call(s)`)
   } catch (e) { console.error('[cron/scan] batch quote fetch failed:', e.message) }
 
+  const bufferedRows = []
+
   await runBatched(tickers, 8, async (ticker) => {
     if (Date.now() - startedAt > MAX_MS) return null   // time budget guard
 
@@ -408,8 +410,7 @@ module.exports = async function handler(req, res) {
         regime_spx_chg_pct: spxChg,
         regime_ndx_chg_pct: ndxChg,
       }
-      const { error: histErr } = await client.from('signal_history').insert(historyRow)
-      if (histErr) console.error(`[cron/scan] signal_history insert failed for ${ticker} (non-fatal):`, histErr.message)
+      bufferedRows.push(historyRow)
 
       qualified++
       return r
@@ -419,6 +420,50 @@ module.exports = async function handler(req, res) {
       return null
     }
   })
+
+  // Directional concentration flag — same-run signals aren't independent
+  // bets when one side dominates; 46 puts vs 42 calls firing in one day
+  // (June 26 cohort) meant losses on the put side were effectively one
+  // large correlated position, not 46 separate ones. This only adds a
+  // warning to the over-represented side's rows — it never filters or
+  // blocks a signal, so it can't introduce a new false-negative or hide
+  // a genuinely good setup. Threshold and minimum batch size are both
+  // untuned starting points, not derived from validated data — revisit
+  // once there's evidence on what ratio actually predicts correlated
+  // drawdowns, same discipline as every other unvalidated change this
+  // session.
+  const CONCENTRATION_THRESHOLD = 0.65
+  const MIN_BATCH_FOR_CHECK = 10
+  const callRows = bufferedRows.filter(r => r.option_type === 'call')
+  const putRows  = bufferedRows.filter(r => r.option_type === 'put')
+  const totalDirectional = callRows.length + putRows.length
+  if (totalDirectional >= MIN_BATCH_FOR_CHECK) {
+    const callPct = callRows.length / totalDirectional
+    const putPct  = putRows.length / totalDirectional
+    if (callPct >= CONCENTRATION_THRESHOLD) {
+      const msg = `⚠ ${callRows.length}/${totalDirectional} (${(callPct*100).toFixed(0)}%) of this scan's signals are calls — correlated market-wide bet, not independent conviction`
+      for (const row of callRows) row.warnings = [...(row.warnings || []), msg]
+    } else if (putPct >= CONCENTRATION_THRESHOLD) {
+      const msg = `⚠ ${putRows.length}/${totalDirectional} (${(putPct*100).toFixed(0)}%) of this scan's signals are puts — correlated market-wide bet, not independent conviction`
+      for (const row of putRows) row.warnings = [...(row.warnings || []), msg]
+    }
+  }
+
+  // Bulk insert, with per-row fallback if the batch insert fails as a whole
+  // — a single malformed row previously couldn't block other tickers'
+  // writes (each was inserted independently); buffering for the
+  // concentration check above changed that, so fault isolation is
+  // restored explicitly here rather than silently lost.
+  if (bufferedRows.length) {
+    const { error: bulkErr } = await client.from('signal_history').insert(bufferedRows)
+    if (bulkErr) {
+      console.error(`[cron/scan] bulk signal_history insert failed (${bufferedRows.length} rows), falling back to per-row insert:`, bulkErr.message)
+      for (const row of bufferedRows) {
+        const { error: rowErr } = await client.from('signal_history').insert(row)
+        if (rowErr) console.error(`[cron/scan] signal_history insert failed for ${row.ticker} (non-fatal):`, rowErr.message)
+      }
+    }
+  }
 
   const durationMs = Date.now() - startedAt
   console.log(`[cron/scan] tf=${tf} scanned=${scanned} qualified=${qualified} errors=${errors} duration=${durationMs}ms`)
