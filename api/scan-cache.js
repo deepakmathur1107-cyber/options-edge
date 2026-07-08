@@ -12,6 +12,7 @@
 // session with an active/trialing subscription (or admin).
 
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
+const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
 
 let _sb = null
 function sb() {
@@ -133,6 +134,7 @@ module.exports = async function handler(req, res) {
 
       if (error) return res.status(200).json({ cached: false, reason: error.message })
       if (!data)  return res.status(200).json({ cached: false })
+      await attachLifecycleSummaries(client, [data])
       return res.status(200).json({ cached: true, result: data })
     }
 
@@ -166,6 +168,7 @@ module.exports = async function handler(req, res) {
         .gt('expires_at', new Date().toISOString())
       const clusters = clusterErr ? [] : computeClusters(allFresh || [])
 
+      await attachLifecycleSummaries(client, data || [])
       return res.status(200).json({ cached: true, results: data || [], clusters })
     }
     // No tf filter — mixing all 4 timeframes. A flat ORDER BY score LIMIT 50
@@ -207,6 +210,7 @@ module.exports = async function handler(req, res) {
       clustersByTf[tfKey] = error ? [] : computeClusters(allFresh || [])
     }))
 
+    await attachLifecycleSummaries(client, data)
     return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {
     console.error('[scan-cache] error:', e.message)

@@ -283,6 +283,56 @@ module.exports = async function handler(req, res) {
       const scannedAt = new Date()
       const expiresAt = new Date(scannedAt.getTime() + 20 * 60 * 1000)   // 20 min TTL
 
+      // ── Signal lifecycle grouping (2026-06-29) ──────────────────────────
+      // Confirmed live: the SAME contract (ticker+option_type+strike+expiry)
+      // gets a fresh signal_history row every single time it re-qualifies —
+      // 15-60 min apart, depending on timeframe — for as long as it stays
+      // above the conviction threshold. One real contract observed 36x in a
+      // single day. This is genuinely useful for QA (does score drift as
+      // the day goes on?), which is why every row still gets written below,
+      // unchanged — but it means a naive "count every signal_history row as
+      // one outcome" win-rate would weight that one persistent setup 36x
+      // more than a contract that only qualified once. Per explicit
+      // decision: keep every row (preserve the QA history), but tag rows
+      // belonging to the same real-world signal with a shared
+      // signal_lifecycle_id, and mark only the FIRST (entry) row of each
+      // lifecycle as is_lifecycle_primary — that's the one the resolver
+      // should actually walk for WIN/LOSS, and the one Track Record/
+      // Conviction Correlation should count, since entry_mid/target/stop
+      // are computed from that first scan's price, the economically real
+      // entry point. A lifecycle is "still open" as long as no row in it
+      // has a non-null outcome yet.
+      //
+      // Moved above the scan_results row below (was previously computed
+      // after it) — scan_results now also carries signal_lifecycle_id, so
+      // the live card can be joined back to its own full re-scan history
+      // (score/premium trajectory, setup age) via /api/scan-cache.
+      let lifecycleId = null
+      let isLifecyclePrimary = true
+      try {
+        const { data: existingLifecycle, error: lifecycleErr } = await client
+          .from('signal_history')
+          .select('signal_lifecycle_id')
+          .eq('ticker', ticker)
+          .eq('option_type', r.optionType)
+          .eq('primary_strike', r.primaryStrikeRaw)
+          .eq('expiry_raw', r.expiryRaw)
+          .is('outcome', null)
+          .not('signal_lifecycle_id', 'is', null)
+          .order('scanned_at', { ascending: true })
+          .limit(1)
+          .maybeSingle()
+        if (lifecycleErr) {
+          console.error(`[cron/scan] lifecycle lookup failed for ${ticker} (non-fatal, will start a new lifecycle):`, lifecycleErr.message)
+        } else if (existingLifecycle) {
+          lifecycleId = existingLifecycle.signal_lifecycle_id
+          isLifecyclePrimary = false
+        }
+      } catch (e) {
+        console.error(`[cron/scan] lifecycle lookup threw for ${ticker} (non-fatal):`, e.message)
+      }
+      if (!lifecycleId) lifecycleId = crypto.randomUUID()
+
       const row = {
         ticker, timeframe: tf, score: r.score, grade: r.grade,
         trade_type: r.tradeType, strike_str: r.strikeStr,
@@ -318,56 +368,12 @@ module.exports = async function handler(req, res) {
         // as expiry_raw's own comment above — r.priceRaw already existed,
         // this was never computed here, just never written to this table.
         underlying_price: r.priceRaw || null,
+        signal_lifecycle_id: lifecycleId,
         scanned_at: scannedAt.toISOString(), expires_at: expiresAt.toISOString(),
       }
 
       const { error } = await client.from('scan_results').upsert(row, { onConflict: 'ticker,timeframe' })
       if (error) { console.error(`[cron/scan] upsert failed for ${ticker}:`, error.message); errors++; return null }
-
-      // ── Signal lifecycle grouping (2026-06-29) ──────────────────────────
-      // Confirmed live: the SAME contract (ticker+option_type+strike+expiry)
-      // gets a fresh signal_history row every single time it re-qualifies —
-      // 15-60 min apart, depending on timeframe — for as long as it stays
-      // above the conviction threshold. One real contract observed 36x in a
-      // single day. This is genuinely useful for QA (does score drift as
-      // the day goes on?), which is why every row still gets written below,
-      // unchanged — but it means a naive "count every signal_history row as
-      // one outcome" win-rate would weight that one persistent setup 36x
-      // more than a contract that only qualified once. Per explicit
-      // decision: keep every row (preserve the QA history), but tag rows
-      // belonging to the same real-world signal with a shared
-      // signal_lifecycle_id, and mark only the FIRST (entry) row of each
-      // lifecycle as is_lifecycle_primary — that's the one the resolver
-      // should actually walk for WIN/LOSS, and the one Track Record/
-      // Conviction Correlation should count, since entry_mid/target/stop
-      // are computed from that first scan's price, the economically real
-      // entry point. A lifecycle is "still open" as long as no row in it
-      // has a non-null outcome yet.
-      let lifecycleId = null
-      let isLifecyclePrimary = true
-      try {
-        const { data: existingLifecycle, error: lifecycleErr } = await client
-          .from('signal_history')
-          .select('signal_lifecycle_id')
-          .eq('ticker', ticker)
-          .eq('option_type', r.optionType)
-          .eq('primary_strike', r.primaryStrikeRaw)
-          .eq('expiry_raw', r.expiryRaw)
-          .is('outcome', null)
-          .not('signal_lifecycle_id', 'is', null)
-          .order('scanned_at', { ascending: true })
-          .limit(1)
-          .maybeSingle()
-        if (lifecycleErr) {
-          console.error(`[cron/scan] lifecycle lookup failed for ${ticker} (non-fatal, will start a new lifecycle):`, lifecycleErr.message)
-        } else if (existingLifecycle) {
-          lifecycleId = existingLifecycle.signal_lifecycle_id
-          isLifecyclePrimary = false
-        }
-      } catch (e) {
-        console.error(`[cron/scan] lifecycle lookup threw for ${ticker} (non-fatal):`, e.message)
-      }
-      if (!lifecycleId) lifecycleId = crypto.randomUUID()
 
       // Append-only permanent record for engine-level success-rate QA (Phase 1).
       // Distinct from scan_results above: never upserted/overwritten, never
