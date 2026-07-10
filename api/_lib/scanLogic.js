@@ -455,6 +455,8 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
         otherSideScore: picked.loser ? picked.loser.score : null,
         gap: picked.gap,
         isClose: picked.isClose,
+        flipped: picked.flipped || false,
+        suppressed: picked.suppressed || false,
       },
     };
   } catch { return null; }

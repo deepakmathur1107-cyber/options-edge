@@ -410,6 +410,7 @@ function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6, in
   const isClose = gap < minGapToPreferDirection
   let side = callResult.score >= putResult.score ? 'call' : 'put'
   let flipped = false
+  let suppressed = false
 
   // Hysteresis — only applies when we know what's currently displayed for
   // this ticker+timeframe (caller passes incumbentSide from the existing
@@ -426,6 +427,7 @@ function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6, in
     const trueGap = challengerResult.score - incumbentResult.score
     if (trueGap < flipMargin) {
       side = incumbentSide   // not enough to flip — stick with what's already showing
+      suppressed = true
     } else {
       flipped = true         // genuine reversal, large enough to clear the bar
     }
@@ -434,7 +436,7 @@ function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6, in
   const winner = side === 'call' ? callResult : putResult
   const loser  = side === 'call' ? putResult  : callResult
 
-  return { side, winner, loser, gap, isClose, flipped }
+  return { side, winner, loser, gap, isClose, flipped, suppressed }
 }
 
 // safeIV: Tradier occasionally returns mid_iv as the literal string 'NaN' when
