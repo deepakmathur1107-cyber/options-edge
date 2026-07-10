@@ -401,18 +401,40 @@ function scoreConviction(p) {
 // use isClose to decide whether to surface it as lower-confidence or skip it,
 // rather than silently presenting whichever side happened to score one point
 // higher as if it were a clear signal.
-function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6 } = {}) {
+function pickBetterSide(callResult, putResult, { minGapToPreferDirection = 6, incumbentSide = null, flipMargin = 10 } = {}) {
   if (!callResult && !putResult) return null
-  if (!callResult) return { side: 'put', winner: putResult, loser: null, gap: null, isClose: false }
-  if (!putResult)  return { side: 'call', winner: callResult, loser: null, gap: null, isClose: false }
+  if (!callResult) return { side: 'put', winner: putResult, loser: null, gap: null, isClose: false, flipped: false }
+  if (!putResult)  return { side: 'call', winner: callResult, loser: null, gap: null, isClose: false, flipped: false }
 
   const gap = Math.abs(callResult.score - putResult.score)
   const isClose = gap < minGapToPreferDirection
-  const side = callResult.score >= putResult.score ? 'call' : 'put'
+  let side = callResult.score >= putResult.score ? 'call' : 'put'
+  let flipped = false
+
+  // Hysteresis — only applies when we know what's currently displayed for
+  // this ticker+timeframe (caller passes incumbentSide from the existing
+  // scan_results row, if any). If the fresh winner differs from the
+  // incumbent, require it to win by flipMargin points, not just any
+  // margin, before actually flipping what gets shown. Both sides are still
+  // scored fresh every cycle regardless — this only changes which one is
+  // surfaced, so a real, sustained reversal still flips the display once
+  // it clears the margin; only noise-level flapping near a scoring cliff
+  // gets suppressed.
+  if ((incumbentSide === 'call' || incumbentSide === 'put') && side !== incumbentSide) {
+    const incumbentResult  = incumbentSide === 'call' ? callResult : putResult
+    const challengerResult = incumbentSide === 'call' ? putResult  : callResult
+    const trueGap = challengerResult.score - incumbentResult.score
+    if (trueGap < flipMargin) {
+      side = incumbentSide   // not enough to flip — stick with what's already showing
+    } else {
+      flipped = true         // genuine reversal, large enough to clear the bar
+    }
+  }
+
   const winner = side === 'call' ? callResult : putResult
   const loser  = side === 'call' ? putResult  : callResult
 
-  return { side, winner, loser, gap, isClose }
+  return { side, winner, loser, gap, isClose, flipped }
 }
 
 // safeIV: Tradier occasionally returns mid_iv as the literal string 'NaN' when

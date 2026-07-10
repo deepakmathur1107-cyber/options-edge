@@ -228,6 +228,30 @@ module.exports = async function handler(req, res) {
 
   const bufferedRows = []
 
+  // Incumbent-side lookup for hysteresis (pickBetterSide) — one query for
+  // the whole run, not one per ticker. Confirmed live need: GOOGL Quick
+  // Play flipped call/put every 15 min on 2026-07-10 because chg_pct sat
+  // right at the 1.5% hasRealSignal cliff; pickBetterSide now requires a
+  // real margin to flip away from whatever's currently shown, using this
+  // map to know what that currently is.
+  const incumbentMap = new Map()
+  try {
+    const { data: currentRows, error: incumbentErr } = await client
+      .from('scan_results')
+      .select('ticker, trade_type')
+      .eq('timeframe', tf)
+    if (incumbentErr) {
+      console.error('[cron/scan] incumbent-side lookup failed (non-fatal, hysteresis disabled this run):', incumbentErr.message)
+    } else {
+      for (const row of currentRows || []) {
+        const side = /put/i.test(row.trade_type || '') ? 'put' : /call/i.test(row.trade_type || '') ? 'call' : null
+        if (side) incumbentMap.set(row.ticker, side)
+      }
+    }
+  } catch (e) {
+    console.error('[cron/scan] incumbent-side lookup threw (non-fatal, hysteresis disabled this run):', e.message)
+  }
+
   await runBatched(tickers, 8, async (ticker) => {
     if (Date.now() - startedAt > MAX_MS) return null   // time budget guard
 
@@ -241,7 +265,7 @@ module.exports = async function handler(req, res) {
       const chain = await getChain(ticker, expiryRaw, rateTracker)
       if (!chain.length) { scanned++; return null }
 
-      const r = scanTicker({ ticker, quote, expDates, chain, tf, fund: null, spxChg, ndxChg, srLevels: null })
+      const r = scanTicker({ ticker, quote, expDates, chain, tf, fund: null, spxChg, ndxChg, srLevels: null, incumbentSide: incumbentMap.get(ticker) || null })
       scanned++
       if (!r) return null
 
@@ -276,7 +300,7 @@ module.exports = async function handler(req, res) {
       if (fund || srLevels) {
         // Re-run with fundamentals AND S/R to apply large-cap/earnings
         // adjustments and the S/R structure scoring block.
-        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels })
+        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels, incumbentSide: incumbentMap.get(ticker) || null })
         if (r2) Object.assign(r, r2)
       }
 

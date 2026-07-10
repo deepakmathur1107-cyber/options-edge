@@ -290,7 +290,7 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
 // any future caller that can't. Callers that have S/R data (or none) pass it
 // in as a plain object; scanTicker never reaches out for it itself.
 // ─────────────────────────────────────────────────────────────────────────
-function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels = null }) {
+function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels = null, incumbentSide = null }) {
   const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)'];
   try {
     if (!quote) return null;
@@ -377,7 +377,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
 
     const callSide = buildSide('call');
     const putSide  = buildSide('put');
-    const picked = pickBetterSide(callSide, putSide);
+    const picked = pickBetterSide(callSide, putSide, { incumbentSide });
     if (!picked) return null;
 
     const { side: optType, winner } = picked;
