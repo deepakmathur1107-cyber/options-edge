@@ -127,9 +127,22 @@ function scoreConviction(p) {
   }
 
   // ── Earnings gap handling — >5% gap = catalyst, not intraday drift ──────────
+  // gapAligned tracked here and reused below (52w trend, SR structure) — a
+  // >5% gap will very often mechanically push pos52 to an extreme and/or
+  // through a support/resistance level in the SAME move. When that happens,
+  // those aren't independent confirmations of conviction, they're mostly
+  // the same single event described three different ways — confirmed on
+  // the CRM $165P case (2026-07-09): raw score hit 105 pre-cap from
+  // earnings-gap (+15) + near-52w-low (+8) + resistance-rejection (+6)
+  // all firing off what was fundamentally one overnight move. Only dampens
+  // the TAILWIND/bonus branches below, not the against-trend warning
+  // branches — a gap that contradicts the 52w/SR structure is still a
+  // genuinely independent, still-informative signal worth full weight.
+  let gapAligned = false
   if (isEarningsGap) {
     const gapOpt = chgPct > 0 ? 'call' : 'put'
     if (optType === gapOpt) {
+      gapAligned = true
       score += 15
       reasons.push(`Earnings/news gap ${chgPct>0?'+':''}${chgPct.toFixed(1)}% — catalyst confirmed`)
       warnings.push('⚡ GAP PLAY — Premium is expanded. Size at 50% of normal. Enter on a small pullback or consolidation. Target 50–80% of premium.')
@@ -220,13 +233,25 @@ function scoreConviction(p) {
   else if (!isMorningWindow && strikeVolume < 50) { score -= 5; warnings.push(`Only ${strikeVolume||0} contracts on strike — thin liquidity, use limit orders`) }
 
   // ── 52-week trend ─────────────────────────────────────────────────────────
+  // Tailwind branches (bonus) are dampened when gapAligned — see comment on
+  // gapAligned above. Against-trend branches (warning/penalty) are left at
+  // full weight in every case: a gap that contradicts existing 52w
+  // structure is still genuinely informative, not redundant.
   if (optType === 'call') {
-    if (pos52 > 0.80) { score += 8; reasons.push('Near 52w high — uptrend tailwind') }
-    else if (pos52 > 0.65) { score += 4 }
+    if (pos52 > 0.80) {
+      const bonus = gapAligned ? 3 : 8
+      score += bonus
+      reasons.push(gapAligned ? 'Near 52w high — likely the same move as the gap above, partial credit' : 'Near 52w high — uptrend tailwind')
+    }
+    else if (pos52 > 0.65) { score += gapAligned ? 2 : 4 }
     else if (pos52 < 0.20) { score -= 8; warnings.push('Near 52w low — calls against trend, avoid') }
   } else {
-    if (pos52 < 0.20) { score += 8; reasons.push('Near 52w low — downtrend tailwind for puts') }
-    else if (pos52 < 0.35) { score += 4 }
+    if (pos52 < 0.20) {
+      const bonus = gapAligned ? 3 : 8
+      score += bonus
+      reasons.push(gapAligned ? 'Near 52w low — likely the same move as the gap above, partial credit' : 'Near 52w low — downtrend tailwind for puts')
+    }
+    else if (pos52 < 0.35) { score += gapAligned ? 2 : 4 }
     else if (pos52 > 0.80) { score -= 8; warnings.push('Near 52w high — puts against trend, trading in uptrend') }
   }
 
@@ -269,16 +294,16 @@ function scoreConviction(p) {
         score -= 10
         warnings.push(`Price is at/near resistance (${srDistPct.toFixed(1)}% away) — calls face the level most likely to reject this move`)
       } else if (srPosition === 'at_support') {
-        score += 6
-        reasons.push(`Bouncing off support (${srDistPct.toFixed(1)}% away) — room to run before the next resistance`)
+        score += gapAligned ? 3 : 6
+        reasons.push(gapAligned ? `Bouncing off support (${srDistPct.toFixed(1)}% away) — likely the same move as the gap above, partial credit` : `Bouncing off support (${srDistPct.toFixed(1)}% away) — room to run before the next resistance`)
       }
     } else {
       if (srPosition === 'at_support') {
         score -= 10
         warnings.push(`Price is at/near support (${srDistPct.toFixed(1)}% away) — puts face the level most likely to bounce`)
       } else if (srPosition === 'at_resistance') {
-        score += 6
-        reasons.push(`Rejecting off resistance (${srDistPct.toFixed(1)}% away) — room to fall before the next support`)
+        score += gapAligned ? 3 : 6
+        reasons.push(gapAligned ? `Rejecting off resistance (${srDistPct.toFixed(1)}% away) — likely the same move as the gap above, partial credit` : `Rejecting off resistance (${srDistPct.toFixed(1)}% away) — room to fall before the next support`)
       }
     }
   }
