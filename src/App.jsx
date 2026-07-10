@@ -1174,6 +1174,23 @@ export default function App(props={}) {
   // data that's already refreshing server-side either way. Stop still
   // works exactly as before for anyone who wants to pause it.
   const [autoOn,      setAutoOn]      = useState(true)
+  // Tracks the epoch-ms timestamp of the NEXT scheduled auto-scanner tick,
+  // set at each of the 3 places that (re)arm the interval below (Start,
+  // initial page load, Frequency change) — deliberately NOT reset by
+  // incidental manual refreshes (e.g. dragging Min Edge Score), since those
+  // don't reset the underlying setInterval timer either; this should
+  // reflect the real interval schedule, not every fetch that happens to
+  // occur. null means nothing is currently scheduled (auto-scanner off).
+  const [nextRefreshAtMs, setNextRefreshAtMs] = useState(null)
+  // Cheap 1s ticking state purely to force the countdown to re-render —
+  // only runs while auto-scanner is on, so it isn't burning cycles for
+  // users who have it stopped.
+  const [nowTick, setNowTick] = useState(Date.now())
+  useEffect(() => {
+    if (!autoOn) return
+    const id = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [autoOn])
   // Optional filter on the Auto-scanner's mixed-timeframe results — null
   // means show all 4 together (the new default); a value narrows to one.
   // Independent of scanTF, which still drives Manual mode's own scan.
@@ -2385,6 +2402,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       stopRef.current = true   // signals the running loop to break immediately
       clearInterval(autoRef.current)
       setAutoOn(false)
+      setNextRefreshAtMs(null)
       const tfNow = scanTFRef.current
       const tfLabel = TF_CONFIG[tfNow]?.label||tfNow
       setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ◼ Stopped · was using ${tfLabel}`,...p.slice(0,99)])
@@ -2399,6 +2417,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       ])
       loadOrRefreshAlerts()
       autoRef.current=setInterval(loadOrRefreshAlerts,scanFreq*60*1000)
+      setNextRefreshAtMs(Date.now()+scanFreq*60*1000)
     }
   }
   useEffect(()=>()=>clearInterval(autoRef.current),[])
@@ -2419,7 +2438,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
   // one code path, not a second parallel fetch.
   useEffect(()=>{
     loadOrRefreshAlerts()
-    if (autoOn) autoRef.current = setInterval(loadOrRefreshAlerts, scanFreq*60*1000)
+    if (autoOn) {
+      autoRef.current = setInterval(loadOrRefreshAlerts, scanFreq*60*1000)
+      setNextRefreshAtMs(Date.now()+scanFreq*60*1000)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[])
 
@@ -3547,6 +3569,29 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       </div>
                     )
                   })()}
+                  {/* Countdown to the auto-scanner's next scheduled tick —
+                      distinct from "Newest result" above, which answers
+                      "how old is what I'm looking at." This answers "when
+                      do I get new data," which matters most right when
+                      someone's staring at a result that already looks a
+                      little stale and wondering if it's about to update. */}
+                  {autoOn && nextRefreshAtMs && (() => {
+                    const remainingMs = nextRefreshAtMs - nowTick
+                    if (remainingMs <= 0) return (
+                      <div style={{fontSize:10.5,color:C.dim,marginTop:2,display:'flex',alignItems:'center',gap:5,fontFamily:"'IBM Plex Mono',monospace"}}>
+                        Refreshing…
+                      </div>
+                    )
+                    const remainingSec = Math.ceil(remainingMs / 1000)
+                    const mm = Math.floor(remainingSec / 60)
+                    const ss = remainingSec % 60
+                    const label = mm > 0 ? `${mm}m ${ss}s` : `${ss}s`
+                    return (
+                      <div style={{fontSize:10.5,color:C.dim,marginTop:2,display:'flex',alignItems:'center',gap:5,fontFamily:"'IBM Plex Mono',monospace"}}>
+                        Next refresh in {label}
+                      </div>
+                    )
+                  })()}
                 </div>
                 <button className="hv" onClick={toggleAuto} style={{
                   background: autoOn ? C.red : C.green, border:'none', color:'#1c1916',
@@ -3565,7 +3610,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 </div>
                 <div>
                   <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
-                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(runAutoScan,f*60*1000);setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
+                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(loadOrRefreshAlerts,f*60*1000);setNextRefreshAtMs(Date.now()+f*60*1000);setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
