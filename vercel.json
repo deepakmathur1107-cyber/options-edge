@@ -14,15 +14,15 @@
     },
     {
       "path": "/api/cron/scan?tf=Swing (21\u201345 DTE)",
-      "schedule": "*/15 10-22 * * 1-5"
+      "schedule": "5,20,35,50 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=LEAP (90\u2013180 DTE)",
-      "schedule": "0 10-22 * * 1-5"
+      "schedule": "2 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=Deep LEAP (180\u2013365 DTE)",
-      "schedule": "0 10-22 * * 1-5"
+      "schedule": "8 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/watchdog",
@@ -34,7 +34,7 @@
     },
     {
       "path": "/api/cron/verdict-check?dryRun=false",
-      "schedule": "*/15 10-22 * * 1-5"
+      "schedule": "10,25,40,55 10-22 * * 1-5"
     },
     {
       "path": "/api/cron/resolve-trade-outcomes",
