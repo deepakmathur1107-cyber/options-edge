@@ -11,32 +11,36 @@ export default function ClusterDistributionPanel({ getToken, theme }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [lastFetchedAt, setLastFetchedAt] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const token = await (getToken ? getToken() : Promise.resolve(null));
-        const res = await fetch('/api/admin/cluster-distribution?days=14&minSize=3', {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
-        setData(await res.json());
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const token = await (getToken ? getToken() : Promise.resolve(null));
+      const res = await fetch('/api/admin/cluster-distribution?days=14&minSize=3', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
       }
-    })();
-  }, [getToken]);
+      setData(await res.json());
+      setLastFetchedAt(new Date());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  if (loading) return <div style={{ fontSize: 12, color: C.dim }}>Loading…</div>;
+  useEffect(() => { load(); }, [getToken]);
+
+  if (loading && !data) return <div style={{ fontSize: 12, color: C.dim }}>Loading…</div>;
   if (error) return (
     <div style={{ fontSize: 12, color: C.red, background: `${C.red}12`, border: `1px solid ${C.red}30`, borderRadius: 6, padding: '10px 12px' }}>
       Error: {error}
+      <button onClick={load} style={{ marginLeft: 10, fontSize: 11, cursor: 'pointer' }}>Retry</button>
     </div>
   );
   if (!data) return null;
@@ -50,9 +54,17 @@ export default function ClusterDistributionPanel({ getToken, theme }) {
           Showing {data.distinctDaysFound} day(s) of signal_history (requested {data.requestedDays}) — not a full {data.requestedDays}-day picture yet. More trading days will fill this in.
         </div>
       )}
-      <div style={{ fontSize: 12, color: C.dim, marginBottom: 10 }}>
-        Live threshold (CLUSTER_MIN_COUNT in api/scan-cache.js): <strong style={{ color: C.text }}>{data.liveClusterMinCount}</strong>
-        {' · '}showing groups of {data.minSize}+ tickers (one below the live threshold, so you can see what's just under the bar too).
+      <div style={{ fontSize: 12, color: C.dim, marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <span>
+          Live threshold (CLUSTER_MIN_COUNT in api/scan-cache.js): <strong style={{ color: C.text }}>{data.liveClusterMinCount}</strong>
+          {' · '}showing groups of {data.minSize}+ tickers (one below the live threshold, so you can see what's just under the bar too).
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+          {lastFetchedAt && <span style={{ fontSize: 10.5 }}>Updated {lastFetchedAt.toLocaleTimeString()}</span>}
+          <button onClick={load} disabled={loading} style={{ fontSize: 11, cursor: loading ? 'default' : 'pointer', padding: '3px 10px', borderRadius: 4, border: `1px solid ${C.border}`, background: C.bgAlt, color: C.text, opacity: loading ? 0.6 : 1 }}>
+            {loading ? 'Refreshing…' : '↻ Refresh'}
+          </button>
+        </span>
       </div>
       <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 320, overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>

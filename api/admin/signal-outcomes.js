@@ -55,6 +55,15 @@ module.exports = async (req, res) => {
 
     let query = supabase.from('signal_history').select('*', { count: 'exact' });
 
+    // Default to primary-only, matching the summary stats below — otherwise
+    // a single real trade re-scanned 30x in a day shows as 30 separate rows
+    // all carrying the same propagated outcome, reading as 30 wins/losses
+    // instead of one. Pass ?includeRescans=true to see every scan-tick row
+    // for a specific lifecycle (the original QA use case — checking score
+    // drift across a day) — intentionally opt-in, not the default view.
+    const includeRescans = req.query.includeRescans === 'true';
+    if (!includeRescans) query = query.eq('is_lifecycle_primary', true);
+
     if (timeframe) query = query.eq('timeframe', timeframe);
     if (ticker)     query = query.eq('ticker', ticker);
     if (outcome === 'UNRESOLVED') {
