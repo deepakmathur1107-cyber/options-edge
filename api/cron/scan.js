@@ -101,6 +101,7 @@ async function tFetch(path, tracker) {
   const url = `${TRADIER_BASE}${path}`
   const r = await fetch(url, { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } })
   recordRateHeaders(tracker, r)
+  if (r.status === 400) console.warn(`[cron/scan] HTTP_400 ${path}`)
   if (!r.ok) return null
   try { return await r.json() } catch { return null }
 }
@@ -120,6 +121,7 @@ async function tFetchPost(path, body, tracker) {
     body,
   })
   recordRateHeaders(tracker, r)
+  if (r.status === 400) console.warn(`[cron/scan] HTTP_400 ${path} body=${body}`)
   if (!r.ok) return null
   try { return await r.json() } catch { return null }
 }
