@@ -1174,14 +1174,6 @@ export default function App(props={}) {
   // data that's already refreshing server-side either way. Stop still
   // works exactly as before for anyone who wants to pause it.
   const [autoOn,      setAutoOn]      = useState(true)
-  // Tracks the epoch-ms timestamp of the NEXT scheduled auto-scanner tick,
-  // set at each of the 3 places that (re)arm the interval below (Start,
-  // initial page load, Frequency change) — deliberately NOT reset by
-  // incidental manual refreshes (e.g. dragging Min Edge Score), since those
-  // don't reset the underlying setInterval timer either; this should
-  // reflect the real interval schedule, not every fetch that happens to
-  // occur. null means nothing is currently scheduled (auto-scanner off).
-  const [nextRefreshAtMs, setNextRefreshAtMs] = useState(null)
   // Cheap 1s ticking state purely to force the countdown to re-render —
   // only runs while auto-scanner is on, so it isn't burning cycles for
   // users who have it stopped.
@@ -2402,7 +2394,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       stopRef.current = true   // signals the running loop to break immediately
       clearInterval(autoRef.current)
       setAutoOn(false)
-      setNextRefreshAtMs(null)
       const tfNow = scanTFRef.current
       const tfLabel = TF_CONFIG[tfNow]?.label||tfNow
       setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ◼ Stopped · was using ${tfLabel}`,...p.slice(0,99)])
@@ -2417,7 +2408,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       ])
       loadOrRefreshAlerts()
       autoRef.current=setInterval(loadOrRefreshAlerts,scanFreq*60*1000)
-      setNextRefreshAtMs(Date.now()+scanFreq*60*1000)
     }
   }
   useEffect(()=>()=>clearInterval(autoRef.current),[])
@@ -2440,7 +2430,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     loadOrRefreshAlerts()
     if (autoOn) {
       autoRef.current = setInterval(loadOrRefreshAlerts, scanFreq*60*1000)
-      setNextRefreshAtMs(Date.now()+scanFreq*60*1000)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[])
@@ -3572,11 +3561,23 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   {/* Countdown to the auto-scanner's next scheduled tick —
                       distinct from "Newest result" above, which answers
                       "how old is what I'm looking at." This answers "when
-                      do I get new data," which matters most right when
-                      someone's staring at a result that already looks a
-                      little stale and wondering if it's about to update. */}
-                  {autoOn && nextRefreshAtMs && (() => {
-                    const remainingMs = nextRefreshAtMs - nowTick
+                      do I get new data."
+                      Deliberately derived from the SAME newestMs (the real
+                      server scanned_at timestamp) used for "Newest result"
+                      above, not from a separately-armed client-side clock —
+                      confirmed live (2026-07-13) that the two could show
+                      inconsistent numbers (13m elapsed + 14m47s remaining =
+                      ~28min against a stated 15min cadence) when the
+                      countdown's own arm-time didn't line up with when the
+                      real last scan actually happened. Deriving both from
+                      one real timestamp makes them consistent by
+                      construction instead of two clocks that can drift
+                      apart. */}
+                  {autoOn && alertHistory.length>0 && (() => {
+                    const validTimes = alertHistory.map(a=>a.scannedAtMs).filter(ms=>typeof ms==='number' && ms>0 && isFinite(ms))
+                    if (!validTimes.length) return null
+                    const newestMs = Math.max(...validTimes)
+                    const remainingMs = (newestMs + scanFreq*60*1000) - nowTick
                     if (remainingMs <= 0) return (
                       <div style={{fontSize:10.5,color:C.dim,marginTop:2,display:'flex',alignItems:'center',gap:5,fontFamily:"'IBM Plex Mono',monospace"}}>
                         Refreshing…
@@ -3610,7 +3611,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 </div>
                 <div>
                   <div style={{fontSize:12,fontWeight:600,color:C.dim,letterSpacing:.5,marginBottom:4,fontFamily:"'Inter',sans-serif"}}>Frequency</div>
-                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(loadOrRefreshAlerts,f*60*1000);setNextRefreshAtMs(Date.now()+f*60*1000);setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
+                  <select value={scanFreq} onChange={e=>{const f=Number(e.target.value);setScanFreq(f);if(autoOn){clearInterval(autoRef.current);autoRef.current=setInterval(loadOrRefreshAlerts,f*60*1000);setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ↺ Interval updated → every ${f} min · ${TF_CONFIG[scanTFRef.current]?.label||scanTFRef.current}`,...p.slice(0,99)])}}} style={iSt}>
                     {[1,2,3,5,10,15,20,30,60].map(v=><option key={v} value={v}>Every {v} {v===1?'min':'mins'}</option>)}
                   </select>
                 </div>
