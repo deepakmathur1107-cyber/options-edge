@@ -305,7 +305,32 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     const chgPctEstimated = chgInfo.estimated;
     const step = autoStep(price);
 
-    const vol = quote.volume||0, avg = quote.average_volume||vol;
+    const vol = quote.volume||0
+    const hasRealAvgVolume = quote.average_volume != null && quote.average_volume > 0
+    const avg = hasRealAvgVolume ? quote.average_volume : vol
+    // Liquidity floor on the UNDERLYING stock — distinct from strikeVolume
+    // (option-contract liquidity, checked later in scoring). A stock that
+    // barely trades isn't likely to make the kind of move a Quick Play or
+    // Swing Trade needs within its DTE window, regardless of how the
+    // option chain itself looks — theta just eats the premium while the
+    // stock sits still. Hard skip, not a score penalty: this is a risk-
+    // management gate (like the concentration flag), not a predictive
+    // claim, so it doesn't need the multi-cohort validation a scoring
+    // change would.
+    //
+    // ONLY gates when average_volume is a real, present number from
+    // Tradier — NOT when falling back to today's volume, which has its
+    // own confirmed zero-artifact glitch on legitimate liquid names
+    // (TJX/EBAY/MCD/ILMN/ADBE all showed volume:0 during certain LEAP/
+    // Deep LEAP scan windows, 2026-07-10/11). Missing/glitched data means
+    // "unknown," not "assume thin and block" — the point of this gate is
+    // catching genuinely illiquid names, not misfiring on a data artifact
+    // that would silently drop known blue-chips from the scan. Revisit
+    // MIN_AVG_VOLUME itself once there's real evidence on where thin names
+    // actually start causing problems — this is a conservative starting
+    // floor for an S&P 500 universe, not backtested.
+    const MIN_AVG_VOLUME = 300000;
+    if (hasRealAvgVolume && avg < MIN_AVG_VOLUME) return null;
     const volRatio = vol/(avg||1);
     const now2 = new Date();
     const isMorning2 = isOpeningWindow();
