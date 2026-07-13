@@ -330,7 +330,10 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     // actually start causing problems — this is a conservative starting
     // floor for an S&P 500 universe, not backtested.
     const MIN_AVG_VOLUME = 300000;
-    if (hasRealAvgVolume && avg < MIN_AVG_VOLUME) return null;
+    if (hasRealAvgVolume && avg < MIN_AVG_VOLUME) {
+      console.log(`[scanLogic] LIQUIDITY_SKIP ${ticker} avg_volume=${avg} floor=${MIN_AVG_VOLUME}`);
+      return null;
+    }
     const volRatio = vol/(avg||1);
     const now2 = new Date();
     const isMorning2 = isOpeningWindow();
