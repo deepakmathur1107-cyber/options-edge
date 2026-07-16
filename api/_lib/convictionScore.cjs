@@ -179,6 +179,17 @@ function scoreConviction(p) {
   // Fix #3: coherence bonus excludes chasing setups — a stock already
   // flagged "too late, already moved" shouldn't also earn a volume bonus
   // for confirming the same move you just penalized it for.
+  // Fix (gap-stacking, part 2): this branch was missed by the original
+  // gapAligned dampening pass (d3373f4, 2026-07-10), which only touched
+  // 52w-trend and S/R. Confirmed live 2026-07-15 on NTAP/MTB/BIIB — a >5%
+  // earnings gap almost always ALSO produces elevated volume in the
+  // aligned direction, so this +12 "coherent signal" bonus was firing at
+  // full weight on top of the +15 gap bonus nearly every time, for the
+  // same reason 52w/SR needed dampening: it's not an independent
+  // confirmation, it's the same single gap event described a third way.
+  // Same treatment as the existing 52w/SR dampening — bonus branch scaled
+  // down when gapAligned, divergent/against-trend branches left at full
+  // weight since those ARE still independently informative.
   if (!isMorningWindow) {
     const moveHelpsPosition = (optType === 'call' && chgPct > 0) || (optType === 'put' && chgPct < 0)
     const volPriceCoherent  = volRatio >= 1.5 && Math.abs(chgPct) >= 1.0 && !isChasing && moveHelpsPosition
@@ -187,8 +198,9 @@ function scoreConviction(p) {
       score -= 8
       warnings.push(`Vol ${volRatio.toFixed(1)}x but stock barely moved (${chgPct.toFixed(1)}%) — likely institutional roll or distribution, not directional flow`)
     } else if (volPriceCoherent) {
-      score += 12
-      reasons.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent ${chgPct>0?'bullish':'bearish'} signal`)
+      const bonus = gapAligned ? 4 : 12
+      score += bonus
+      reasons.push(gapAligned ? `Vol ${volRatio.toFixed(1)}x avg — likely the same move as the gap above, partial credit` : `Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — coherent ${chgPct>0?'bullish':'bearish'} signal`)
     } else if (volRatio >= 1.5 && Math.abs(chgPct) >= 1.0 && !isChasing && !moveHelpsPosition) {
       warnings.push(`Vol ${volRatio.toFixed(1)}x avg with ${chgPct>0?'+':''}${chgPct.toFixed(1)}% move — but that move is AGAINST this ${optType}, not confirming it`)
     } else if (volRatio >= 1.5 && !isChasing) {
