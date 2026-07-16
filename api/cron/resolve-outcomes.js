@@ -267,6 +267,35 @@ module.exports = async function handler(req, res) {
   const client = sb()
   if (!client) return res.status(500).json({ error: 'Supabase not configured' })
 
+  // Self-terminating guard for the temporary overnight burn-down cron.
+  // The 5-min */5 0-9 cron exists ONLY to clear the one-time ~9,200-row
+  // backlog created by the earlier silent-stall bug. Once the backlog is
+  // gone there's nothing to do, and we do NOT want a 5-min cron pointlessly
+  // hammering the shared Tradier token forever (or, worse, someone forgetting
+  // to remove it). If there are no unresolved primary rows left, no-op
+  // immediately WITHOUT touching Tradier at all — a single cheap count query.
+  // This makes removing the cron optional rather than critical.
+  //
+  // Scoped to burndownMode so the nightly full-run cron (0 23) is unaffected:
+  // it should always run its normal course regardless of backlog size.
+  const burndownMode = req.query.burndown === '1'
+  if (burndownMode) {
+    const { count, error: countErr } = await client
+      .from('signal_history')
+      .select('id', { count: 'exact', head: true })
+      .is('outcome', null)
+      .eq('is_lifecycle_primary', true)
+    if (countErr) {
+      console.error('[resolve-outcomes] burndown guard count failed:', countErr.message)
+      // fall through and run normally rather than block on a transient count error
+    } else if ((count || 0) === 0) {
+      console.log('[resolve-outcomes] burndown guard: backlog empty, no-op — safe to remove the */5 burndown cron')
+      return res.status(200).json({ burndown: true, backlogEmpty: true, checked: 0, resolved: 0 })
+    } else {
+      console.log(`[resolve-outcomes] burndown guard: ${count} unresolved remaining, proceeding`)
+    }
+  }
+
   const startedAt = Date.now()
   const MAX_MS = 280_000
   const rateTracker = newRateTracker()
