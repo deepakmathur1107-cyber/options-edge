@@ -10,20 +10,32 @@
  * Manual: GET /api/alerts/send  (trigger.js has been deleted — this file handles both)
  *
  * vercel.json cron path must be /api/alerts/send
+ *
+ * REWRITE (2026-07-13): this file used to run its own separate, simpler
+ * scoring engine (scoreContract) with its own Tradier calls, its own
+ * 8-ticker hardcoded universe (DEFAULT_SYMBOLS), and its own DTE/direction
+ * logic — completely disconnected from the main scanning engine
+ * (convictionScore.cjs/scanLogic.js) that the rest of the app (Scan tab,
+ * signal_history, every fix validated this session) relies on. That meant
+ * none of this session's hardening — direction-aware scoring, gap-stacking
+ * dampening, hysteresis, regime awareness, the average-volume liquidity
+ * floor, the opening-window warning — applied to what actually got sent
+ * to a user's phone or inbox. Per explicit product decision: ONE engine
+ * finds trades; every outbound channel (email/SMS/Telegram) reads from
+ * that same source rather than running parallel logic. This file no
+ * longer scores anything or calls Tradier directly — it queries
+ * scan_results (the same live cache /api/scan-cache reads) and formats
+ * whatever the main engine already found for delivery.
  */
 
 const { createClient } = require('@supabase/supabase-js')
 const { decryptSecret } = require('../_lib/secretCrypto')
-
-const TRADIER_BASE  = 'https://api.tradier.com/v1'
-const TRADIER_TOKEN = process.env.TRADIER_TOKEN
+const { isOpeningWindow } = require('../_lib/scanLogic')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
-
-const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'AAPL']
 
 // getClerkEmail — fallback for users who enabled email_alerts but never
 // typed an alert_email into Alert Settings. Clerk already has an email on
@@ -35,8 +47,8 @@ const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'TSLA', 'NVDA', 'AMZN', 'META', 'IWM', 'A
 // no new secret needed. Returns null (not throws) on any failure, so a
 // Clerk hiccup degrades to "skip this user's email this run," same fail-
 // soft posture every other external call in this file already has
-// (fetchQuote/fetchChainWithExpiry/sendTg/sendSms all swallow and continue
-// rather than aborting the whole run for one user's failure).
+// (sendTg/sendSms/sendEmail all swallow and continue rather than
+// aborting the whole run for one user's failure).
 async function getClerkEmail(clerkUserId) {
   const key = process.env.CLERK_SECRET_KEY
   if (!key) return null
@@ -76,157 +88,101 @@ function parseSymbols(raw) {
   return s.split(',').map(x => x.replace(/['"\[\]]/g, '').trim().toUpperCase()).filter(Boolean)
 }
 
-function pickExpiry(dates) {
-  const today = new Date()
-  const arr = Array.isArray(dates) ? dates : [dates]
-  const withDTE = arr.map(d => ({ d, dte: Math.round((new Date(d + 'T12:00:00') - today) / 86400000) }))
-  const ideal = withDTE.filter(x => x.dte >= 14 && x.dte <= 45)
-  if (ideal.length) return ideal[0]
-  const ok = withDTE.filter(x => x.dte >= 7 && x.dte <= 60)
-  if (ok.length) return ok[0]
-  const future = withDTE.filter(x => x.dte >= 3)
-  return future.length ? future[0] : { d: arr[0], dte: 0 }
+function gradeColor(grade) {
+  if (grade === 'A') return '#00ff88'
+  if (grade === 'B') return '#00c8ff'
+  return '#ff9500'
 }
 
-function gradeFromScore(score) {
-  if (score >= 75) return { letter: 'A', color: '#00ff88' }
-  if (score >= 60) return { letter: 'B', color: '#00c8ff' }
-  return { letter: 'C', color: '#ff9500' }
+// The main engine already writes a human-readable reason list per signal
+// (r.reasons in scanLogic.js) — reuse the top one or two rather than
+// re-deriving a summary from raw fields the way the old scoreContract
+// path did. Keeps this file from re-implementing "why is this a good
+// setup" logic a second time.
+function topReasons(row, n = 2) {
+  const reasons = Array.isArray(row.reasons) ? row.reasons : []
+  return reasons.slice(0, n).join(' · ') || 'see full breakdown in-app'
 }
 
-function setupReason(a) {
-  const parts = []
-  if (a.dirAligned) parts.push(`aligned with today's ${a.chgPct > 0 ? 'rally' : 'pullback'}`)
-  if (a.ivNote)     parts.push(a.ivNote)
-  if (a.deltaNote)  parts.push(a.deltaNote)
-  if (a.spreadNote) parts.push(a.spreadNote)
-  return parts.length ? parts.join(' · ') : 'liquid near-the-money contract'
-}
-
-async function fetchQuote(symbol) {
-  try {
-    const r = await fetch(
-      `${TRADIER_BASE}/markets/quotes?symbols=${symbol}&greeks=false`,
-      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
-    )
-    if (!r.ok) return null
-    const q = (await r.json())?.quotes?.quote
-    if (!q) return null
-    return { price: parseFloat(q.last || q.prevclose || 0), chgPct: parseFloat(q.change_percentage || 0), chg: parseFloat(q.change || 0) }
-  } catch { return null }
-}
-
-async function fetchChainWithExpiry(symbol) {
-  try {
-    const expRes = await fetch(
-      `${TRADIER_BASE}/markets/options/expirations?symbol=${symbol}&includeAllRoots=false`,
-      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
-    )
-    if (!expRes.ok) return { chain: [], dte: 0, expiry: '' }
-    const expirations = (await expRes.json())?.expirations?.date
-    if (!expirations?.length) return { chain: [], dte: 0, expiry: '' }
-    const picked = pickExpiry(expirations)
-    const chainRes = await fetch(
-      `${TRADIER_BASE}/markets/options/chains?symbol=${symbol}&expiration=${picked.d}&greeks=true`,
-      { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } }
-    )
-    if (!chainRes.ok) return { chain: [], dte: picked.dte, expiry: picked.d }
-    const chain = (await chainRes.json())?.options?.option || []
-    return { chain, dte: picked.dte, expiry: picked.d }
-  } catch (e) {
-    console.error(`fetchChain ${symbol}:`, e.message)
-    return { chain: [], dte: 0, expiry: '' }
+// Single source of truth for "what did the engine find, right now" — the
+// exact same scan_results rows /api/scan-cache serves to the Scan tab.
+// Non-expired only (expires_at is already written by the scan cron as a
+// ~20 min TTL per row); this file adds no scoring, no filtering beyond
+// what the engine itself already decided, other than per-user preference
+// narrowing applied later in the handler.
+async function fetchCurrentSignals() {
+  const { data, error } = await supabase
+    .from('scan_results')
+    .select('*')
+    .gt('expires_at', new Date().toISOString())
+    .order('score', { ascending: false })
+  if (error) {
+    console.error('[alerts/send] fetchCurrentSignals failed:', error.message)
+    return []
   }
+  return data || []
 }
 
-function scoreContract(c, stockPrice, stockChgPct, dte) {
-  const delta  = Math.abs(c?.greeks?.delta ?? 0)
-  const iv     = c?.greeks?.smv_vol        ?? 0
-  const oi     = c?.open_interest          ?? 0
-  const volume = c?.volume                 ?? 0
-  const bid    = c?.bid                    ?? 0
-  const ask    = c?.ask                    ?? 0
-  const mid    = (bid + ask) / 2
-  const isPut  = c?.option_type === 'put'
-  const isCall = c?.option_type === 'call'
-  const pctOTM = stockPrice > 0 ? Math.abs((c.strike - stockPrice) / stockPrice) * 100 : 99
-
-  if (mid    < 0.15)            return null
-  if (delta  < 0.15)            return null
-  if (delta  > 0.85)            return null
-  if (ask    <= 0 || bid <= 0)  return null
-  if ((ask - bid) > mid * 0.45) return null
-  if (pctOTM > 8)               return null
-
-  const strongUp   = stockChgPct >  1.0
-  const mildUp     = stockChgPct >  0.2
-  const mildDown   = stockChgPct < -0.2
-  const strongDown = stockChgPct < -1.0
-
-  let dirBonus = 0, dirAligned = false
-  if      (isPut  && strongDown) { dirBonus =  20; dirAligned = true }
-  else if (isPut  && mildDown)   { dirBonus =  10; dirAligned = true }
-  else if (isCall && strongUp)   { dirBonus =  20; dirAligned = true }
-  else if (isCall && mildUp)     { dirBonus =  10; dirAligned = true }
-  else if (isPut  && strongUp)   { dirBonus = -30 }
-  else if (isCall && strongDown) { dirBonus = -30 }
-
-  const dteScore    = dte >= 21 && dte <= 35 ? 15 : dte >= 14 && dte <= 45 ? 10 : dte >= 7 ? 5 : 0
-  const deltaScore  = delta >= 0.35 && delta <= 0.55 ? 25 : delta >= 0.25 && delta <= 0.65 ? 15 : 8
-  const ivScore     = iv >= 0.20 && iv <= 0.45 ? 20 : iv >= 0.15 && iv <= 0.60 ? 12 : iv > 0 ? 5 : 0
-  const liqScore    = Math.min(15, Math.round(Math.log1p(oi + volume) * 1.8))
-  const spreadRatio = (ask - bid) / mid
-  const spreadScore = spreadRatio < 0.08 ? 10 : spreadRatio < 0.15 ? 6 : spreadRatio < 0.25 ? 3 : 0
-
-  const score = Math.min(95, Math.max(0, deltaScore + ivScore + liqScore + spreadScore + dteScore + dirBonus))
+// Market bias banner (BULLISH/BEARISH/NEUTRAL) — reuses the same
+// regime_spx_chg_pct/regime_ndx_chg_pct already computed once per scan run
+// and stored on signal_history, instead of this file making its own
+// separate SPY/QQQ Tradier calls the way the old version did. One fetch,
+// not two extra live calls on top of what the scanner already did.
+async function fetchMarketBias() {
+  const { data, error } = await supabase
+    .from('signal_history')
+    .select('regime_spx_chg_pct, regime_ndx_chg_pct, scanned_at')
+    .not('regime_spx_chg_pct', 'is', null)
+    .order('scanned_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return { spx: null, ndx: null, bias: 'NEUTRAL', biasColor: '#ff9500' }
+  const spx = data.regime_spx_chg_pct
+  const bias = spx > 0.5 ? 'BULLISH' : spx < -0.5 ? 'BEARISH' : 'NEUTRAL'
   return {
-    score, dirAligned, chgPct: stockChgPct,
-    ivNote:     iv >= 0.35 ? 'elevated IV' : iv >= 0.20 ? 'moderate IV' : '',
-    deltaNote:  delta >= 0.40 && delta <= 0.55 ? 'near-ATM strike' : '',
-    spreadNote: spreadRatio < 0.08 ? 'tight spread' : '',
-    isPut, isCall, stockPrice, delta, iv, mid, bid, ask, oi,
+    spx, ndx: data.regime_ndx_chg_pct, bias,
+    biasColor: bias === 'BULLISH' ? '#00ff88' : bias === 'BEARISH' ? '#ff4466' : '#ff9500',
   }
 }
 
-function buildEmailHtml(alerts, marketCtx) {
+function buildEmailHtml(alerts, marketCtx, openingWindow) {
   const dateStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })
   const ctxHtml = marketCtx ? `
     <div style="background:#0d2030;border:1px solid #1a2e3e;border-radius:6px;padding:12px 16px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap">
-      ${marketCtx.spy ? `<span style="font-family:monospace;font-size:11px;color:#c8d8e8"><span style="color:#4a7a8a">SPY</span> $${marketCtx.spy.price.toFixed(2)} <span style="color:${marketCtx.spy.chgPct>=0?'#00ff88':'#ff4466'}">${marketCtx.spy.chgPct>=0?'+':''}${marketCtx.spy.chgPct.toFixed(2)}%</span></span>` : ''}
-      ${marketCtx.qqq ? `<span style="font-family:monospace;font-size:11px;color:#c8d8e8"><span style="color:#4a7a8a">QQQ</span> $${marketCtx.qqq.price.toFixed(2)} <span style="color:${marketCtx.qqq.chgPct>=0?'#00ff88':'#ff4466'}">${marketCtx.qqq.chgPct>=0?'+':''}${marketCtx.qqq.chgPct.toFixed(2)}%</span></span>` : ''}
+      ${marketCtx.spx != null ? `<span style="font-family:monospace;font-size:11px;color:#c8d8e8"><span style="color:#4a7a8a">SPX</span> <span style="color:${marketCtx.spx>=0?'#00ff88':'#ff4466'}">${marketCtx.spx>=0?'+':''}${marketCtx.spx.toFixed(2)}%</span></span>` : ''}
+      ${marketCtx.ndx != null ? `<span style="font-family:monospace;font-size:11px;color:#c8d8e8"><span style="color:#4a7a8a">NDX</span> <span style="color:${marketCtx.ndx>=0?'#00ff88':'#ff4466'}">${marketCtx.ndx>=0?'+':''}${marketCtx.ndx.toFixed(2)}%</span></span>` : ''}
       <span style="font-family:monospace;font-size:11px;color:#c8d8e8"><span style="color:#4a7a8a">BIAS</span> <span style="color:${marketCtx.biasColor}">${marketCtx.bias}</span></span>
     </div>` : ''
+  const warnHtml = openingWindow ? `
+    <div style="background:#3a2200;border:1px solid #cc8400;border-radius:6px;padding:10px 16px;margin-bottom:16px">
+      <span style="font-family:monospace;font-size:11px;color:#ffcc66">⚠ Sent during the first 30 min of trading — spreads are wider and scores can shift once volume/liquidity data settles. Consider waiting for confirmation before entering.</span>
+    </div>` : ''
 
-  const rows = alerts.map(a => {
-    const grade   = gradeFromScore(a.score)
-    const reason  = setupReason(a)
-    const stopVal = (a.mid * 0.50).toFixed(2)
-    const tgtVal  = (a.mid * 1.80).toFixed(2)
-    const otmPct  = a.stockPrice > 0 ? Math.abs((a.strike - a.stockPrice) / a.stockPrice * 100).toFixed(1) : '—'
-    const bePrice = a.isPut ? (a.strike - a.mid).toFixed(2) : (a.strike + a.mid).toFixed(2)
+  const rows = alerts.map(row => {
+    const reason = topReasons(row)
     return `
     <tr>
       <td style="padding:12px;border-bottom:1px solid #0d2030;vertical-align:top">
-        <div style="font-weight:700;color:#00ff88;font-family:monospace;font-size:13px">${a.symbol}</div>
-        <div style="font-size:10px;color:#4a7a8a;margin-top:2px">@ $${a.stockPrice?.toFixed(2) ?? '—'}</div>
+        <div style="font-weight:700;color:#00ff88;font-family:monospace;font-size:13px">${row.ticker}</div>
+        <div style="font-size:10px;color:#4a7a8a;margin-top:2px">@ $${Number(row.underlying_price ?? 0).toFixed(2)}</div>
       </td>
       <td style="padding:12px;border-bottom:1px solid #0d2030;vertical-align:top">
-        <div style="color:#c8d8e8;font-family:monospace;font-size:12px;font-weight:600">${a.type} ${a.strike}</div>
-        <div style="color:#4a7a8a;font-size:10px;margin-top:2px">${a.dte} DTE · ${otmPct}% OTM</div>
+        <div style="color:#c8d8e8;font-family:monospace;font-size:12px;font-weight:600">${row.trade_type} ${row.strike_str}</div>
+        <div style="color:#4a7a8a;font-size:10px;margin-top:2px">${row.dte} DTE · ${row.timeframe}</div>
       </td>
       <td style="padding:12px;border-bottom:1px solid #0d2030;vertical-align:top;text-align:center">
-        <div style="display:inline-block;background:${grade.color}22;border:1px solid ${grade.color}55;border-radius:4px;padding:3px 10px">
-          <span style="font-family:monospace;font-weight:700;font-size:15px;color:${grade.color}">${grade.letter}</span>
+        <div style="display:inline-block;background:${gradeColor(row.grade)}22;border:1px solid ${gradeColor(row.grade)}55;border-radius:4px;padding:3px 10px">
+          <span style="font-family:monospace;font-weight:700;font-size:15px;color:${gradeColor(row.grade)}">${row.grade}</span>
         </div>
       </td>
       <td style="padding:12px;border-bottom:1px solid #0d2030;vertical-align:top">
-        <div style="color:#c8d8e8;font-family:monospace;font-size:12px;font-weight:600">$${a.mid.toFixed(2)}</div>
-        <div style="font-size:10px;color:#4a7a8a;margin-top:2px">Stop $${stopVal} · Target $${tgtVal}</div>
+        <div style="color:#c8d8e8;font-family:monospace;font-size:12px;font-weight:600">${row.mid}</div>
+        <div style="font-size:10px;color:#4a7a8a;margin-top:2px">Stop ${row.stop || '—'} · Target ${row.target || '—'}</div>
       </td>
     </tr>
     <tr>
       <td colspan="4" style="padding:4px 12px 12px;border-bottom:1px solid #1a2e3e">
-        <div style="font-size:10px;color:#4a7a8a;font-style:italic">Break-even: $${bePrice} stock price · ${reason}</div>
+        <div style="font-size:10px;color:#4a7a8a;font-style:italic">${row.breakeven ? `Break-even: $${row.breakeven} · ` : ''}${reason}</div>
       </td>
     </tr>`
   }).join('')
@@ -237,6 +193,7 @@ function buildEmailHtml(alerts, marketCtx) {
       <h1 style="font-family:'Bebas Neue',Impact,sans-serif;color:#00ff88;letter-spacing:3px;margin:0 0 4px 0;font-size:28px">OPTIONS EDGE ALERT</h1>
       <p style="color:#4a7a8a;font-size:11px;font-family:monospace;margin:0">${dateStr} ET · ${alerts.length} setup${alerts.length>1?'s':''} found</p>
     </div>
+    ${warnHtml}
     ${ctxHtml}
     <table style="width:100%;border-collapse:collapse;background:#0d1a26;border:1px solid #1a2e3e;border-radius:6px;overflow:hidden">
       <thead>
@@ -255,7 +212,7 @@ function buildEmailHtml(alerts, marketCtx) {
         <span style="color:#00ff88;margin-left:8px">A = strong setup</span>
         <span style="color:#00c8ff;margin-left:8px">B = good setup</span>
         <span style="color:#ff9500;margin-left:8px">C = borderline</span><br>
-        Stop = -50% of premium · Target = +80% of premium · Not financial advice.
+        Stop/target shown per-trade — timeframe-specific, not a fixed percentage. Not financial advice.
       </div>
     </div>
     <p style="color:#2a4a5a;font-size:10px;font-family:monospace;margin-top:16px;text-align:center">
@@ -265,23 +222,23 @@ function buildEmailHtml(alerts, marketCtx) {
   </div>`
 }
 
-function buildSmsText(alerts, marketCtx) {
+function buildSmsText(alerts, marketCtx, openingWindow) {
   const bias  = marketCtx ? ` · ${marketCtx.bias}` : ''
-  const lines = alerts.slice(0, 3).map(a => {
-    const grade = gradeFromScore(a.score)
-    return `[${grade.letter}] ${a.symbol} ${a.type} ${a.strike} (${a.dte}DTE) $${a.mid.toFixed(2)}`
-  })
-  return `OptionsEdge${bias}\n${lines.join('\n')}\nStop -50% / Target +80%\noptionsedgeflow.com/app`
+  const warn  = openingWindow ? '\n⚠ First 30min — scores may shift' : ''
+  const lines = alerts.slice(0, 3).map(row =>
+    `[${row.grade}] ${row.ticker} ${row.trade_type} ${row.strike_str} (${row.dte}DTE) ${row.mid}`
+  )
+  return `OptionsEdge${bias}${warn}\n${lines.join('\n')}\noptionsedgeflow.com/app`
 }
 
-function buildTgText(alerts, marketCtx) {
+function buildTgText(alerts, marketCtx, openingWindow) {
   const bias  = marketCtx ? ` · ${marketCtx.bias}` : ''
-  const lines = alerts.slice(0, 5).map(a => {
-    const grade = gradeFromScore(a.score)
-    const dir   = a.type === 'CALL' ? '📈' : '📉'
-    return `${dir} *${a.symbol}* ${a.type} $${a.strike} · ${a.score}% · $${a.mid.toFixed(2)} · ${a.dte}DTE`
+  const warn  = openingWindow ? '\n⚠ _Sent during the first 30 min of trading — scores may shift as volume/liquidity data settles._' : ''
+  const lines = alerts.slice(0, 5).map(row => {
+    const dir = row.trade_type?.includes('Call') ? '📈' : '📉'
+    return `${dir} *${row.ticker}* ${row.trade_type} ${row.strike_str} · ${row.score}% · ${row.mid} · ${row.dte}DTE`
   })
-  return `*OptionsEdge Alerts*${bias}\n\n${lines.join('\n')}\n\nStop -50% / Target +80%\noptionsedgeflow.com/app`
+  return `*OptionsEdge Alerts*${bias}${warn}\n\n${lines.join('\n')}\n\noptionsedgeflow.com/app`
 }
 
 async function sendTg(botToken, chatId, text) {
@@ -337,6 +294,7 @@ module.exports = async function handler(req, res) {
   if (secret !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Unauthorized' })
 
   const scannedAt = new Date().toISOString()
+  const openingWindow = isOpeningWindow()
   try {
     const { data: allPrefs, error: prefsErr } = await supabase
       .from('alert_prefs').select('*')
@@ -354,40 +312,31 @@ module.exports = async function handler(req, res) {
     const users     = allPrefs.filter(p => activeSet.has(p.clerk_user_id) || ADMIN_IDS.includes(p.clerk_user_id))
     if (!users.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No active subscribers with alerts enabled' })
 
-    const allSymbols = new Set(DEFAULT_SYMBOLS)
-    for (const u of users) parseSymbols(u.symbols).forEach(s => allSymbols.add(s))
-    const symbols = [...allSymbols]
+    // One query for everything the main engine currently has — no more
+    // per-ticker Tradier calls, no more separate scoring. Same data every
+    // user sees on the Scan tab.
+    const [allSignals, marketCtx] = await Promise.all([fetchCurrentSignals(), fetchMarketBias()])
+    if (!allSignals.length) return res.status(200).json({ sent: 0, scannedAt, note: 'No qualifying signals currently in scan_results' })
 
-    const [spyCtx, qqqCtx] = await Promise.all([fetchQuote('SPY'), fetchQuote('QQQ')])
-    const spxChg    = spyCtx?.chgPct ?? 0
-    const bias      = spxChg > 0.5 ? 'BULLISH' : spxChg < -0.5 ? 'BEARISH' : 'NEUTRAL'
-    const marketCtx = { spy: spyCtx, qqq: qqqCtx, bias, biasColor: bias === 'BULLISH' ? '#00ff88' : bias === 'BEARISH' ? '#ff4466' : '#ff9500' }
-
-    const alertsBySymbol = {}
-    for (const sym of symbols) {
-      const [{ chain, dte, expiry }, quote] = await Promise.all([fetchChainWithExpiry(sym), fetchQuote(sym)])
-      const stockPrice = quote?.price ?? 0
-      const chgPct     = quote?.chgPct ?? 0
-      const scored = chain
-        .map(c => {
-          const s = scoreContract(c, stockPrice, chgPct, dte)
-          if (!s || s.score < 45) return null
-          return { symbol: sym, type: c.option_type === 'call' ? 'CALL' : 'PUT', strike: c.strike, expiry, dte, score: s.score, mid: s.mid, stockPrice, chgPct, dirAligned: s.dirAligned, ivNote: s.ivNote, deltaNote: s.deltaNote, spreadNote: s.spreadNote, isPut: s.isPut, isCall: s.isCall }
-        })
-        .filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 2)
-      if (scored.length) alertsBySymbol[sym] = scored
+    const bySymbol = {}
+    for (const row of allSignals) {
+      if (!bySymbol[row.ticker]) bySymbol[row.ticker] = []
+      bySymbol[row.ticker].push(row)
     }
 
     let sent = 0
     for (const user of users) {
-      const watchlist  = user.symbols ? parseSymbols(user.symbols) : DEFAULT_SYMBOLS
+      const watchlist  = user.symbols ? parseSymbols(user.symbols) : null   // null = no narrowing, full universe like the Scan tab
       const minScore   = user.min_edge_score ?? 50
-      const userAlerts = watchlist.flatMap(sym => alertsBySymbol[sym] || [])
-        .filter(a => a.score >= minScore).sort((a, b) => b.score - a.score).slice(0, 8)
+      const candidates = watchlist ? watchlist.flatMap(sym => bySymbol[sym] || []) : allSignals
+      const userAlerts = candidates
+        .filter(row => row.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
       if (!userAlerts.length) continue
 
-      const grade   = gradeFromScore(userAlerts[0].score)
-      const subject = `OptionsEdge: ${userAlerts.length} ${grade.letter}-grade alert${userAlerts.length > 1 ? 's' : ''} today`
+      const topGrade = userAlerts[0].grade
+      const subject  = `OptionsEdge: ${userAlerts.length} ${topGrade}-grade alert${userAlerts.length > 1 ? 's' : ''} today`
       let notified = false
 
       // Email — fall back to Clerk's account email if the user enabled
@@ -408,7 +357,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      if (user.email_alerts && emailToUse) { const ok = await sendEmail(emailToUse, subject, buildEmailHtml(userAlerts, marketCtx)); if (ok) { notified = true; console.log(`Email → ${emailToUse}`) } }
+      if (user.email_alerts && emailToUse) { const ok = await sendEmail(emailToUse, subject, buildEmailHtml(userAlerts, marketCtx, openingWindow)); if (ok) { notified = true; console.log(`Email → ${emailToUse}`) } }
       // SMS — ADMIN-ONLY for now, per explicit product decision
       // (2026-06-28): Twilio is still trial, costs real money per message,
       // and isn't worth opening to real users until there's enough volume
@@ -417,7 +366,7 @@ module.exports = async function handler(req, res) {
       // for any row that already had sms_on set before that gate existed.
       // Same reasoning/pattern as the Telegram admin-only restriction
       // directly below.
-      if (ADMIN_IDS.includes(user.clerk_user_id) && user.sms_on && user.phone_number) { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx)); if (ok) notified = true }
+      if (ADMIN_IDS.includes(user.clerk_user_id) && user.sms_on && user.phone_number) { const ok = await sendSms(user.phone_number, buildSmsText(userAlerts, marketCtx, openingWindow)); if (ok) notified = true }
       // Telegram — ADMIN-ONLY per explicit product decision (2026-06-28):
       // unlike email/sms_on, this channel has no per-user opt-in toggle in
       // alert_prefs at all — having a tg_token saved was the ONLY gate,
@@ -431,12 +380,12 @@ module.exports = async function handler(req, res) {
       if (ADMIN_IDS.includes(user.clerk_user_id) && user.tg_token && user.tg_chat_id) {
         // FIX: tg_token is now stored encrypted — decrypt before use.
         const tgToken = decryptSecret(user.tg_token)
-        if (tgToken) { const ok = await sendTg(tgToken, user.tg_chat_id, buildTgText(userAlerts, marketCtx)); if (ok) notified = true }
+        if (tgToken) { const ok = await sendTg(tgToken, user.tg_chat_id, buildTgText(userAlerts, marketCtx, openingWindow)); if (ok) notified = true }
       }
       if (notified) sent++
     }
 
-    return res.status(200).json({ sent, symbols, bias, scannedAt })
+    return res.status(200).json({ sent, signalsConsidered: allSignals.length, bias: marketCtx.bias, openingWindow, scannedAt })
   } catch (e) {
     console.error('alerts/send fatal:', e)
     return res.status(500).json({ error: e.message })
