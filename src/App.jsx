@@ -899,6 +899,11 @@ export default function App(props={}) {
     }
   }, [tab])
   const [paperToast, setPaperToast] = useState('')        // confirmation toast
+  // Entry-gating confirmation modal. Holds the pending trade row + the specific
+  // risk reasons (hardBlocks + gap-play warning) that tripped the gate, so the
+  // user sees WHY before confirming rather than logging a bad-timing entry
+  // blind. null = no modal open. See gateEntry() / pushToJournal() below.
+  const [entryGate, setEntryGate] = useState(null)        // { row, blocks:[], gapWarn:'' } | null
   const [toolsTab,   setToolsTab]   = useState('settings')
   const [feedbackText,    setFeedbackText]    = useState('')
   const [feedbackType,    setFeedbackType]    = useState('suggestion')
@@ -2469,7 +2474,40 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     return m ? parseFloat(m[0]) : null
   }
 
+  // ── Entry gating ──────────────────────────────────────────────────────────
+  // A valid signal can still be a bad ENTRY at this exact moment — the two
+  // cases we already detect but only surfaced as passive text before now:
+  //   1. hardBlocks (chasing >2%, elevated IV) — already an array on every row
+  //   2. ⚡ GAP PLAY warning — an earnings-gap-aligned setup where the thesis is
+  //      fine but premium is expanded and the right move is "enter on pullback,
+  //      size 50%", NOT an immediate market-order entry. This raises a WARNING
+  //      (not a hardBlock) in convictionScore.cjs, so a hardBlocks-only check
+  //      would miss exactly the case this gate exists for — hence matching the
+  //      stable ⚡ GAP PLAY marker in warnings too.
+  // When either fires, pushToJournal opens a confirmation modal surfacing the
+  // specific reason(s) instead of silently logging. Deliberately a confirm step,
+  // not a hard block: the setup can be legitimately taken by a user who
+  // understands the timing — the goal is an INFORMED entry, not a forbidden one.
+  const GAP_PLAY_MARKER = '⚡ GAP PLAY'
+  const collectGateReasons = r => {
+    const blocks  = Array.isArray(r?.hardBlocks) ? r.hardBlocks : []
+    const gapWarn = (Array.isArray(r?.warnings) ? r.warnings : [])
+                      .find(w => typeof w === 'string' && w.includes(GAP_PLAY_MARKER)) || ''
+    return { blocks, gapWarn }
+  }
+
   const pushToJournal = async r => {
+    const { blocks, gapWarn } = collectGateReasons(r)
+    if (blocks.length > 0 || gapWarn) {
+      // Trip the gate — surface why, wait for explicit confirm. The actual
+      // logging happens in doPushToJournal, called from the modal's confirm.
+      setEntryGate({ row: r, blocks, gapWarn })
+      return
+    }
+    return doPushToJournal(r)
+  }
+
+  const doPushToJournal = async r => {
     const localId = Date.now()+''
     const strikeNum  = parseStrikeNum(r.strikeStr)
     // r.mid and r.entry are formatted strings like "$4.10" or "$3.89 – $4.30"
@@ -4414,6 +4452,70 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           boxShadow:`0 4px 20px ${C.green}66`,
           animation:'toastIn .2s ease',whiteSpace:'nowrap',
         }}>{paperToast}</div>
+      )}
+
+      {/* ── ENTRY-GATING CONFIRMATION MODAL ─────────────────────────────────
+          Opens when a scan/alert row trips the entry gate (hardBlock or
+          ⚡ GAP PLAY warning). Surfaces the specific reason(s) and requires an
+          explicit confirm before logging — a bad-timing entry is possible but
+          never silent. Cancel closes with no side effect. */}
+      {entryGate && (
+        <div
+          onClick={()=>setEntryGate(null)}
+          style={{
+            position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,0.62)',
+            display:'flex',alignItems:'center',justifyContent:'center',padding:20,
+            animation:'toastIn .15s ease',
+          }}>
+          <div
+            onClick={e=>e.stopPropagation()}
+            style={{
+              background:C.card||C.bg,border:`1px solid ${C.orange}55`,borderRadius:12,
+              maxWidth:440,width:'100%',padding:'22px 22px 18px',
+              boxShadow:'0 12px 48px rgba(0,0,0,0.5)',
+            }}>
+            <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}>
+              <span style={{fontSize:20}}>⚠️</span>
+              <span style={{fontSize:15,fontWeight:700,color:C.text||'#f3ede2'}}>
+                Check the entry before logging {entryGate.row?.ticker||entryGate.row?.sym||''}
+              </span>
+            </div>
+            <div style={{fontSize:12,color:C.subtext||C.dim,lineHeight:1.6,marginBottom:14}}>
+              The thesis can still be valid — but this is flagged as a poor moment to enter at full size. Read the reason{(entryGate.blocks.length + (entryGate.gapWarn?1:0))>1?'s':''} below, then decide.
+            </div>
+
+            <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:18}}>
+              {entryGate.gapWarn && (
+                <div style={{
+                  background:`${C.orange}14`,border:`1px solid ${C.orange}40`,borderRadius:7,
+                  padding:'9px 11px',fontSize:11.5,color:C.text||'#f3ede2',lineHeight:1.6,
+                }}>{entryGate.gapWarn}</div>
+              )}
+              {entryGate.blocks.map((b,i)=>(
+                <div key={i} style={{
+                  background:`${C.red||'#d9534f'}12`,border:`1px solid ${(C.red||'#d9534f')}40`,borderRadius:7,
+                  padding:'9px 11px',fontSize:11.5,color:C.text||'#f3ede2',lineHeight:1.6,
+                }}>{b}</div>
+              ))}
+            </div>
+
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button className="hv"
+                onClick={()=>setEntryGate(null)}
+                style={{
+                  background:'transparent',border:`1px solid ${C.subtext||C.dim}55`,
+                  color:C.subtext||C.dim,fontWeight:600,padding:'8px 16px',borderRadius:6,
+                  fontSize:12,cursor:'pointer',
+                }}>Cancel</button>
+              <button className="hv"
+                onClick={()=>{ const row = entryGate.row; setEntryGate(null); doPushToJournal(row) }}
+                style={{
+                  background:C.orange,border:'none',color:C.bg,fontWeight:700,
+                  padding:'8px 16px',borderRadius:6,fontSize:12,cursor:'pointer',
+                }}>Log entry anyway</button>
+            </div>
+          </div>
+        </div>
       )}
 
 
