@@ -280,19 +280,26 @@ module.exports = async function handler(req, res) {
   // it should always run its normal course regardless of backlog size.
   const burndownMode = req.query.burndown === '1'
   if (burndownMode) {
+    // Count only the timeframes burndown actually processes (Quick+Swing) —
+    // "backlog empty" for burndown means those are done, regardless of any
+    // remaining long-dated LEAPs (which the nightly cron owns). This count now
+    // rides the partial index idx_signal_history_unresolved_primary (~200ms,
+    // was ~9.2s full-scan which timed out the client and silently failed the
+    // guard open — that's why the guard wasn't working).
     const { count, error: countErr } = await client
       .from('signal_history')
       .select('id', { count: 'exact', head: true })
       .is('outcome', null)
       .eq('is_lifecycle_primary', true)
+      .in('timeframe', ['Quick (5–14 DTE)', 'Swing (21–45 DTE)'])
     if (countErr) {
-      console.error('[resolve-outcomes] burndown guard count failed:', countErr.message)
+      console.error('[resolve-outcomes] burndown guard count failed:', countErr.message || JSON.stringify(countErr))
       // fall through and run normally rather than block on a transient count error
     } else if ((count || 0) === 0) {
-      console.log('[resolve-outcomes] burndown guard: backlog empty, no-op — safe to remove the */5 burndown cron')
+      console.log('[resolve-outcomes] burndown guard: Quick+Swing backlog empty, no-op — safe to remove the */5 burndown cron')
       return res.status(200).json({ burndown: true, backlogEmpty: true, checked: 0, resolved: 0 })
     } else {
-      console.log(`[resolve-outcomes] burndown guard: ${count} unresolved remaining, proceeding`)
+      console.log(`[resolve-outcomes] burndown guard: ${count} Quick+Swing unresolved remaining, proceeding`)
     }
   }
 
@@ -312,11 +319,28 @@ module.exports = async function handler(req, res) {
   // point. The outcome gets propagated to every row in the lifecycle below
   // (not just the primary), so QA queries against any individual row still
   // see the real, correct final result.
-  const { data: rows, error: fetchErr } = await client
+  let query = client
     .from('signal_history')
     .select('*')
     .is('outcome', null)
     .eq('is_lifecycle_primary', true)
+
+  // BURNDOWN MODE targeting: the oldest unresolved rows are LEAP/Deep LEAP
+  // with 125-198 day walk spans. Each makes one daily-history Tradier call
+  // PER trading day toward a 4-12mo expiry — a single Deep LEAP can burn
+  // 100+ calls, and (being long-dated) usually returns _stillOpen anyway,
+  // then sits at the front of the ORDER BY scanned_at queue to be re-walked
+  // next run. That tarpit is why each burndown run spent ~1,100 calls but
+  // resolved only ~10 rows. In burndown mode we therefore process ONLY the
+  // short-dated, cheap-to-walk, actually-resolvable timeframes (Quick 5-14
+  // DTE, Swing 21-45 DTE — ~7,500 rows, 9-27 day spans). LEAP/Deep LEAP are
+  // left to the nightly full-run cron (0 23), which has no such filter. This
+  // is a burndown-only optimization; the nightly cron still covers everything.
+  if (burndownMode) {
+    query = query.in('timeframe', ['Quick (5–14 DTE)', 'Swing (21–45 DTE)'])
+  }
+
+  const { data: rows, error: fetchErr } = await query
     .order('scanned_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
