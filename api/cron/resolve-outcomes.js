@@ -341,6 +341,19 @@ module.exports = async function handler(req, res) {
   }
 
   const { data: rows, error: fetchErr } = await query
+    // Second tarpit fix: order untried rows (resolve_attempts null/0) BEFORE
+    // already-retried ones. Without this, a row stuck on its 4th failed
+    // attempt (unconfirmable-but-in-retention-window) sits in the exact same
+    // scanned_at position every run and keeps re-consuming a batch slot
+    // alongside rows that have never been looked at yet — confirmed live:
+    // TMO260710P00500000 appeared in 6+ consecutive burndown runs without
+    // resolving, at ~950 Tradier calls/run for ~3 net resolutions/run.
+    // resolve_attempts is NULL for never-attempted rows, which Postgres sorts
+    // first under NULLS FIRST (the default for ascending) — exactly the
+    // order we want, no coalesce needed. Already-struggling rows still get a
+    // turn (they're just deprioritized, not excluded) and still dead-letter
+    // normally via MAX_RETRIES once they do come up.
+    .order('resolve_attempts', { ascending: true, nullsFirst: true })
     .order('scanned_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
