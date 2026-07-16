@@ -72,6 +72,9 @@ module.exports = async function handler(req, res) {
       .select('outcome, score')
       .eq('is_lifecycle_primary', true)
       .not('outcome', 'is', null)
+      // See track-record.js: AMBIGUOUS (daily-bar both-crossed) is resolved
+      // but undeterminable — excluded from win-rate denominators everywhere.
+      .neq('outcome', 'AMBIGUOUS')
       .not('score', 'is', null)
     if (tf) query = query.eq('timeframe', tf)
 

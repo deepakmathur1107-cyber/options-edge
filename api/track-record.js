@@ -51,6 +51,14 @@ module.exports = async function handler(req, res) {
       .select('outcome')
       .eq('is_lifecycle_primary', true)
       .not('outcome', 'is', null)
+      // AMBIGUOUS = daily-bar fallback where a single daily bar crossed BOTH
+      // target and stop (unknown intraday order). Deliberately excluded from
+      // the win-rate denominator: it's a resolved-but-undeterminable outcome,
+      // and counting it (as neither a win) would silently deflate the rate.
+      // Without this, .not('outcome','is',null) would sweep it in as
+      // "resolved" — the exact filter-consistency trap this codebase has hit
+      // before. Keep this exclusion wherever a win-rate denominator is built.
+      .neq('outcome', 'AMBIGUOUS')
     if (tf) query = query.eq('timeframe', tf)
 
     const { data, error } = await query

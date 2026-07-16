@@ -25,6 +25,20 @@ const { tradingDaysBetween } = require('../_lib/marketCalendar')
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a row (spec §5)
 
+// Tradier's /markets/timesales retains 1-min bars for only ~10 calendar days
+// (confirmed against Tradier docs, 2026-07). Any crossing day older than this
+// can NEVER be confirmed at 1-min resolution again — the data is gone. The
+// original resolver assumed timesales was durably available whenever we got
+// around to it; it isn't. We use a conservative 9-day cutoff (one day of
+// safety margin under the documented 10) to decide when to stop attempting
+// intraday confirmation and fall back to daily-bar-only resolution.
+const TIMESALES_RETENTION_DAYS = 9
+
+function daysAgo(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00')
+  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24))
+}
+
 let _sb = null
 function sb() {
   if (!_sb && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -60,6 +74,24 @@ function findFirstThresholdHit(bars, targetPrice, stopPrice) {
   return null
 }
 
+// Looks up the UNDERLYING stock's closing price on the resolution day, so we
+// can natively record the entry-vs-exit stock move (distinguishing a genuine
+// wrong-direction loss from a theta/IV-decay loss). Uses /markets/history for
+// the plain ticker — that endpoint covers a stock's full lifetime, so unlike
+// option timesales this works for aged-out rows too. Returns null on any
+// failure; underlying_price_at_resolution is nullable and NULL honestly means
+// "couldn't capture" rather than a fabricated number.
+async function getUnderlyingCloseOn(ticker, day, rateTracker) {
+  if (!day) return null
+  try {
+    const bars = await getOptionHistory(ticker, day, day, rateTracker) // symbol-agnostic /markets/history
+    const close = bars[0]?.close
+    return (typeof close === 'number' && !isNaN(close)) ? close : null
+  } catch {
+    return null
+  }
+}
+
 // Resolves a single signal_history row. Returns a Supabase update payload,
 // or null if the row should be left untouched this run (still genuinely
 // unresolved, no error).
@@ -82,6 +114,14 @@ async function resolveOne(row, rateTracker) {
   const startDay = new Date(scannedDate); startDay.setDate(startDay.getDate() + 1)
   const days = tradingDaysBetween(startDay, walkEnd)
 
+  // Tracks whether the walk hit a crossing day that we COULD have confirmed
+  // at 1-min but timesales came back empty (real inconsistency, worth
+  // retrying) vs. a crossing day already past the retention window (never
+  // retryable — must go to daily-bar fallback). These drive different caller
+  // behavior: the former bumps the retry counter, the latter goes straight
+  // to fallback resolution rather than pretending a future retry might help.
+  let sawUnconfirmableRecentCrossing = false
+
   for (const day of days) {
     // Step 1 — cheap pre-check via daily history. Skip the 1-min pull
     // entirely if neither threshold could possibly have been crossed that
@@ -89,27 +129,68 @@ async function resolveOne(row, rateTracker) {
     const dailyBars = await getOptionHistory(occSymbol, day, day, rateTracker)
     const dailyBar = dailyBars[0]
     if (!dailyBar) {
-      // No data this specific day — could be a real gap (holiday miscount,
-      // data lag) or an illiquid contract with zero prints that day. This is
-      // NOT tracked per-day; a single missing day mid-walk is simply skipped
-      // and the walk continues to the next trading day. resolve_attempts
-      // (incremented by the caller) only fires if the ENTIRE walk for this
-      // row completes with no terminal event AND no usable expiry-close
-      // price — i.e. "this row never resolved this run," not "this one day
-      // had no data."
+      // No data this specific day — see note below; single missing day is
+      // skipped, walk continues.
       continue
     }
     const couldHaveCrossed = dailyBar.high >= targetPrice || dailyBar.low <= stopPrice
     if (!couldHaveCrossed) continue
 
-    // Step 2 — real 1-min bars for this specific day only.
+    // A crossing is indicated. Decide HOW to confirm based on the day's age.
+    const ageDays = daysAgo(day)
+
+    if (ageDays > TIMESALES_RETENTION_DAYS) {
+      // Intraday data for this day is permanently gone. Do NOT burn a
+      // timesales call that we know will return nothing. Resolve from the
+      // daily bar alone, recording the reduced confidence explicitly so
+      // win-rate analysis can weight/segment these separately from
+      // intraday-confirmed results.
+      const dHitTarget = dailyBar.high >= targetPrice
+      const dHitStop   = dailyBar.low  <= stopPrice
+
+      if (dHitTarget && dHitStop) {
+        // Both barriers within one DAILY bar (up to 6.5h apart, unknown
+        // order). We have zero information on sequence — forcing a LOSS here
+        // would fabricate a directional result and systematically depress
+        // win rate on exactly the highest-volatility days (widest range =
+        // most likely to span both). Mark ambiguous, exclude from win-rate.
+        return {
+          outcome: 'AMBIGUOUS',
+          resolved_at: new Date().toISOString(),
+          resolution_method: 'daily_bar_both_crossed_ambiguous',
+          _resolvedDay: day,
+        }
+      }
+      if (dHitTarget) {
+        return {
+          outcome: 'WIN',
+          hit_target_at: `${day}T00:00:00Z`, // day-level only; no intraday timestamp available
+          resolved_at: new Date().toISOString(),
+          resolution_method: 'daily_bar_fallback_target',
+          _resolvedDay: day,
+        }
+      }
+      // dHitStop
+      return {
+        outcome: 'LOSS',
+        hit_stop_at: `${day}T00:00:00Z`,
+        resolved_at: new Date().toISOString(),
+        resolution_method: 'daily_bar_fallback_stop',
+        _resolvedDay: day,
+      }
+    }
+
+    // Recent enough — intraday confirmation is still possible. Step 2: real
+    // 1-min bars for this specific day only.
     const bars = await getOptionTimesales(occSymbol, `${day} 09:30`, `${day} 16:00`, rateTracker)
     if (bars.length === 0) {
-      // Daily bar said it crossed a threshold but timesales returned nothing
-      // for the same day — data inconsistency. Don't guess; treat as
-      // unresolved-this-day and let the retry counter handle persistent
-      // failures (spec §5, "no data ever returned").
-      console.warn(`[resolve-outcomes] ${occSymbol} ${day}: daily bar suggested a threshold cross but timesales returned 0 bars`)
+      // Daily bar said it crossed but timesales returned nothing, on a day
+      // still INSIDE the retention window — genuine transient inconsistency,
+      // worth a retry next run. Flag it so the caller bumps resolve_attempts
+      // (the old code left this path unflagged, which is exactly why ~9,345
+      // rows cycled as _stillOpen forever without ever dead-lettering).
+      console.warn(`[resolve-outcomes] ${occSymbol} ${day}: daily bar suggested a threshold cross but timesales returned 0 bars (day age ${ageDays}d, still within retention)`)
+      sawUnconfirmableRecentCrossing = true
       continue
     }
     const hit = findFirstThresholdHit(bars, targetPrice, stopPrice)
@@ -120,19 +201,27 @@ async function resolveOne(row, rateTracker) {
         hit_stop_at:   hit.outcome === 'LOSS' ? hit.at : null,
         resolved_at: new Date().toISOString(),
         resolution_method: hit.type,
+        _resolvedDay: day,
       }
     }
-    // Daily bar's range suggested a cross but the 1-min walk didn't confirm
-    // it — possible with Tradier's vwap/print-based highs/lows not aligning
-    // perfectly between daily and intraday aggregation. Move on to the next
-    // day rather than treat this as a hard error.
+    // Daily range suggested a cross but 1-min walk didn't confirm — daily/
+    // intraday aggregation mismatch. Continue to next day.
   }
 
   // No terminal event found in the walked range.
   if (today < expiryDate) {
-    // Still open — genuinely unresolved, not an error. Leave outcome NULL,
-    // bump the attempt counter so persistent data gaps still eventually
-    // dead-letter (see caller).
+    if (sawUnconfirmableRecentCrossing) {
+      // We DID see a crossing indicated by a daily bar but couldn't confirm
+      // it intraday, and the day is still inside the retention window. This
+      // is the retryable failure mode — bump the counter so it eventually
+      // dead-letters instead of cycling forever (the original bug). The
+      // caller treats _retryableGap distinctly from a clean still-open row.
+      return { _retryableGap: true }
+    }
+    // Genuinely still open — no crossing indicated yet, position simply
+    // hasn't resolved. NOT an error, do NOT bump the retry counter (bumping
+    // here would wrongly dead-letter healthy open LEAPs/swings that just
+    // need more time).
     return { _stillOpen: true }
   }
 
@@ -162,6 +251,7 @@ async function resolveOne(row, rateTracker) {
     pnl_pct_at_expiry: pnlPct,
     resolved_at: new Date().toISOString(),
     resolution_method: pnlPct > 0 ? 'expired_partial' : 'expired_flat',
+    _resolvedDay: lastTradingDay,
   }
 }
 
@@ -217,7 +307,13 @@ module.exports = async function handler(req, res) {
     try {
       const update = await resolveOne(row, rateTracker)
       if (update._stillOpen) { stillOpen++; continue }
-      if (update._noUsableData) {
+
+      // _retryableGap and _noUsableData share the same retry-cap machinery:
+      // both are "couldn't resolve this run, might later, but must eventually
+      // dead-letter rather than cycle forever." _retryableGap is the fix for
+      // the original silent-stall bug (crossing indicated, intraday
+      // unconfirmable, day still within retention window).
+      if (update._retryableGap || update._noUsableData) {
         const attempts = (row.resolve_attempts || 0) + 1
         if (attempts >= MAX_RETRIES) {
           dataUnavailable++
@@ -238,6 +334,14 @@ module.exports = async function handler(req, res) {
         }
         continue
       }
+
+      // Terminal resolution. Enrich with the underlying's price on the
+      // resolution day before writing (best-effort; NULL if unavailable).
+      const underlyingAtResolution = await getUnderlyingCloseOn(row.ticker, update._resolvedDay, rateTracker)
+      if (underlyingAtResolution !== null) {
+        update.underlying_price_at_resolution = underlyingAtResolution
+      }
+      delete update._resolvedDay // internal-only, not a real column
       // Propagate to every row sharing this lifecycle, not just the primary
       // row we walked — the duplicate scans of this same real signal
       // (still kept for QA history, see scan.js's lifecycle comment) should
