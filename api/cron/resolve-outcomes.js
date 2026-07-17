@@ -364,12 +364,43 @@ module.exports = async function handler(req, res) {
 
   let resolved = 0, stillOpen = 0, dataUnavailable = 0, errors = 0
   const results = []
+  let circuitBroken = false
 
   for (const row of rows) {
     if (Date.now() - startedAt > MAX_MS) {
       console.warn('[resolve-outcomes] time budget reached, stopping early this run')
       break
     }
+
+    // Circuit breaker (added 2026-07-17): confirmed live overnight that
+    // sustained Tradier 400s get silently absorbed by tFetch (returns null on
+    // any !r.ok, indistinguishable from a real "no data" day — see
+    // getOptionHistory/getOptionTimesales in tradierClient.js). That let a
+    // degraded API masquerade as a healthy resolver making no progress: 4
+    // consecutive runs burned ~1,250 calls each with statusCounts climbing to
+    // 66 x 400, while resolved stayed flat at 0. Rather than change tFetch's
+    // return contract (used by scan.js and others — too broad a change to
+    // make safely tonight), detect the degradation from tracker.statusCounts,
+    // which already exists, and stop early rather than burn the rest of the
+    // batch's Tradier budget for zero benefit. Rows not yet reached this run
+    // are simply left untouched (same as the existing time-budget-exceeded
+    // path) — no resolve_attempts penalty, they're picked up fresh next run
+    // once the API (hopefully) recovers.
+    // Thresholds: only evaluate once tracker.calls >= 50 (avoid tripping on
+    // early-run noise), trip at >25% non-200 responses.
+    if (rateTracker.calls >= 50) {
+      const okCount = rateTracker.statusCounts[200] || 0
+      const failureRate = 1 - (okCount / rateTracker.calls)
+      if (failureRate > 0.25) {
+        console.warn(`[resolve-outcomes] ⚠️ CIRCUIT BREAKER — stopping early: ` +
+          `${rateTracker.calls} calls, ${Math.round(failureRate * 100)}% non-200 ` +
+          `(statusCounts=${JSON.stringify(rateTracker.statusCounts)}). ` +
+          `Tradier appears degraded — not burning the rest of this batch's budget for no progress.`)
+        circuitBroken = true
+        break
+      }
+    }
+
     try {
       const update = await resolveOne(row, rateTracker)
       if (update._stillOpen) { stillOpen++; continue }
@@ -434,6 +465,7 @@ module.exports = async function handler(req, res) {
   return res.status(200).json({
     checked: rows.length,
     resolved, stillOpen, dataUnavailable, errors,
+    circuitBroken, // true if this run stopped early due to a Tradier failure-rate spike, not the normal batch/time limits
     durationMs,
     rateHealth: {
       tradierCalls: rateTracker.calls,
