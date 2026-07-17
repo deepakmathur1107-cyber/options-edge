@@ -2624,11 +2624,27 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     setTimeout(()=>setPaperToast(''), 4000)
   }
 
-  // ─── Generate SPX/NDX index alerts across all timeframes ─────────────────
+  // ─── Generate SPY/QQQ index-proxy alerts across all timeframes ───────────
+  // (was SPX/NDX until 2026-07-17 — switched to the ETF proxies for
+  // retail-accessible contract sizing; see MAX_PREMIUM_PER_CONTRACT below)
+  // MAX_PREMIUM_PER_CONTRACT (added 2026-07-17): SPX/NDX are cash-settled
+  // index options — at ~7,400 and ~28,000 points respectively, even a
+  // short-DTE near-ATM contract runs into the thousands of dollars per
+  // contract (100x multiplier), regardless of timeframe. That's a notional
+  // problem, not a time-value one — shortening DTE alone doesn't fix it.
+  // Switched the underlying to SPY/QQQ (the standard retail-accessible
+  // proxies, same directional exposure, ~1/10th-ish the per-contract cost,
+  // tighter spreads) AND added this premium cap as a second, independent
+  // filter so nothing above a sane dollar amount surfaces regardless of
+  // which timeframe/underlying combination produces it. $1,500/contract is
+  // a starting default — tune based on subscriber feedback, not a
+  // rigorously-derived number.
+  const MAX_PREMIUM_PER_CONTRACT = 1500
+
   const generateIndexAlerts = useCallback(async()=>{
     setIndexAlertsLoading(true); setIndexAlerts([])
     const results = []
-    for (const sym of ['SPX','NDX']) {
+    for (const sym of ['SPY','QQQ']) {
       try {
         const quote = await getQuote(sym)
         if (!quote) continue
@@ -2657,6 +2673,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             const best = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
             const bid=parseFloat(best.bid||0), ask=parseFloat(best.ask||0), mid=(bid+ask)/2
             if (mid===0) continue
+            if (mid*100 > MAX_PREMIUM_PER_CONTRACT) continue // premium cap — see comment above
             const ivRaw3=parseFloat(best.greeks?.mid_iv)
             const iv=(!isNaN(ivRaw3)&&ivRaw3>0)?ivRaw3:0, delta=best.greeks?.delta||null
 
@@ -2671,7 +2688,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             if(iv>=0.10&&iv<=0.40){score+=12;reasons.push(`IV ${(iv*100).toFixed(0)}% — tradeable`)}
             else if(iv>0.50){warnings.push(`Elevated IV ${(iv*100).toFixed(0)}%`)}
             if(delta&&Math.abs(delta)>=0.30&&Math.abs(delta)<=0.70){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
-            // Bonus: both SPX + NDX moving together
+            // Bonus: broad market regime (real SPX/NDX index direction) confirms
+            // this SPY/QQQ trade's bias — SPY tracks SPX, QQQ tracks NDX, so
+            // checking the underlying index's own move is still the right
+            // confirmation signal even though the panel trades the ETF.
             if(marketConviction&&((marketConviction.spxChg>0&&!bearish)||(marketConviction.spxChg<0&&bearish))){score+=8;reasons.push('Market aligned')}
             score=Math.min(96,Math.max(30,score))
 
@@ -3064,12 +3084,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
             )}
 
-            {/* ── Today's Signals (SPX/NDX, was "Index Setups") ── */}
+            {/* ── Today's Signals (SPY/QQQ, was "Index Setups", was SPX/NDX until 2026-07-17 — switched for retail-accessible contract sizing) ── */}
             <div className="dash-today-signals" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
                   <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>TODAY'S SIGNALS</div>
-                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPX / NDX {'·'} all timeframes {'·'} sorted by conviction</div>
+                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPY / QQQ {'·'} all timeframes {'·'} sorted by conviction {'·'} under ${MAX_PREMIUM_PER_CONTRACT}/contract</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background: indexAlertsLoading ? C.cardAlt : C.green,
@@ -3085,7 +3105,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
                 <div style={{fontSize:12,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
-                  {'Hit GENERATE to scan SPX & NDX across all 4 timeframes'}
+                  {'Hit GENERATE to scan SPY & QQQ across all 4 timeframes'}
                 </div>
               )}
               {indexAlerts.slice(0,6).map((al,i)=>{
