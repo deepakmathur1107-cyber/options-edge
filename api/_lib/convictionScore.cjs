@@ -76,11 +76,28 @@
 // table (that was the rejected "4 separate models" proposal) — same blocks,
 // same formula shape, just different multipliers/bands per timeframe so one
 // function stays the single source of truth.
+// pos52Mult (added 2026-07-17): dampens the 52w-proximity TAILWIND bonus
+// specifically for Quick. Evidence: win-rate analysis on 999 resolved Quick
+// trades showed 52w-tagged trades underperforming non-52w trades by ~5pts
+// (31.3% vs 36.6%, n=313 vs 686) — and 52w-tagged trades are disproportionately
+// concentrated in the 85+ score bucket (63.6% vs 26-33% in lower buckets),
+// contributing to that bucket's 25.4% win rate (vs 50% breakeven for Quick).
+// NOT applied to Swing/LEAP/Deep LEAP: we don't have equivalent per-timeframe
+// evidence there yet — Swing's score was found to be non-predictive across
+// ALL buckets in the same analysis, a different (and currently unfixed)
+// problem this multiplier does not address. Also NOT applied to the
+// against-trend PENALTY branches (calls-near-52w-low, puts-near-52w-high) —
+// only evidenced against the bonus/tailwind case.
+// Deliberately conservative (0.6, ~40% reduction) rather than zeroing the
+// term out: the analysis found a real but partial effect (doesn't fully
+// explain the 85+ bucket's underperformance on its own), so this is a
+// dial-back, not a claim the term is worthless. Revisit alongside the still-
+// unexplained residual gap once more resolved data accumulates.
 const TF_WEIGHT_PROFILES = {
-  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6 },
-  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0 },
-  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4 },
-  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6 },
+  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6 },
+  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0 },
+  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4, pos52Mult: 1.0 },
+  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6, pos52Mult: 1.0 },
 }
 const DEFAULT_TF_PROFILE = TF_WEIGHT_PROFILES['Swing (21–45 DTE)']
 
@@ -251,19 +268,19 @@ function scoreConviction(p) {
   // structure is still genuinely informative, not redundant.
   if (optType === 'call') {
     if (pos52 > 0.80) {
-      const bonus = gapAligned ? 3 : 8
+      const bonus = Math.round((gapAligned ? 3 : 8) * tfProfile.pos52Mult)
       score += bonus
       reasons.push(gapAligned ? 'Near 52w high — likely the same move as the gap above, partial credit' : 'Near 52w high — uptrend tailwind')
     }
-    else if (pos52 > 0.65) { score += gapAligned ? 2 : 4 }
+    else if (pos52 > 0.65) { score += Math.round((gapAligned ? 2 : 4) * tfProfile.pos52Mult) }
     else if (pos52 < 0.20) { score -= 8; warnings.push('Near 52w low — calls against trend, avoid') }
   } else {
     if (pos52 < 0.20) {
-      const bonus = gapAligned ? 3 : 8
+      const bonus = Math.round((gapAligned ? 3 : 8) * tfProfile.pos52Mult)
       score += bonus
       reasons.push(gapAligned ? 'Near 52w low — likely the same move as the gap above, partial credit' : 'Near 52w low — downtrend tailwind for puts')
     }
-    else if (pos52 < 0.35) { score += gapAligned ? 2 : 4 }
+    else if (pos52 < 0.35) { score += Math.round((gapAligned ? 2 : 4) * tfProfile.pos52Mult) }
     else if (pos52 > 0.80) { score -= 8; warnings.push('Near 52w high — puts against trend, trading in uptrend') }
   }
 
