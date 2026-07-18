@@ -290,7 +290,7 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
 // any future caller that can't. Callers that have S/R data (or none) pass it
 // in as a plain object; scanTicker never reaches out for it itself.
 // ─────────────────────────────────────────────────────────────────────────
-function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels = null, incumbentSide = null }) {
+function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels = null, incumbentSide = null, trendContext = null }) {
   const tfCfg2 = TF_CONFIG[tf] || TF_CONFIG['Swing (21–45 DTE)'];
   try {
     if (!quote) return null;
@@ -397,7 +397,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
         spxChgToday, ndxChgToday, breakevenReqPct,
         isMorningWindow: isMorning2, fundamentals: fund, now: now2, tf,
         gexSign: td.gexSign, gexMagnitude01: td.gexMagnitude01,
-        srPosition, srDistPct,
+        srPosition, srDistPct, trendDirection: trendContext?.direction || 'unknown',
       });
 
       return { td, breakevenReqPct, ...scored };

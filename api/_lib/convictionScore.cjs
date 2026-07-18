@@ -93,11 +93,26 @@
 // explain the 85+ bucket's underperformance on its own), so this is a
 // dial-back, not a claim the term is worthless. Revisit alongside the still-
 // unexplained residual gap once more resolved data accumulates.
+// counterTrendPenalty (added 2026-07-18): dampens setups fighting the long-
+// term (SMA50/SMA200) trend — a PUT when trend='bullish', or a CALL when
+// trend='bearish'. Evidence: a clean natural-experiment on Swing puts (same
+// entry cohort, June 22/29, split only by hold duration) showed win rate
+// roughly HALVE from Quick's 5-14 day hold (34-36%) to Swing's 21-45 day
+// hold (18-24%) — consistent with short-term-correct bearish calls getting
+// overrun by a longer-term bullish grind the longer they're held. Quick
+// shows ~0 duration effect on the SAME cohort, hence 0 penalty there.
+// Values scale with duration under the same "trend has more time to
+// dominate" logic, but LEAP/Deep LEAP values are NOT independently evidenced
+// yet (no resolved LEAP/Deep LEAP sample large enough to check) — treated as
+// a reasonable extrapolation of the confirmed Swing effect, not equally
+// certain. Revisit magnitude once the backtest endpoint (trend-backtest.js)
+// and/or real forward data validates it — this is a first-pass value, not
+// tuned/optimized.
 const TF_WEIGHT_PROFILES = {
-  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6 },
-  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0 },
-  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4, pos52Mult: 1.0 },
-  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6, pos52Mult: 1.0 },
+  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6, counterTrendPenalty: 0 },
+  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0, counterTrendPenalty: 12 },
+  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4, pos52Mult: 1.0, counterTrendPenalty: 15 },
+  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6, pos52Mult: 1.0, counterTrendPenalty: 18 },
 }
 const DEFAULT_TF_PROFILE = TF_WEIGHT_PROFILES['Swing (21–45 DTE)']
 
@@ -107,6 +122,7 @@ function scoreConviction(p) {
     pos52, dte, spxChgToday = 0, ndxChgToday = 0, breakevenReqPct,
     isMorningWindow, fundamentals, now = new Date(), tf,
     gexSign = null, gexMagnitude01 = null, srPosition = null, srDistPct = null,
+    trendDirection = 'unknown',
   } = p
 
   const tfProfile = TF_WEIGHT_PROFILES[tf] || DEFAULT_TF_PROFILE
@@ -180,6 +196,26 @@ function scoreConviction(p) {
     score += 6; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}%`)
   } else if (marketFalling && optType === 'put') {
     score += 6; reasons.push(`Market tailwind — SPX ${spxChgToday.toFixed(1)}% falling`)
+  }
+
+  // ── Long-term trend (SMA50/SMA200) ──────────────────────────────────────
+  // Distinct from the same-day "Market regime" block above: that's TODAY's
+  // single-day move, this is the multi-week/multi-month trend the position's
+  // HOLDING PERIOD is being entered into. See TF_WEIGHT_PROFILES comment for
+  // the evidence (clean natural-experiment on Swing puts). Dampens, never
+  // hard-blocks — a well-timed reversal call against the trend can still be
+  // right, this just reflects that it needs to overcome a real structural
+  // headwind the longer it's held. 'unknown'/'mixed' trend intentionally
+  // applies no penalty — don't penalize on a signal we're not confident about.
+  const counterTrend =
+    (optType === 'call' && trendDirection === 'bearish') ||
+    (optType === 'put'  && trendDirection === 'bullish')
+  if (counterTrend && tfProfile.counterTrendPenalty > 0) {
+    score -= tfProfile.counterTrendPenalty
+    warnings.push(
+      `Counter-trend — underlying is in a long-term ${trendDirection} trend (SMA50/SMA200), ` +
+      `${optType === 'put' ? 'puts' : 'calls'} face a structural headwind the longer this ${tf} position is held.`
+    )
   }
 
   // ── IV environment ───────────────────────────────────────────────────────

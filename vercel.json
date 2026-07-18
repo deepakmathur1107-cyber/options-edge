@@ -49,6 +49,9 @@
     "api/*.js": {
       "maxDuration": 30
     },
+    "api/admin/trend-backtest.js": {
+      "maxDuration": 280
+    },
     "api/user/*.js": {
       "maxDuration": 30
     },

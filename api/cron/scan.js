@@ -18,6 +18,7 @@ const { TF_CONFIG, pickExpiry, scanTicker, safeChgPct } = require('../_lib/scanL
 const { getFundamentals } = require('../_lib/fundamentals')
 const { getSRLevels } = require('../_lib/srLevels')
 const { SP500 } = require('../_lib/sp500')
+const { getTrendContext, getVix } = require('../_lib/trendContext')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -129,6 +130,20 @@ const getQuote    = async (sym, tracker) => { const d = await tFetch(`/markets/q
 const getExpiries = async (sym, tracker) => { const d = await tFetch(`/markets/options/expirations?symbol=${sym}&includeAllRoots=false`, tracker); return d?.expirations?.date || [] }
 const getChain     = async (sym, exp, tracker) => { const d = await tFetch(`/markets/options/chains?symbol=${sym}&expiration=${exp}&greeks=true`, tracker); return d?.options?.option || [] }
 
+// getHistory: generic /markets/history, symbol-agnostic — works for stock
+// tickers and index/VIX symbols, not just options, exactly like
+// tradierClient.js's getOptionHistory (which despite its name hits the same
+// generic endpoint). Added 2026-07-18 for the trend-context feature — scan.js
+// didn't previously need historical daily bars for anything. Same
+// bare-object-vs-array normalization as getChain/getOptionHistory above,
+// since Tradier's XML->JSON quirk applies here too.
+const getHistory = async (sym, startDate, endDate, tracker) => {
+  const d = await tFetch(`/markets/history?symbol=${sym}&interval=daily&start=${startDate}&end=${endDate}`, tracker)
+  const days = d?.history?.day
+  if (!days) return []
+  return Array.isArray(days) ? days : [days]
+}
+
 // BATCH_SIZE: conservative choice. Tradier's own docs don't publish a documented
 // max-symbols-per-call number for /markets/quotes (only third-party sources claim
 // "100" — not confirmed against Tradier's own documentation), so this stays well
@@ -214,6 +229,12 @@ module.exports = async function handler(req, res) {
     ndxChg = safeChgPct(ndxQ).pct
   } catch (e) { console.error('[cron/scan] market regime fetch failed:', e.message) }
 
+  // VIX — added 2026-07-18, LOG ONLY (not wired into scoring). See
+  // trendContext.js top-of-file comment for why: no new signal goes into
+  // live scoring without a log-first-then-validate period against real
+  // resolved outcomes first, per this week's 52w-bonus and momentum lessons.
+  const vix = await getVix(getQuote, rateTracker).catch(() => ({ level: null, chgPct: null }))
+
   const tickers = SP500
   let scanned = 0, qualified = 0, errors = 0
 
@@ -295,14 +316,19 @@ module.exports = async function handler(req, res) {
       // quote/chain calls, but it is a real blind spot worth closing in a
       // follow-up (route srLevels.js through the shared tFetch helper) rather
       // than silently accepting it indefinitely.
-      const [fund, srLevels] = await Promise.all([
+      const [fund, srLevels, trendContext] = await Promise.all([
         getFundamentals(ticker).catch(() => null),
         getSRLevels(ticker).catch(() => null),
+        // Trend context — added 2026-07-18. Gated the same way as fund/srLevels
+        // (score≥MIN_WRITE_SCORE already, this is the second pass) rather than
+        // fetched for the full universe — same "don't spend API budget on
+        // misses" rationale as the comment above this block.
+        getTrendContext(ticker, null, getHistory, rateTracker).catch(() => ({ direction: 'unknown', sma50: null, sma200: null })),
       ])
       if (fund || srLevels) {
         // Re-run with fundamentals AND S/R to apply large-cap/earnings
         // adjustments and the S/R structure scoring block.
-        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels, incumbentSide: incumbentMap.get(ticker) || null })
+        const r2 = scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, srLevels, incumbentSide: incumbentMap.get(ticker) || null, trendContext })
         if (r2) Object.assign(r, r2)
       }
 
@@ -441,6 +467,16 @@ module.exports = async function handler(req, res) {
         // same-day version has been checked against real data.
         regime_spx_chg_pct: spxChg,
         regime_ndx_chg_pct: ndxChg,
+        // Long-term trend + VIX — added 2026-07-18, the anticipated follow-up
+        // noted in the comment above (same-day regime alone can't explain
+        // multi-week Swing performance; see trendContext.js for the analysis
+        // that motivated this). long_term_trend feeds a scoring dampener for
+        // counter-trend Swing/LEAP/Deep LEAP setups (see convictionScore.cjs).
+        // vix_level/vix_chg_pct are LOG ONLY — not wired into scoring yet,
+        // same log-first-then-validate discipline as regime_spx_chg_pct above.
+        long_term_trend: trendContext?.direction || null,
+        vix_level: vix.level,
+        vix_chg_pct: vix.chgPct,
       }
       bufferedRows.push(historyRow)
 
