@@ -33,6 +33,12 @@ const { buildOccSymbol } = require('../_lib/occSymbol')
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const SHORTENED_HOLD_DAYS = 14 // matches Quick's upper DTE bound
 
+// Swing's real target/stop, matching TF_CONFIG in scanLogic.js exactly —
+// needed to assign an exact numeric P&L to WIN/LOSS cases (not just FLAT),
+// so every row has a comparable number for the expected-value query.
+const SWING_TARGET = 0.80
+const SWING_STOP   = -0.50
+
 let _sb = null
 function sb() {
   if (!_sb && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -67,7 +73,7 @@ module.exports = async function handler(req, res) {
     .eq('is_lifecycle_primary', true)
     .not('outcome', 'is', null)
     .neq('outcome', 'AMBIGUOUS')
-    .is('shortened_hold_outcome', null)
+    .is('shortened_hold_pnl_pct', null)
     .eq('timeframe', 'Swing (21–45 DTE)')
     .order('scanned_at', { ascending: true })
     .limit(BATCH_LIMIT)
@@ -102,40 +108,49 @@ module.exports = async function handler(req, res) {
       const cutoff = new Date(scannedAt)
       cutoff.setDate(cutoff.getDate() + SHORTENED_HOLD_DAYS)
 
-      let shortenedOutcome
+      let shortenedOutcome, shortenedPnlPct
       if (row.hit_target_at && new Date(row.hit_target_at) <= cutoff) {
         shortenedOutcome = 'WIN'
+        shortenedPnlPct = SWING_TARGET // exact +80%, matches how the real target-hit was defined
       } else if (row.hit_stop_at && new Date(row.hit_stop_at) <= cutoff) {
         shortenedOutcome = 'LOSS'
+        shortenedPnlPct = SWING_STOP // exact -50%
       } else {
         // Neither hit within the shortened window (or no hit timestamp at
         // all — e.g. an expiry-fallback row) — simulate a forced exit at
-        // the day-14 price. FLAT regardless of sign, per the strict-
-        // definition note above.
+        // the day-14 price. FLAT under the strict WIN-only definition
+        // (matches EXPIRED_PARTIAL/FLAT treatment elsewhere), but the
+        // NUMERIC pnl is what actually lets this row's real economic
+        // outcome — including avoided-loss cases — show up in an expected-
+        // value comparison, which a categorical label alone couldn't.
         const occSymbol = buildOccSymbol(row.ticker, row.option_type, row.primary_strike, row.expiry_raw)
         const cutoffStr = cutoff.toISOString().slice(0, 10)
-        // Small +/-2 day window in case the exact cutoff date has no bar
-        // (weekend/holiday) — take the nearest available close.
         const rangeStart = new Date(cutoff); rangeStart.setDate(rangeStart.getDate() - 2)
         const rangeEnd   = new Date(cutoff); rangeEnd.setDate(rangeEnd.getDate() + 2)
         const bars = await getOptionHistory(occSymbol, rangeStart.toISOString().slice(0,10), rangeEnd.toISOString().slice(0,10), rateTracker)
         if (!bars.length) {
           shortenedOutcome = 'unknown'
+          shortenedPnlPct = null
         } else {
-          // Closest bar to the exact cutoff date, not just the first one.
           const target = cutoff.getTime()
           const closest = bars.reduce((best, b) => {
             const bt = new Date(b.date || b.time || cutoffStr).getTime()
             const bestT = new Date(best.date || best.time || cutoffStr).getTime()
             return Math.abs(bt - target) < Math.abs(bestT - target) ? b : best
           }, bars[0])
-          shortenedOutcome = (typeof closest.close === 'number') ? 'FLAT' : 'unknown'
+          if (typeof closest.close === 'number' && row.entry_mid) {
+            shortenedOutcome = 'FLAT'
+            shortenedPnlPct = (closest.close - row.entry_mid) / row.entry_mid
+          } else {
+            shortenedOutcome = 'unknown'
+            shortenedPnlPct = null
+          }
         }
       }
 
       const { error: updateErr } = await client
         .from('signal_history')
-        .update({ shortened_hold_outcome: shortenedOutcome })
+        .update({ shortened_hold_outcome: shortenedOutcome, shortened_hold_pnl_pct: shortenedPnlPct })
         .eq('id', row.id)
       if (updateErr) {
         console.error(`[shortened-hold-backtest] update failed id=${row.id}:`, updateErr.message)
