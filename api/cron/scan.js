@@ -495,6 +495,11 @@ module.exports = async function handler(req, res) {
         // Phase 2 shadow reweight (2026-07-20) — see convictionScore.cjs
         // TF_WEIGHT_PROFILES comment. Never affects the live score/signal.
         shadow_technical_reweight_score: r.shadowTechnicalReweightScore ?? null,
+        // Measurement infrastructure — added 2026-07-21, per outside review.
+        // Neither affects scoring or the live signal; both are logged for
+        // future analysis. See scanLogic.js/convictionScore.cjs for details.
+        scoring_model_version: r.scoringModelVersion || null,
+        entry_spread_pct: r.entrySpreadPct ?? null,
         // Per-ticker news presence — added 2026-07-20, Phase 2 piece 2.
         // Quick only (null for other timeframes by construction — newsSignal
         // itself is null there, see the Promise.all gate above). LOG ONLY —

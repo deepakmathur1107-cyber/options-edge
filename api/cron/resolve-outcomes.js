@@ -437,6 +437,17 @@ module.exports = async function handler(req, res) {
       const underlyingAtResolution = await getUnderlyingCloseOn(row.ticker, update._resolvedDay, rateTracker)
       if (underlyingAtResolution !== null) {
         update.underlying_price_at_resolution = underlyingAtResolution
+        // direction_correct (added 2026-07-21, per outside review
+        // recommendation for an "underlying-first outcome engine" — was the
+        // STOCK direction correct, independent of whether the option itself
+        // hit target/stop. Same logic already used ad-hoc all week (the
+        // ~90%-wrong-direction finding) now computed automatically for every
+        // future resolution instead of requiring a manual analysis query.
+        if (row.underlying_price != null) {
+          update.direction_correct = row.option_type === 'call'
+            ? underlyingAtResolution > row.underlying_price
+            : underlyingAtResolution < row.underlying_price
+        }
       }
       delete update._resolvedDay // internal-only, not a real column
       // Propagate to every row sharing this lifecycle, not just the primary

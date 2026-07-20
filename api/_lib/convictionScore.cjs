@@ -120,6 +120,15 @@
 // evidenced the way e.g. the tailwind-term fix was). Swing/LEAP/Deep LEAP
 // values below are a reasonable starting guess, NOT calibrated — same
 // provisional-default caveat as spreadWidthSteps in verticalSpread.js.
+// SCORING_MODEL_VERSION (added 2026-07-21, per outside review recommendation
+// for a canonical signal ledger). Dated version string, bumped whenever this
+// file's scoring logic changes materially — lets future analysis group
+// signals by exactly which formula produced them, rather than assuming
+// today's code is what generated a historical row. Bump this alongside any
+// change to score+=/-= logic, TF_WEIGHT_PROFILES values, or hard-block
+// thresholds. Cosmetic/comment-only changes don't need a bump.
+const SCORING_MODEL_VERSION = '2026-07-21-v1'
+
 const TF_WEIGHT_PROFILES = {
   'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6, counterTrendPenalty: 0,  technicalReweightMult: 1.0 },
   'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0, counterTrendPenalty: 12, technicalReweightMult: 1.5 },
@@ -483,7 +492,7 @@ function scoreConviction(p) {
   const shadowRaw = preCeilingScore + technicalNetContribution * (tfProfile.technicalReweightMult - 1)
   const shadowTechnicalReweightScore = Math.round(Math.min(95, Math.max(20, shadowRaw)))
 
-  return { score, reasons, warnings, hardBlocks, shadowTechnicalReweightScore }
+  return { score, reasons, warnings, hardBlocks, shadowTechnicalReweightScore, scoringModelVersion: SCORING_MODEL_VERSION }
 }
 
 // pickBetterSide: given a fully-built scoreConviction result for the call side

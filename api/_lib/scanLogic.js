@@ -388,6 +388,16 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // leg, degenerate pricing) — always safe to be absent downstream.
       td.shadowSpread = buildVerticalSpread(chain, td, price, step, sideType, tf)
 
+      // entry_spread_pct (added 2026-07-21, per outside review recommendation
+      // for execution-cost awareness). (ask-bid)/mid at entry — real, honest
+      // liquidity/slippage proxy using data we already have. NOTE: no
+      // resolution-side equivalent exists — Tradier's historical daily bars
+      // have no bid/ask field (confirmed against their own documented
+      // response shape, OHLC + volume only), so a full executable-fill
+      // simulator isn't possible with this data source. This is the entry-
+      // side building block, not a complete fill simulation.
+      td.entrySpreadPct = td.mid > 0 ? Math.round(((td.ask - td.bid) / td.mid) * 10000) / 100 : null
+
       const iv = td.iv||0, delta = td.delta||null;
 
       let breakevenReqPct = null;
@@ -419,7 +429,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     if (!picked) return null;
 
     const { side: optType, winner } = picked;
-    const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2, shadowTechnicalReweightScore } = winner;
+    const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2, shadowTechnicalReweightScore, scoringModelVersion } = winner;
 
     // Item 3 — data freshness. safeIV (convictionScore.cjs) silently
     // returns its fallback (0) when Tradier's IV solver failed to converge
@@ -475,6 +485,8 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // whenever a valid spread couldn't be formed; never affects scoring
       // or display, purely logged for later expectancy comparison.
       shadowSpread: td.shadowSpread || null,
+      entrySpreadPct: td.entrySpreadPct ?? null,
+      scoringModelVersion: scoringModelVersion || null,
       // SHADOW ONLY — Phase 2 (2026-07-20). See TF_WEIGHT_PROFILES comment
       // in convictionScore.cjs. Never affects `score` above.
       shadowTechnicalReweightScore: shadowTechnicalReweightScore ?? null,
