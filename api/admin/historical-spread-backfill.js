@@ -73,7 +73,18 @@ module.exports = async function handler(req, res) {
     .eq('is_lifecycle_primary', true)
     .not('outcome', 'is', null)
     .neq('outcome', 'AMBIGUOUS')
-    .is('historical_shadow_spread_pnl_pct', null)
+    // BUG FIX (2026-07-21): was gated on historical_shadow_spread_pnl_pct
+    // IS NULL — but pnl_pct only gets SET on a successful computation; the
+    // 'unknown' path (no historical data, non-positive debit, degenerate
+    // width) sets historical_shadow_spread_outcome but leaves pnl_pct null
+    // forever. Confirmed live: 10 runs only advanced 85 new rows (135 total,
+    // 50 stuck as 'unknown') because the same oldest 50 unknown rows kept
+    // re-matching this filter and eating most of every batch — same tarpit
+    // class as the resolver's original silent-stall bug. Gating on
+    // historical_shadow_spread_outcome IS NULL instead is correct because
+    // outcome is set on EVERY path (success or unknown), so a truly-
+    // processed row (of either kind) is excluded from now on.
+    .is('historical_shadow_spread_outcome', null)
     .in('timeframe', ['Swing (21–45 DTE)', 'LEAP (90–180 DTE)', 'Deep LEAP (180–365 DTE)'])
     .order('scanned_at', { ascending: true })
     .limit(BATCH_LIMIT)
