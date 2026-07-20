@@ -58,6 +58,9 @@
     "api/admin/shadow-spread-resolver.js": {
       "maxDuration": 280
     },
+    "api/admin/historical-spread-backfill.js": {
+      "maxDuration": 280
+    },
     "api/user/*.js": {
       "maxDuration": 30
     },
