@@ -52,78 +52,60 @@ function nearestStrike(arr, tgt) {
 // Returns null if this timeframe isn't in scope, or if no valid short leg /
 // pricing data is available (never throws — shadow computation failing
 // silently must never affect the live path that called it).
-// TEMPORARY DIAGNOSTIC LOGGING (added 2026-07-20) — shadow_vertical_spread
-// came back null on 100% of Swing/LEAP/Deep LEAP rows in production despite
-// tracing correctly against synthetic test data. Every early-return branch
-// below now logs which one fired, so the next real scan reveals the actual
-// cause instead of more guessing. REMOVE once root-caused and fixed — this
-// is deliberately noisy for a live cron and shouldn't stay long-term.
+//
+// HISTORY: shipped 2026-07-19, initially came back null on 100% of rows.
+// Diagnostic logging (since removed — root cause confirmed and fixed,
+// verified against real production data at 96.6% population) found the
+// short-leg selector had no liquidity check: far-OTM strikes are frequently
+// illiquid (zero bid, wide stale ask), so mid=(0+wide_ask)/2 isn't a real
+// price and was landing ABOVE the liquid long leg's mid — economically
+// backwards. Fixed 2026-07-20 by requiring bid>0 on candidates.
+//
+// SECOND FIX (2026-07-20, same day, caught while reading post-fix logs):
+// requiring bid>0 alone doesn't guarantee the picked strike is even on the
+// correct SIDE of the long leg — e.g. a put's short leg must be BELOW the
+// long strike (further OTM downward); if no liquid strike exists near the
+// target, nearestStrike would happily return the nearest liquid strike
+// regardless of side, occasionally producing a structurally backwards pair.
+// These always got correctly rejected by the netDebit<=0 safety net (no bad
+// data ever reached the database), but rejected for the wrong reason and
+// missing otherwise-valid spreads. Now filtered to the correct side FIRST.
 function buildVerticalSpread(chain, longLegTd, price, step, optType, tf) {
   const widthSteps = spreadWidthSteps[tf]
-  if (!widthSteps) return null // Quick — expected, not a bug
-  if (!longLegTd || !longLegTd.primaryStrike) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: no longLegTd/primaryStrike`)
-    return null
-  }
+  if (!widthSteps) return null // Quick — out of scope for Phase 1, not a bug
+  if (!longLegTd || !longLegTd.primaryStrike) return null
 
   const longStrike = longLegTd.primaryStrike
   const side = chain.filter(o => o.option_type === optType)
-  if (side.length < 2) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: side.length=${side.length} (need >=2), chain.length=${chain.length}`)
-    return null
-  }
+  if (side.length < 2) return null
 
   const width = widthSteps * step
   const shortTarget = optType === 'call' ? longStrike + width : longStrike - width
-  // ROOT CAUSE FIX (2026-07-20): candidates used to be filtered ONLY by
-  // "not the long strike" — no liquidity check at all, unlike the long leg
-  // (which goes through findBestStrike's OI/volume-aware scoring). Diagnostic
-  // logging on real production data showed netDebit<=0 firing on ~100% of
-  // rows, with the pattern always the same: a far-OTM short leg's mid
-  // EXCEEDING the near-ATM long leg's mid (e.g. longMid=1.2 vs shortMid=1.23,
-  // 20 points further OTM) — economically backwards for a real market, and
-  // happening across every distinct ticker/price range, which rules out a
-  // one-off skew coincidence. The actual cause: far-OTM strikes 4-8 steps out
-  // are frequently illiquid — zero bid, wide stale ask — and mid=(0+wide_ask)/2
-  // isn't a real tradeable price. Requiring bid>0 is a minimum liquidity floor
-  // (a zero bid means no one will actually buy that leg back from a "sell to
-  // open"), not a sophistication upgrade — this is the actual bug, not a nice-
-  // to-have. If NO candidate near the target has a real bid, return null
-  // rather than fabricate a spread from an unquoted, essentially theoretical
-  // strike.
-  const candidates = side.filter(o => o.strike !== longStrike && parseFloat(o.bid || 0) > 0)
-  if (!candidates.length) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: no LIQUID candidates (bid>0) near target=${shortTarget}, longStrike=${longStrike}`)
-    return null
-  }
+  // Liquidity floor (bid>0) AND correct directional side — calls: strike
+  // must be ABOVE longStrike; puts: strike must be BELOW longStrike. Both
+  // conditions are the actual fix; neither alone is sufficient (see HISTORY
+  // above for what happens without each).
+  const candidates = side.filter(o =>
+    parseFloat(o.bid || 0) > 0 &&
+    (optType === 'call' ? o.strike > longStrike : o.strike < longStrike)
+  )
+  if (!candidates.length) return null
   const shortLeg = nearestStrike(candidates, shortTarget)
-  if (!shortLeg) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: nearestStrike returned null, shortTarget=${shortTarget}, candidates.length=${candidates.length}`)
-    return null
-  }
+  if (!shortLeg) return null
 
   const longMid = longLegTd.mid
   const shortBid = Math.max(0, parseFloat(shortLeg.bid || 0))
   const shortAsk = Math.max(0, parseFloat(shortLeg.ask || 0))
   const shortMid = Math.round(((shortBid + shortAsk) / 2) * 100) / 100
-  if (shortMid < 0) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: shortMid<0 (should be impossible), shortLeg.bid=${shortLeg.bid}, shortLeg.ask=${shortLeg.ask}`)
-    return null
-  }
+  if (shortMid < 0) return null // defensive; Math.max(0,...) above makes this unreachable in practice
 
   const netDebit = Math.round((longMid - shortMid) * 100) / 100
-  if (netDebit <= 0) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: netDebit<=0 (${netDebit}), longStrike=${longStrike} longMid=${longMid}, shortStrike=${shortLeg.strike} shortMid=${shortMid}, shortTarget=${shortTarget}, width=${width}, step=${step}`)
-    return null
-  }
+  if (netDebit <= 0) return null // remaining safety net for residual bad-quote cases (e.g. bid>0 but still an unrealistically wide/stale market)
 
   const actualWidth = Math.abs(shortLeg.strike - longStrike)
   const maxProfit = Math.round((actualWidth - netDebit) * 100) / 100
   const maxLoss = netDebit
-  if (maxProfit <= 0) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: maxProfit<=0 (${maxProfit}), actualWidth=${actualWidth}, netDebit=${netDebit}, longStrike=${longStrike}, shortStrike=${shortLeg.strike}`)
-    return null
-  }
+  if (maxProfit <= 0) return null // width too narrow relative to debit to make economic sense
 
   const breakevenPrice = optType === 'call'
     ? longStrike + netDebit
