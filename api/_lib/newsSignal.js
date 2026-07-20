@@ -68,7 +68,10 @@ async function getRecentNewsSignal(ticker) {
   const cached = await redisGet(redisKey)
   if (cached) return cached
 
-  if (!FINNHUB_KEY) return { count: null, headlines: [] } // not configured — honest null, not a fabricated 0
+  if (!FINNHUB_KEY) {
+    console.warn('[newsSignal] FINNHUB_API_KEY not set — returning honest null')
+    return { count: null, headlines: [] } // not configured — honest null, not a fabricated 0
+  }
 
   try {
     const end = new Date()
@@ -91,6 +94,7 @@ async function getRecentNewsSignal(ticker) {
       count: items.length,
       headlines: items.slice(0, 3).map(n => ({ headline: n.headline, source: n.source, time: n.datetime })),
     }
+    console.log(`[newsSignal DIAG] ${ticker}: ${items.length} headlines (temporary confirmation log — remove once verified)`)
     await redisSet(redisKey, result, REDIS_TTL_SECS)
     return result
   } catch (e) {
