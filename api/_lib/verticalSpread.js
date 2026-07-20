@@ -75,9 +75,25 @@ function buildVerticalSpread(chain, longLegTd, price, step, optType, tf) {
 
   const width = widthSteps * step
   const shortTarget = optType === 'call' ? longStrike + width : longStrike - width
-  const candidates = side.filter(o => o.strike !== longStrike)
+  // ROOT CAUSE FIX (2026-07-20): candidates used to be filtered ONLY by
+  // "not the long strike" — no liquidity check at all, unlike the long leg
+  // (which goes through findBestStrike's OI/volume-aware scoring). Diagnostic
+  // logging on real production data showed netDebit<=0 firing on ~100% of
+  // rows, with the pattern always the same: a far-OTM short leg's mid
+  // EXCEEDING the near-ATM long leg's mid (e.g. longMid=1.2 vs shortMid=1.23,
+  // 20 points further OTM) — economically backwards for a real market, and
+  // happening across every distinct ticker/price range, which rules out a
+  // one-off skew coincidence. The actual cause: far-OTM strikes 4-8 steps out
+  // are frequently illiquid — zero bid, wide stale ask — and mid=(0+wide_ask)/2
+  // isn't a real tradeable price. Requiring bid>0 is a minimum liquidity floor
+  // (a zero bid means no one will actually buy that leg back from a "sell to
+  // open"), not a sophistication upgrade — this is the actual bug, not a nice-
+  // to-have. If NO candidate near the target has a real bid, return null
+  // rather than fabricate a spread from an unquoted, essentially theoretical
+  // strike.
+  const candidates = side.filter(o => o.strike !== longStrike && parseFloat(o.bid || 0) > 0)
   if (!candidates.length) {
-    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: no candidates after excluding longStrike=${longStrike}, side.length=${side.length}, sample strikes=${side.slice(0,5).map(o=>o.strike).join(',')}`)
+    console.warn(`[verticalSpread DIAG] ${tf} ${optType}: no LIQUID candidates (bid>0) near target=${shortTarget}, longStrike=${longStrike}`)
     return null
   }
   const shortLeg = nearestStrike(candidates, shortTarget)
