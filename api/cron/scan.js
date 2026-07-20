@@ -484,6 +484,9 @@ module.exports = async function handler(req, res) {
         // column per field, since this is an evolving shadow structure we
         // expect to iterate on before it's ever promoted to a real feature.
         shadow_vertical_spread: r.shadowSpread || null,
+        // Phase 2 shadow reweight (2026-07-20) — see convictionScore.cjs
+        // TF_WEIGHT_PROFILES comment. Never affects the live score/signal.
+        shadow_technical_reweight_score: r.shadowTechnicalReweightScore ?? null,
       }
       bufferedRows.push(historyRow)
 

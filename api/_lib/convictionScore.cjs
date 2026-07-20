@@ -108,11 +108,23 @@
 // certain. Revisit magnitude once the backtest endpoint (trend-backtest.js)
 // and/or real forward data validates it — this is a first-pass value, not
 // tuned/optimized.
+// technicalReweightMult (added 2026-07-20, Phase 2 of the re-architecture):
+// SHADOW ONLY — amplifies the NET contribution of the four technical/price-
+// action terms (volume-coherence, momentum, 52w-trend, S/R structure) for a
+// shadow-computed score, never the live one. Rationale (target design doc,
+// OptionsEdgeFlow_Target_Design_Timeframe_Signals_2026-07-19.md): Swing+
+// should weight durable technical structure more than Quick, which is
+// already closer to the right weighting for its shorter horizon. Quick=1.0
+// (no-op — same log-first-then-validate discipline as every other new
+// signal this week, this is a genuinely untested hypothesis, not yet
+// evidenced the way e.g. the tailwind-term fix was). Swing/LEAP/Deep LEAP
+// values below are a reasonable starting guess, NOT calibrated — same
+// provisional-default caveat as spreadWidthSteps in verticalSpread.js.
 const TF_WEIGHT_PROFILES = {
-  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6, counterTrendPenalty: 0 },
-  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0, counterTrendPenalty: 12 },
-  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4, pos52Mult: 1.0, counterTrendPenalty: 15 },
-  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6, pos52Mult: 1.0, counterTrendPenalty: 18 },
+  'Quick (5–14 DTE)':       { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 0.6, pos52Mult: 0.6, counterTrendPenalty: 0,  technicalReweightMult: 1.0 },
+  'Swing (21–45 DTE)':      { deltaIdealLo: 0.35, deltaIdealHi: 0.55, deltaMult: 1.0, dteIvPenaltyMult: 1.0, pos52Mult: 1.0, counterTrendPenalty: 12, technicalReweightMult: 1.5 },
+  'LEAP (90–180 DTE)':      { deltaIdealLo: 0.60, deltaIdealHi: 0.80, deltaMult: 1.0, dteIvPenaltyMult: 1.4, pos52Mult: 1.0, counterTrendPenalty: 15, technicalReweightMult: 1.75 },
+  'Deep LEAP (180–365 DTE)':{ deltaIdealLo: 0.70, deltaIdealHi: 0.90, deltaMult: 1.0, dteIvPenaltyMult: 1.6, pos52Mult: 1.0, counterTrendPenalty: 18, technicalReweightMult: 2.0 },
 }
 const DEFAULT_TF_PROFILE = TF_WEIGHT_PROFILES['Swing (21–45 DTE)']
 
@@ -225,6 +237,9 @@ function scoreConviction(p) {
   else if (iv > 0.65) { score -= 15; warnings.push(`IV ${ivPct.toFixed(0)}% HIGH — move already priced in`) }
 
   // ── Volume + price coherence ─────────────────────────────────────────────
+  // scoreBeforeVolume: shadow-reweight checkpoint (Phase 2) — read-only, see
+  // TF_WEIGHT_PROFILES comment. Never mutated, never affects the block below.
+  const scoreBeforeVolume = score
   // Fix #2: morning window gets NO volume credit at all (matches the warning
   // text already telling the user "volume signals are unreliable" — scoring
   // on a signal you're simultaneously telling the user not to trust was the
@@ -265,8 +280,10 @@ function scoreConviction(p) {
   } else {
     warnings.push('🔔 Market open — volume signals less reliable in first 30 min')
   }
+  const volumeContribution = score - scoreBeforeVolume // Phase 2 checkpoint, read-only
 
   // ── Price momentum (skipped for chasing/earnings-gap — handled above) ──────
+  const scoreBeforeMomentum = score // Phase 2 checkpoint, read-only
   if (isIntraChasing) {
     warnings.push(`Already moved ${chgPct>0?'+':''}${chgPct.toFixed(1)}% intraday without a specific catalyst — chasing`)
   } else if (!isEarningsGap) {
@@ -278,6 +295,7 @@ function scoreConviction(p) {
       warnings.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% move today is AGAINST this ${optType} — today's price action doesn't support the thesis`)
     }
   }
+  const momentumContribution = score - scoreBeforeMomentum // Phase 2 checkpoint, read-only
 
   // ── Delta quality ─────────────────────────────────────────────────────────
   // Ideal band shifts by timeframe (tfProfile): Quick/Swing want ~0.35-0.55
@@ -298,6 +316,8 @@ function scoreConviction(p) {
   else if (!isMorningWindow && strikeVolume < 50) { score -= 5; warnings.push(`Only ${strikeVolume||0} contracts on strike — thin liquidity, use limit orders`) }
 
   // ── 52-week trend ─────────────────────────────────────────────────────────
+  // scoreBefore52w: Phase 2 checkpoint, read-only.
+  const scoreBefore52w = score
   // Tailwind branches (bonus) are dampened when gapAligned — see comment on
   // gapAligned above. Against-trend branches (warning/penalty) are left at
   // full weight in every case: a gap that contradicts existing 52w
@@ -319,6 +339,7 @@ function scoreConviction(p) {
     else if (pos52 < 0.35) { score += Math.round((gapAligned ? 2 : 4) * tfProfile.pos52Mult) }
     else if (pos52 > 0.80) { score -= 8; warnings.push('Near 52w high — puts against trend, trading in uptrend') }
   }
+  const contribution52w = score - scoreBefore52w // Phase 2 checkpoint, read-only
 
   // ── Gamma-weighted strike conviction ──────────────────────────────────────
   // CORRECTED framing: approxGEX's sign in scanLogic.js is just optType
@@ -347,6 +368,8 @@ function scoreConviction(p) {
   }
 
   // ── Support/resistance structure ──────────────────────────────────────────
+  // scoreBeforeSR: Phase 2 checkpoint, read-only.
+  const scoreBeforeSR = score
   // srPosition/srDistPct come from srLevels.js (swing highs/lows + Fib + pivots,
   // already computed and shown in the UI info panel today, but never fed into
   // the score). A call bought right at overhead resistance, or a put bought
@@ -372,6 +395,7 @@ function scoreConviction(p) {
       }
     }
   }
+  const srContribution = score - scoreBeforeSR // Phase 2 checkpoint, read-only
 
   // ── DTE / IV incompatibility ──────────────────────────────────────────────
   // Penalty scaled by dteIvPenaltyMult: LEAP/Deep LEAP carry meaningful vega
@@ -445,7 +469,21 @@ function scoreConviction(p) {
     warnings.push(`Score capped at 95 — this setup scored even higher (${preCeilingScore}) before the ceiling, but conviction scores are capped to avoid implying certainty.`)
   }
 
-  return { score, reasons, warnings, hardBlocks }
+  // ── Phase 2 shadow reweight (added 2026-07-20) ──────────────────────────
+  // SHADOW ONLY — see TF_WEIGHT_PROFILES comment for technicalReweightMult.
+  // Amplifies the NET contribution (can be negative — a technical picture
+  // that's currently working against the setup should be penalized MORE
+  // under this hypothesis too, not just boosted when favorable) of the four
+  // technical/price-action terms, applied to the PRE-CEILING score so the
+  // reweight isn't distorted by clamping that already happened to the live
+  // score, then clamped the same way. NEVER read by scoreConviction's own
+  // logic, NEVER affects `score`/reasons/warnings/hardBlocks above — purely
+  // an additional field for later, separate analysis.
+  const technicalNetContribution = volumeContribution + momentumContribution + contribution52w + srContribution
+  const shadowRaw = preCeilingScore + technicalNetContribution * (tfProfile.technicalReweightMult - 1)
+  const shadowTechnicalReweightScore = Math.round(Math.min(95, Math.max(20, shadowRaw)))
+
+  return { score, reasons, warnings, hardBlocks, shadowTechnicalReweightScore }
 }
 
 // pickBetterSide: given a fully-built scoreConviction result for the call side

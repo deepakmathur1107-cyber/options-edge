@@ -419,7 +419,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     if (!picked) return null;
 
     const { side: optType, winner } = picked;
-    const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2 } = winner;
+    const { td, breakevenReqPct, score, reasons, warnings, hardBlocks: hardBlocks2, shadowTechnicalReweightScore } = winner;
 
     // Item 3 — data freshness. safeIV (convictionScore.cjs) silently
     // returns its fallback (0) when Tradier's IV solver failed to converge
@@ -475,6 +475,9 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // whenever a valid spread couldn't be formed; never affects scoring
       // or display, purely logged for later expectancy comparison.
       shadowSpread: td.shadowSpread || null,
+      // SHADOW ONLY — Phase 2 (2026-07-20). See TF_WEIGHT_PROFILES comment
+      // in convictionScore.cjs. Never affects `score` above.
+      shadowTechnicalReweightScore: shadowTechnicalReweightScore ?? null,
       profitTargetPct: tfCfg2.profitTarget,
       stopLossPct: tfCfg2.stopLoss,
       grade: score>=80?'A':score>=65?'B':'C',
