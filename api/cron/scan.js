@@ -477,6 +477,13 @@ module.exports = async function handler(req, res) {
         long_term_trend: trendContext?.direction || null,
         vix_level: vix.level,
         vix_chg_pct: vix.chgPct,
+        // Shadow vertical spread — added 2026-07-19, Phase 1 of the
+        // re-architecture roadmap. LOG ONLY, same discipline as vix_level
+        // above: never read by scoring or the live displayed signal. Stored
+        // as JSONB (same pattern as direction_decision) rather than one
+        // column per field, since this is an evolving shadow structure we
+        // expect to iterate on before it's ever promoted to a real feature.
+        shadow_vertical_spread: r.shadowSpread || null,
       }
       bufferedRows.push(historyRow)
 

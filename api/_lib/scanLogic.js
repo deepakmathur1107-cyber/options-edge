@@ -15,6 +15,7 @@
 // — never re-add inline score+=/-= logic to this file.
 
 const { scoreConviction, safeIV, pickBetterSide } = require('./convictionScore.cjs');
+const { buildVerticalSpread } = require('./verticalSpread');
 
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50;
 const fmtP   = n => n==null?'—':'$'+parseFloat(n).toFixed(2);
@@ -378,6 +379,15 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       const td = buildNakedResult(chain, price, step, sideType, tfCfg2);
       if (!td) return null;
 
+      // SHADOW ONLY — Phase 1 of the re-architecture roadmap. Computes what
+      // a debit vertical spread would look like alongside this already-
+      // selected long leg, for Swing/LEAP/Deep LEAP. Purely additive: never
+      // feeds scoreConviction, never changes td's own fields, never affects
+      // what gets displayed. td.shadowSpread is null for Quick (out of
+      // scope) or whenever a valid spread can't be formed (illiquid short
+      // leg, degenerate pricing) — always safe to be absent downstream.
+      td.shadowSpread = buildVerticalSpread(chain, td, price, step, sideType, tf)
+
       const iv = td.iv||0, delta = td.delta||null;
 
       let breakevenReqPct = null;
@@ -461,6 +471,10 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       deltaRaw: td.delta||null,
       primaryStrikeRaw: td.primaryStrike,
       optionType: optType,
+      // SHADOW ONLY — see verticalSpread.js top comment. null for Quick or
+      // whenever a valid spread couldn't be formed; never affects scoring
+      // or display, purely logged for later expectancy comparison.
+      shadowSpread: td.shadowSpread || null,
       profitTargetPct: tfCfg2.profitTarget,
       stopLossPct: tfCfg2.stopLoss,
       grade: score>=80?'A':score>=65?'B':'C',
@@ -490,4 +504,4 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
   } catch { return null; }
 }
 
-module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, scanTicker, autoStep, isOpeningWindow, isPreMarket, safeChgPct };
+module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, scanTicker, autoStep, isOpeningWindow, isPreMarket, safeChgPct, findLeg };
