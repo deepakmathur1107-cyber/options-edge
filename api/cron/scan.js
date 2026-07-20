@@ -19,6 +19,7 @@ const { getFundamentals } = require('../_lib/fundamentals')
 const { getSRLevels } = require('../_lib/srLevels')
 const { SP500 } = require('../_lib/sp500')
 const { getTrendContext, getVix } = require('../_lib/trendContext')
+const { getRecentNewsSignal } = require('../_lib/newsSignal')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -316,7 +317,7 @@ module.exports = async function handler(req, res) {
       // quote/chain calls, but it is a real blind spot worth closing in a
       // follow-up (route srLevels.js through the shared tFetch helper) rather
       // than silently accepting it indefinitely.
-      const [fund, srLevels, trendContext] = await Promise.all([
+      const [fund, srLevels, trendContext, newsSignal] = await Promise.all([
         getFundamentals(ticker).catch(() => null),
         getSRLevels(ticker).catch(() => null),
         // Trend context — added 2026-07-18. Gated the same way as fund/srLevels
@@ -324,6 +325,13 @@ module.exports = async function handler(req, res) {
         // fetched for the full universe — same "don't spend API budget on
         // misses" rationale as the comment above this block.
         getTrendContext(ticker, null, getHistory, rateTracker).catch(() => ({ direction: 'unknown', sma50: null, sma200: null })),
+        // Per-ticker news — added 2026-07-20, Phase 2 piece 2. Quick ONLY,
+        // per the target design (Quick=market/news, Swing+=technical/
+        // fundamental) — resolves instantly to null for other timeframes,
+        // no network call, same "don't fetch what you won't use" discipline.
+        // LOG ONLY, see newsSignal.js header — presence/count, not
+        // sentiment, not wired into scoring.
+        tf === 'Quick (5–14 DTE)' ? getRecentNewsSignal(ticker).catch(() => ({ count: null, headlines: [] })) : Promise.resolve(null),
       ])
       if (fund || srLevels) {
         // Re-run with fundamentals AND S/R to apply large-cap/earnings
@@ -487,6 +495,14 @@ module.exports = async function handler(req, res) {
         // Phase 2 shadow reweight (2026-07-20) — see convictionScore.cjs
         // TF_WEIGHT_PROFILES comment. Never affects the live score/signal.
         shadow_technical_reweight_score: r.shadowTechnicalReweightScore ?? null,
+        // Per-ticker news presence — added 2026-07-20, Phase 2 piece 2.
+        // Quick only (null for other timeframes by construction — newsSignal
+        // itself is null there, see the Promise.all gate above). LOG ONLY —
+        // presence/count, not sentiment, not wired into scoring. See
+        // newsSignal.js header for why sentiment is explicitly out of scope
+        // for this piece.
+        shadow_recent_news_count: newsSignal?.count ?? null,
+        shadow_recent_news_headlines: newsSignal?.headlines?.length ? newsSignal.headlines : null,
       }
       bufferedRows.push(historyRow)
 
