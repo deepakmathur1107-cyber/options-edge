@@ -55,6 +55,9 @@
     "api/admin/shortened-hold-backtest.js": {
       "maxDuration": 280
     },
+    "api/admin/shadow-spread-resolver.js": {
+      "maxDuration": 280
+    },
     "api/user/*.js": {
       "maxDuration": 30
     },
