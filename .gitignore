@@ -2,3 +2,6 @@ dist/
 node_modules/
 
 .vercel
+
+# Private project audit notes — never commit or publish.
+.codex/private/
