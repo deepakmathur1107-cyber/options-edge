@@ -1,0 +1,3 @@
+[mcp_servers.supabase_options_edge]
+url = "https://mcp.supabase.com/mcp?project_ref=jgefssfduqnbrxvcqscb&read_only=true"
+enabled = true
