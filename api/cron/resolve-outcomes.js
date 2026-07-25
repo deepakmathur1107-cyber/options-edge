@@ -527,6 +527,25 @@ module.exports = async function handler(req, res) {
     .select('*'))
     .eq('is_lifecycle_primary', true)
 
+  // THIRD TARPIT FIX (2026-07-25, found investigating a live "calls=0 every
+  // run" report): rows whose last_walked_through is ALREADY today cannot
+  // make any progress this run — tradingDaysBetween(startDay, walkEnd)
+  // comes back empty, resolveOne does zero work and returns immediately.
+  // These rows still have resolve_attempts=0 (a clean walk was never a
+  // "failure"), so they TIE with genuinely-never-touched rows on the
+  // primary sort key — and WIN the scanned_at-ascending tiebreak whenever
+  // they happen to be chronologically older signals, since ordering
+  // doesn't know "already fully caught up" should be deprioritized.
+  // Confirmed live: exactly 100 rows (== BATCH_LIMIT) were stuck in this
+  // state, permanently occupying every single batch slot while 6,530
+  // genuinely-untouched rows never got a turn — 6+ consecutive runs, 30+
+  // minutes, zero net progress despite a real backlog sitting right there.
+  // Excluding already-caught-up rows here is strictly correct, not just a
+  // workaround: there is nothing this run COULD do for them regardless of
+  // ordering, so removing them from contention is the actual fix, not a
+  // band-aid on the sort order.
+  query = query.or(`last_walked_through.is.null,last_walked_through.lt.${new Date().toISOString().slice(0, 10)}`)
+
   // BURNDOWN MODE targeting: the oldest unresolved rows are LEAP/Deep LEAP
   // with 125-198 day walk spans. Each makes one daily-history Tradier call
   // PER trading day toward a 4-12mo expiry — a single Deep LEAP can burn
