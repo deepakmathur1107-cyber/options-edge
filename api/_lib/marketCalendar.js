@@ -86,4 +86,35 @@ function tradingDaysBetween(startDate, endDate) {
   return days
 }
 
-module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts, tradingDaysBetween }
+// AUDIT FIX (2026-07-25, Finding 5): NYSE early-close days. Covers the
+// three well-known, standard early-close days (1:00 PM ET instead of the
+// normal 4:00 PM ET close): the day after Thanksgiving, Christmas Eve, and
+// July 3rd, each only when they actually fall on a trading day. HONEST
+// LIMITATION: some NYSE early closes are announced ad-hoc (not purely
+// rule-based) and aren't captured by a formula — this covers the standard,
+// predictable cases, not a complete historical record of every early
+// close NYSE has ever announced.
+function getEarlyCloseDays(year) {
+  const days = new Set()
+  const thanksgiving = nthWeekday(year, 11, 4, 4)
+  const dayAfterThanksgiving = new Date(thanksgiving)
+  dayAfterThanksgiving.setDate(dayAfterThanksgiving.getDate() + 1)
+  days.add(ymd(dayAfterThanksgiving))
+  const christmasEve = new Date(year, 11, 24)
+  if (christmasEve.getDay() !== 0 && christmasEve.getDay() !== 6) days.add(ymd(christmasEve))
+  const july3 = new Date(year, 6, 3)
+  if (july3.getDay() !== 0 && july3.getDay() !== 6) days.add(ymd(july3))
+  return days
+}
+
+// getSessionClose(dateStr) — returns the correct Eastern-time market close
+// for a trading date: '16:00' normal, '13:00' early close, null if the
+// date isn't a trading day at all (weekend/holiday). dateStr: 'YYYY-MM-DD'.
+function getSessionClose(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00')
+  if (!isTradingDay(d)) return null
+  const year = d.getFullYear()
+  return getEarlyCloseDays(year).has(dateStr) ? '13:00' : '16:00'
+}
+
+module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts, tradingDaysBetween, getEarlyCloseDays, getSessionClose }

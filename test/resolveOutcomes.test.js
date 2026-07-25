@@ -86,11 +86,12 @@ test('entry day detects a target hit after the signal timestamp', async () => {
   let requestedStart = null
   const result = await resolver.resolveOne(row(), {}, {
     now: '2026-07-24T19:00:00.000Z',
-    getOptionTimesales: async (_symbol, start) => {
+    getOptionTimesalesDetailed: async (_symbol, start) => {
       requestedStart = start
-      return [{ high: 1.6, low: 1.1, time: '2026-07-24T16:00:00.000Z' }]
+      return { ok: true, errorType: null, retryable: false, status: 200,
+        bars: [{ high: 1.6, low: 1.1, time: '2026-07-24T16:00:00.000Z' }] }
     },
-    getOptionHistory: async () => [],
+    getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, days: [] }),
   })
 
   assert.equal(requestedStart, '2026-07-24 11:00')
@@ -101,11 +102,11 @@ test('entry day detects a target hit after the signal timestamp', async () => {
 test('entry day ignores bars before the signal', async () => {
   const result = await resolver.resolveOne(row(), {}, {
     now: '2026-07-24T19:00:00.000Z',
-    getOptionTimesales: async () => [
+    getOptionTimesalesDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, bars: [
       { high: 1.6, low: 1.1, time: '2026-07-24T14:00:00.000Z' },
       { high: 1.2, low: 0.8, time: '2026-07-24T16:00:00.000Z' },
-    ],
-    getOptionHistory: async () => [],
+    ] }),
+    getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, days: [] }),
   })
 
   assert.equal(result._stillOpen, true)
@@ -118,8 +119,9 @@ test('aged entry-day crossing is ambiguous, not fabricated WIN/LOSS', async () =
     {},
     {
       now: '2026-07-25T15:00:00.000Z',
-      getOptionHistory: async () => [{ high: 1.6, low: 0.8, close: 1.2 }],
-      getOptionTimesales: async () => {
+      getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200,
+        days: [{ high: 1.6, low: 0.8, close: 1.2 }] }),
+      getOptionTimesalesDetailed: async () => {
         throw new Error('aged entry day must not request timesales')
       },
     },
@@ -135,13 +137,97 @@ test('resume cursor starts after the last confirmed-clean day', async () => {
     last_walked_through: '2026-07-23',
   }), {}, {
     now: '2026-07-24T19:00:00.000Z',
-    getOptionHistory: async (_symbol, start) => {
+    getOptionHistoryDetailed: async (_symbol, start) => {
       requestedDays.push(start)
-      return [{ high: 1.2, low: 0.8, close: 1 }]
+      return { ok: true, errorType: null, retryable: false, status: 200, days: [{ high: 1.2, low: 0.8, close: 1 }] }
     },
-    getOptionTimesales: async () => [],
+    getOptionTimesalesDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, bars: [] }),
   })
 
   assert.deepEqual(requestedDays, ['2026-07-24'])
   assert.equal(result._stillOpen, true)
+})
+
+// ── Audit Finding 4: real API failures must not silently corrupt the walk cursor ──
+
+test('mid-walk API failure stops the walk and caps the cursor before the failed day, not walkEnd', async () => {
+  let calls = 0
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-07-18T15:00:00.000Z', last_walked_through: null, option_type: 'put' }),
+    {},
+    {
+      now: '2026-07-25T15:00:00.000Z',
+      getOptionHistoryDetailed: async () => {
+        calls++
+        if (calls === 3) return { ok: false, errorType: 'RATE_LIMIT', retryable: true, status: 429, days: [] }
+        // row()'s defaults: entry_mid=1, target=1.5, stop=0.5 -- stay safely
+        // inside that band so Step 1 never indicates a crossing, keeping
+        // this test isolated to the failure-handling path being tested
+        // (not accidentally exercising the intraday-confirm branch too).
+        return { ok: true, errorType: null, retryable: false, status: 200, days: [{ high: 1.1, low: 0.9, close: 1.0 }] }
+      },
+    },
+  )
+  assert.equal(result._stillOpen, true)
+  assert.equal(result._lastWalkedThrough, '2026-07-21')
+  assert.equal(calls, 3) // walk must STOP at the failure, not continue past it
+})
+
+test('API failure on the very first day of a walk leaves the cursor untouched (no false progress)', async () => {
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-07-18T15:00:00.000Z', last_walked_through: null }),
+    {},
+    {
+      now: '2026-07-25T15:00:00.000Z',
+      getOptionHistoryDetailed: async () => ({ ok: false, errorType: 'SERVER_ERROR', retryable: true, status: 500, days: [] }),
+    },
+  )
+  assert.equal(result._stillOpen, true)
+  assert.ok(result._lastWalkedThrough === null || result._lastWalkedThrough === undefined)
+})
+
+test('genuine empty response (not a failure) still advances the cursor all the way to walkEnd', async () => {
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-07-18T15:00:00.000Z', last_walked_through: null }),
+    {},
+    {
+      now: '2026-07-25T15:00:00.000Z',
+      getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, days: [] }),
+    },
+  )
+  assert.equal(result._stillOpen, true)
+  assert.equal(result._lastWalkedThrough, '2026-07-25')
+})
+
+test('a real WIN via aged daily-bar fallback still resolves correctly after the failure-handling changes', async () => {
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-06-01T15:00:00.000Z', expiry_raw: '2026-08-01', last_walked_through: '2026-06-02' }),
+    {},
+    {
+      now: '2026-07-25T15:00:00.000Z',
+      getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200,
+        days: [{ high: 4.0, low: 1.9, close: 3.5 }] }),
+    },
+  )
+  assert.equal(result.outcome, 'WIN')
+  assert.equal(result.resolution_method, 'daily_bar_fallback_target')
+})
+
+// ── Audit Finding 5: session-aware entry-day close time ──
+
+test('entry-day timesales request uses the correct early-close time, not always 16:00', async () => {
+  let requestedEnd = null
+  await resolver.resolveOne(
+    row({ scanned_at: '2026-11-27T15:00:00.000Z', expiry_raw: '2026-12-15' }), // day after Thanksgiving 2026, 13:00 ET close
+    {},
+    {
+      now: '2026-11-27T19:00:00.000Z',
+      getOptionTimesalesDetailed: async (_symbol, _start, end) => {
+        requestedEnd = end
+        return { ok: true, errorType: null, retryable: false, status: 200, bars: [] }
+      },
+      getOptionHistoryDetailed: async () => ({ ok: true, errorType: null, retryable: false, status: 200, days: [] }),
+    },
+  )
+  assert.equal(requestedEnd, '2026-11-27 13:00')
 })

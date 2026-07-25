@@ -155,6 +155,22 @@ const getOptionHistory = async (occSymbol, startDate, endDate, tracker) => {
   // this shipped to the full backlog.
   return Array.isArray(days) ? days : [days]
 }
+
+// getOptionHistoryDetailed (added 2026-07-25, audit Finding 4 continued) —
+// resolver-specific variant using tFetchDetailed, same rationale as
+// getOptionTimesalesDetailed above. Mirrors getOptionHistory's own
+// single-vs-array normalization exactly.
+const getOptionHistoryDetailed = async (occSymbol, startDate, endDate, tracker) => {
+  const r = await tFetchDetailed(
+    `/markets/history?symbol=${occSymbol}&interval=daily&start=${startDate}&end=${endDate}`,
+    tracker
+  )
+  if (!r.ok) return { ok: false, errorType: r.errorType, retryable: r.retryable, status: r.status, days: [] }
+  const days = r.data?.history?.day
+  if (!days) return { ok: true, errorType: null, retryable: false, status: r.status, days: [] }
+  return { ok: true, errorType: null, retryable: false, status: r.status, days: Array.isArray(days) ? days : [days] }
+}
+
 // 1-min bars for an OCC option symbol, for one calendar day at a time.
 // startDateTime/endDateTime format: 'YYYY-MM-DD HH:MM' (ET, per Tradier docs).
 // Confirmed live: returns real OHLCV bars for option symbols (curl test,
@@ -195,5 +211,5 @@ module.exports = {
   newRateTracker, recordRateHeaders, logRateSummary,
   tFetch, tFetchPost, tFetchDetailed,
   getQuote, getExpiries, getChain,
-  getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed,
+  getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed, getOptionHistoryDetailed,
 }

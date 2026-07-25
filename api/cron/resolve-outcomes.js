@@ -18,9 +18,9 @@
 // bars across 5 real signals — the same-bar tie-break rule below is a rare-
 // case safety net, not a load-bearing assumption. See spec §6.
 
-const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed } = require('../_lib/tradierClient')
+const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed, getOptionHistoryDetailed } = require('../_lib/tradierClient')
 const { buildOccSymbol } = require('../_lib/occSymbol')
-const { tradingDaysBetween } = require('../_lib/marketCalendar')
+const { tradingDaysBetween, getSessionClose } = require('../_lib/marketCalendar')
 
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a row (spec §5)
@@ -147,6 +147,7 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   const getHistory = dependencies.getOptionHistory || getOptionHistory
   const getTimesales = dependencies.getOptionTimesales || getOptionTimesales
   const getTimesalesDetailed = dependencies.getOptionTimesalesDetailed || getOptionTimesalesDetailed
+  const getHistoryDetailed = dependencies.getOptionHistoryDetailed || getOptionHistoryDetailed
   const now = dependencies.now ? new Date(dependencies.now) : new Date()
   const occSymbol = buildOccSymbol(row.ticker, row.option_type, row.primary_strike, row.expiry_raw)
   const entryMid    = parseFloat(row.entry_mid)
@@ -188,7 +189,20 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   // to fallback resolution rather than pretending a future retry might help.
   let sawUnconfirmableRecentCrossing = false
 
-  for (const day of days) {
+  // AUDIT FIX (2026-07-25, Finding 4 continued): tracks the day BEFORE a
+  // real API failure, so the walk cursor never silently advances past a
+  // day that was never actually checked. Without this, a `continue` on
+  // failure still let the cursor jump to walkEnd once the loop finished,
+  // permanently losing that day's real price action — a transient outage
+  // partway through a walk could cause a real crossing to be silently
+  // missed forever, not just delayed. null means "no real failure hit
+  // yet" (walk can advance the cursor all the way to walkEnd as before);
+  // once set, it caps how far the cursor is allowed to advance THIS RUN.
+  let stoppedEarlyAt = null
+  let walkFailed = false
+
+  for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
+    const day = days[dayIndex]
     const isEntryDay = !row.last_walked_through && day === scanMarketTime.date
 
     // The daily bar contains price action before the signal. For entry day,
@@ -207,16 +221,27 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
       // run (the row is untouched, picked up fresh next run for free — the
       // existing batch-level circuit breaker still catches a sustained
       // outage across the run, so this isn't the only safety net).
+      // AUDIT FIX (2026-07-25, Finding 5): was hardcoded '16:00' — wrong on
+      // early-close days (day after Thanksgiving, Christmas Eve, July 3rd
+      // when applicable), where the real session close is 13:00 ET. A
+      // signal generated after 13:00 on an early-close day would have
+      // requested a window (e.g. 14:00-16:00) that never had any real
+      // trading in it, indistinguishable from "genuinely no post-signal
+      // trades" — getSessionClose returns the correct close for the date;
+      // day is always a real trading day here (from tradingDaysBetween),
+      // so the '16:00' fallback is defensive, not expected to fire.
       const result = await getTimesalesDetailed(
         occSymbol,
         `${day} ${scanMarketTime.time.slice(0, 5)}`,
-        `${day} 16:00`,
+        `${day} ${getSessionClose(day) || '16:00'}`,
         rateTracker,
       )
       if (!result.ok) {
-        // Real API failure, not genuine emptiness — leave this row
-        // completely untouched this run, no retry-count penalty.
-        continue
+        // Real API failure, not genuine emptiness. Stop the walk here
+        // (not just skip this day) — see stoppedEarlyAt comment above.
+        stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
+        walkFailed = true
+        break
       }
       const bars = result.bars
       if (bars.length === 0) {
@@ -241,7 +266,27 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     // Step 1 — cheap pre-check via daily history. Skip the 1-min pull
     // entirely if neither threshold could possibly have been crossed that
     // day (spec §4 step 1).
-    const dailyBars = await getHistory(occSymbol, day, day, rateTracker)
+    //
+    // AUDIT FIX (2026-07-25, Finding 4 continued): was getHistory (bare
+    // array) — [] meant either "no daily bar this day" (rare, e.g. a real
+    // data gap) or "the request failed" (429/5xx/network), and both fell
+    // through to `continue`, silently letting the walk move past this day.
+    // Once the loop finished, the cursor advanced to walkEnd regardless —
+    // meaning a transient failure on ANY day in the middle of a walk could
+    // cause that day's real price action to be permanently skipped and
+    // never re-examined. Now: a real failure BREAKS the walk (stoppedEarlyAt
+    // caps the cursor at the day before), so the failed day gets retried
+    // next run. A genuine missing daily bar (request succeeded, Tradier
+    // just has no bar for this day) keeps the original behavior — skip and
+    // continue, since that's a real, if rare, data characteristic, not a
+    // request failure.
+    const historyResult = await getHistoryDetailed(occSymbol, day, day, rateTracker)
+    if (!historyResult.ok) {
+      stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
+        walkFailed = true
+      break
+    }
+    const dailyBars = historyResult.days
     const dailyBar = dailyBars[0]
     if (!dailyBar) {
       // No data this specific day — see note below; single missing day is
@@ -306,7 +351,24 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
 
     // Recent enough — intraday confirmation is still possible. Step 2: real
     // 1-min bars for this specific day only.
-    const bars = await getTimesales(occSymbol, `${day} 09:30`, `${day} 16:00`, rateTracker)
+    //
+    // AUDIT FIX (2026-07-25, Finding 4 continued): was getTimesales (bare
+    // array) — same conflation as the other two call sites. Real failure
+    // now breaks the walk (cursor capped at the day before, retried next
+    // run) instead of being treated as the genuine-empty retryable-gap case
+    // below, which specifically bumps resolve_attempts toward eventual
+    // dead-lettering — that bump should only happen for a REAL data
+    // inconsistency (daily bar says crossed, timesales genuinely has
+    // nothing), not an unrelated API hiccup.
+    // AUDIT FIX (2026-07-25, Finding 5): same session-close fix as the
+    // entry-day request above — was hardcoded '16:00'.
+    const timesalesResult = await getTimesalesDetailed(occSymbol, `${day} 09:30`, `${day} ${getSessionClose(day) || '16:00'}`, rateTracker)
+    if (!timesalesResult.ok) {
+      stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
+        walkFailed = true
+      break
+    }
+    const bars = timesalesResult.bars
     if (bars.length === 0) {
       // Daily bar said it crossed but timesales returned nothing, on a day
       // still INSIDE the retention window — genuine transient inconsistency,
@@ -345,10 +407,25 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     // Genuinely still open — no crossing indicated yet, position simply
     // hasn't resolved. NOT an error, do NOT bump the retry counter (bumping
     // here would wrongly dead-letter healthy open LEAPs/swings that just
-    // need more time). DO persist how far the walk got (walkEnd) as the new
-    // resume cursor — see startDay comment above — so the NEXT check only
-    // walks forward from here instead of re-walking the whole history.
-    return { _stillOpen: true, _lastWalkedThrough: walkEnd.toISOString().slice(0, 10) }
+    // need more time). DO persist how far the walk got as the new resume
+    // cursor — see startDay comment above — so the NEXT check only walks
+    // forward from here instead of re-walking the whole history.
+    //
+    // AUDIT FIX (2026-07-25, Finding 4 continued): was unconditionally
+    // walkEnd, even if a real API failure had stopped the walk partway
+    // through — silently advancing the cursor PAST an unchecked day,
+    // losing it forever. Three distinct cases now: (1) no failure this
+    // run — safe to advance cursor all the way to walkEnd, as before;
+    // (2) failure after at least one successful day — cursor advances up
+    // to (not including) the failed day; (3) failure on the very FIRST day
+    // checked this run — no safe progress to record at all, so
+    // _lastWalkedThrough is omitted entirely (undefined), and the caller's
+    // `if (update._lastWalkedThrough)` guard correctly skips the DB write,
+    // leaving the existing cursor untouched for a clean retry next run.
+    const cursorDate = !walkFailed
+      ? walkEnd.toISOString().slice(0, 10)
+      : stoppedEarlyAt // already a 'YYYY-MM-DD' string or null
+    return { _stillOpen: true, _lastWalkedThrough: cursorDate }
   }
 
   // Past expiry with no threshold ever crossed → terminal expired state
