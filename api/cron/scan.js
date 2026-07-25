@@ -378,6 +378,17 @@ module.exports = async function handler(req, res) {
           .eq('option_type', r.optionType)
           .eq('primary_strike', r.primaryStrikeRaw)
           .eq('expiry_raw', r.expiryRaw)
+          // AUDIT FIX (2026-07-25, Finding 2): was missing
+          // is_lifecycle_primary=true. A terminal (data_unavailable)
+          // lifecycle's PRIMARY row is correctly marked resolved, but
+          // stale NON-primary duplicate rows in the same lifecycle could
+          // still have resolved_at=null (never individually repaired),
+          // making the lifecycle look open to this lookup and letting a
+          // new scan wrongly attach to a dead lifecycle. Requiring the
+          // primary row specifically closes that gap — verified live:
+          // 26 affected lifecycles, 264 stale duplicate rows found before
+          // this fix (see the one-time backfill migration).
+          .eq('is_lifecycle_primary', true)
           .is('outcome', null)
           .is('resolved_at', null)
           .not('signal_lifecycle_id', 'is', null)
