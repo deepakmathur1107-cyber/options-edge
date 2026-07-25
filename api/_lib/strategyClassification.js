@@ -52,9 +52,13 @@ function classifyStrategy(signal) {
 // buildQualificationRecord(signal) — the full set of fields to write to
 // signal_history for this signal. Pure, synchronous, no I/O — safe to call
 // for every signal regardless of outcome.
-function buildQualificationRecord(signal) {
+function buildQualificationRecord(signal, metadata = {}) {
   const classification = classifyStrategy(signal)
   const qualified = classification === 'QUALIFIED_V1'
+  const assignedAt = metadata.assigned_at || new Date().toISOString()
+  const qualificationSource = metadata.qualification_source || 'LIVE_AT_SIGNAL'
+  const cohort = metadata.experiment_cohort ||
+    (assignedAt ? `forward_${assignedAt.slice(0, 7)}` : null)
 
   const reasons = []
   if (qualified) {
@@ -88,14 +92,17 @@ function buildQualificationRecord(signal) {
       score: signal.score,
     },
     shadow_mode: true,
-    // Reuses already-computed per-timeframe target/stop rather than
-    // duplicating — planned_risk_pct is the published stop (risk should be
-    // calculated from the stop, not premium paid, per the document's own
-    // section 12); planned_risk_reward is the target:stop ratio.
-    planned_risk_pct: signal.stop_loss_pct ?? null,
+    // Premium-stop movement and account allocation are deliberately separate:
+    // a 50% option stop does not mean 50% of account equity is at risk.
+    premium_stop_loss_pct: signal.stop_loss_pct ?? null,
+    planned_account_risk_pct: metadata.planned_account_risk_pct ?? null,
     planned_risk_reward: (signal.profit_target_pct != null && signal.stop_loss_pct)
       ? Math.round((signal.profit_target_pct / signal.stop_loss_pct) * 100) / 100
       : null,
+    strategy_assigned_at: assignedAt,
+    qualification_source: qualificationSource,
+    experiment_cohort: qualified ? cohort : null,
+    experiment_enrolled_at: qualified ? assignedAt : null,
   }
 }
 
