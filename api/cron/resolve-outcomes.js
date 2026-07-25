@@ -105,13 +105,27 @@ async function resolveOne(row, rateTracker) {
   const expiryDate  = new Date(row.expiry_raw + 'T12:00:00')
   const today       = new Date()
 
-  // Walk forward from the day AFTER scanned_at (entry day's own intraday
-  // movement after the scan moment isn't re-checked — entry_mid IS that
-  // moment's price, so by definition neither threshold could have already
-  // been crossed before it was recorded) through either today or expiry,
-  // whichever is earlier.
+  // Walk forward from either the day after the last CONFIRMED-clean day
+  // (if we've checked this row before) or the day after scanned_at (first
+  // check), through either today or expiry, whichever is earlier.
+  //
+  // ROOT CAUSE FIX (2026-07-25): before this, startDay was ALWAYS
+  // scannedDate+1, regardless of how many times this row had already been
+  // checked — every still-open row re-walked its ENTIRE history from
+  // scratch on every single run, forever, since _stillOpen correctly never
+  // bumps resolve_attempts (that's for genuine failures, not healthy open
+  // positions) and so never got deprioritized by the query's ORDER BY
+  // either. Confirmed live: burndown mode was burning ~1,456 Tradier
+  // calls/run while the unresolved count sat static at 6,649 across 20+
+  // consecutive runs — re-confirming the same already-clean days over and
+  // over, not making progress. last_walked_through persists how far the
+  // walk got last time (see the _stillOpen return + caller below), so a
+  // row checked yesterday now only re-walks the 1-2 NEW trading days since
+  // then instead of the full history back to entry.
   const walkEnd = today < expiryDate ? today : expiryDate
-  const startDay = new Date(scannedDate); startDay.setDate(startDay.getDate() + 1)
+  const startDay = row.last_walked_through
+    ? (() => { const d = new Date(row.last_walked_through + 'T12:00:00'); d.setDate(d.getDate() + 1); return d })()
+    : (() => { const d = new Date(scannedDate); d.setDate(d.getDate() + 1); return d })()
   const days = tradingDaysBetween(startDay, walkEnd)
 
   // Tracks whether the walk hit a crossing day that we COULD have confirmed
@@ -221,8 +235,10 @@ async function resolveOne(row, rateTracker) {
     // Genuinely still open — no crossing indicated yet, position simply
     // hasn't resolved. NOT an error, do NOT bump the retry counter (bumping
     // here would wrongly dead-letter healthy open LEAPs/swings that just
-    // need more time).
-    return { _stillOpen: true }
+    // need more time). DO persist how far the walk got (walkEnd) as the new
+    // resume cursor — see startDay comment above — so the NEXT check only
+    // walks forward from here instead of re-walking the whole history.
+    return { _stillOpen: true, _lastWalkedThrough: walkEnd.toISOString().slice(0, 10) }
   }
 
   // Past expiry with no threshold ever crossed → terminal expired state
@@ -403,7 +419,21 @@ module.exports = async function handler(req, res) {
 
     try {
       const update = await resolveOne(row, rateTracker)
-      if (update._stillOpen) { stillOpen++; continue }
+      if (update._stillOpen) {
+        stillOpen++
+        // Persist the resume cursor (see resolveOne's startDay comment) so
+        // the NEXT check doesn't re-walk this row's entire history again.
+        // Best-effort: a failed write here just means the next run re-walks
+        // from scratch again (the OLD behavior) rather than anything
+        // incorrect — never worth failing the whole batch over.
+        if (update._lastWalkedThrough) {
+          const { error: cursorErr } = await client.from('signal_history')
+            .update({ last_walked_through: update._lastWalkedThrough })
+            .eq('id', row.id)
+          if (cursorErr) console.error(`[resolve-outcomes] cursor persist failed id=${row.id}:`, cursorErr.message)
+        }
+        continue
+      }
 
       // _retryableGap and _noUsableData share the same retry-cap machinery:
       // both are "couldn't resolve this run, might later, but must eventually
