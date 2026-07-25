@@ -1,66 +1,143 @@
 // api/_lib/positionSizing.js
-// Added 2026-07-25. Position-sizing rules per the original strategy
-// document (section 12) and the audit report (Phase 4) — kept as a
-// separate, pure module deliberately, per the document's own instruction:
-// "Keep this separate from Setup Score and conviction." This module never
-// touches signal_history, never calls Tradier, never makes a scoring
-// decision — it takes explicit inputs and returns a contract count, full
-// stop. No dependency on live LIVE_AT_SIGNAL data existing, unlike the
-// dashboard/promotion-calculator pieces — pure math is buildable and
-// testable today regardless of what data has accumulated.
+// Rewritten 2026-07-25 in response to the validation report's findings.
+// Original version (commit 9df7db7) had real, confirmed bugs:
+//   - maxContracts: 2.5 -> contracts: 2.5 (fractional contracts; options
+//     contracts must be integers)
+//   - accountEquity: Infinity produced non-finite internal values
+//   - plannedAccountRiskPct: 1 (100% of account) was allowed with no cap
+//   - sizing only from the planned stop assumed a clean 50%-premium exit
+//     is always achievable — a gap, illiquid contract, or failed stop can
+//     lose the ENTIRE premium, and the original version never modeled that
+//     worst case at all
 //
-// Uses premium_stop_loss_pct / planned_account_risk_pct (the audit's
-// Finding 8 correction), NOT the deprecated planned_risk_pct — risk here
-// is explicitly account-equity-based, not option-premium-based, and
-// conflating the two was exactly the bug the audit caught in the original
-// document's field naming.
+// Still deliberately separate from Setup Score and conviction, per the
+// original strategy document's own instruction. Still pure — no I/O, no
+// dependency on live signal data existing.
 
-// calculateContracts(params) — pure function, no I/O, never throws (returns
-// a { contracts: 0, reason } shape on any invalid/unaffordable input
-// instead). Matches the audit's own formula exactly:
-//   maximum_loss_per_contract = entry_premium * premium_stop_loss_pct * contract_multiplier
-//   account_risk_budget = account_equity * planned_account_risk_pct
-//   contracts = floor(account_risk_budget / maximum_loss_per_contract)
+const DEFAULT_MAX_ACCOUNT_RISK_PCT = 0.02   // hard ceiling: never risk more than 2% of account on the planned stop, regardless of what's requested
+const DEFAULT_MAX_PREMIUM_OUTLAY_PCT = 0.10 // hard ceiling: never commit more than 10% of account equity in premium, regardless of the risk-based sizing result
+
+function invalid(reason, warnings) {
+  return { contracts: 0, reason, plannedStopLoss: null, worstCasePremiumLoss: null,
+    accountRiskBudget: null, premiumOutlay: null, premiumOutlayPct: null,
+    bindingConstraint: null, warnings }
+}
+
+// calculateContracts(params) — pure function, no I/O, never throws.
+// Contract count now satisfies BOTH budgets simultaneously, per the
+// validation report's explicit requirement: the planned-stop risk budget
+// AND the full-premium-outlay budget (a hard cap independent of the stop
+// assumption, since the stop might not execute cleanly).
 function calculateContracts({
   accountEquity,
   entryPremium,
   premiumStopLossPct,
   plannedAccountRiskPct,
-  contractMultiplier = 100, // standard equity-option multiplier; parameterized per the audit's own spec, not hardcoded
+  contractMultiplier = 100,
   maxContracts = Infinity,
-  entrySpreadPct = null, // optional — our own existing entry_spread_pct field
-  maxSpreadPctAllowed = null, // optional liquidity gate
+  maxAccountRiskPct = DEFAULT_MAX_ACCOUNT_RISK_PCT,
+  maxPremiumOutlayPct = DEFAULT_MAX_PREMIUM_OUTLAY_PCT,
+  entrySpreadPct = null,
+  maxSpreadPctAllowed = null,
 } = {}) {
-  // Input validation — any invalid input returns 0 contracts with a reason,
-  // never throws. A sizing function that crashes is worse than one that
-  // conservatively returns zero.
-  if (!(accountEquity > 0) || !(entryPremium > 0) || !(premiumStopLossPct > 0) || !(plannedAccountRiskPct > 0)) {
-    return { contracts: 0, reason: 'invalid_input' }
+  const warnings = []
+
+  // Number.isFinite on every numeric input that participates in the math —
+  // rejects Infinity/-Infinity/NaN outright rather than letting them
+  // propagate into a silently-corrupted result (the original bug:
+  // accountEquity=Infinity produced non-finite internals that serialized
+  // as null without ever being flagged as invalid input).
+  const requiredFinite = { accountEquity, entryPremium, premiumStopLossPct, plannedAccountRiskPct, contractMultiplier, maxAccountRiskPct, maxPremiumOutlayPct }
+  for (const [key, val] of Object.entries(requiredFinite)) {
+    if (!Number.isFinite(val)) return invalid('invalid_input', [`${key} must be a finite number`])
   }
+  if (maxContracts !== Infinity && !Number.isFinite(maxContracts)) {
+    return invalid('invalid_input', ['maxContracts must be a finite number or Infinity'])
+  }
+
+  if (!(accountEquity > 0) || !(entryPremium > 0) || !(premiumStopLossPct > 0) || !(plannedAccountRiskPct > 0) || !(contractMultiplier > 0)) {
+    return invalid('invalid_input', ['accountEquity, entryPremium, premiumStopLossPct, plannedAccountRiskPct, and contractMultiplier must all be positive'])
+  }
+
+  // Integer enforcement — options contracts are always whole numbers. The
+  // original bug: maxContracts=2.5 passed straight through to
+  // Math.min(rawContracts, maxContracts), producing contracts=2.5.
+  if (!Number.isInteger(contractMultiplier) || contractMultiplier <= 0) {
+    return invalid('invalid_input', ['contractMultiplier must be a positive integer'])
+  }
+  if (maxContracts !== Infinity && (!Number.isInteger(maxContracts) || maxContracts < 0)) {
+    return invalid('invalid_input', ['maxContracts must be a non-negative integer or Infinity'])
+  }
+
   if (maxSpreadPctAllowed != null && entrySpreadPct != null && entrySpreadPct > maxSpreadPctAllowed) {
-    return { contracts: 0, reason: 'spread_too_wide' }
+    return invalid('spread_too_wide', [`entry spread ${entrySpreadPct}% exceeds max allowed ${maxSpreadPctAllowed}%`])
   }
 
-  const maxLossPerContract = entryPremium * premiumStopLossPct * contractMultiplier
-  if (!(maxLossPerContract > 0)) return { contracts: 0, reason: 'invalid_loss_calc' }
-
-  const accountRiskBudget = accountEquity * plannedAccountRiskPct
-  const rawContracts = Math.floor(accountRiskBudget / maxLossPerContract)
-  const contracts = Math.min(rawContracts, maxContracts)
-
-  if (contracts <= 0) {
-    return { contracts: 0, reason: 'unaffordable',
-      maxLossPerContract: Math.round(maxLossPerContract * 100) / 100,
-      accountRiskBudget: Math.round(accountRiskBudget * 100) / 100 }
+  // Hard ceiling on requested account risk — the original bug allowed
+  // plannedAccountRiskPct=1 (100% of the account) with no cap at all.
+  // Silently capping (with a warning) rather than rejecting outright,
+  // since a caller requesting more than the ceiling isn't necessarily an
+  // error — just something to size down and flag.
+  let effectiveRiskPct = plannedAccountRiskPct
+  if (plannedAccountRiskPct > maxAccountRiskPct) {
+    warnings.push(`Requested account risk ${(plannedAccountRiskPct * 100).toFixed(2)}% exceeds the ${(maxAccountRiskPct * 100).toFixed(2)}% hard ceiling — capped.`)
+    effectiveRiskPct = maxAccountRiskPct
   }
 
+  // Two independent per-contract cost figures, per the audit's explicit
+  // requirement to separate them:
+  //   plannedStopLossPerContract — the cost IF the stop executes cleanly
+  //     at the target premium decline (the original, only, calculation).
+  //   worstCaseLossPerContract — full premium loss, i.e. what actually
+  //     happens if a gap, illiquid contract, or failed stop means the
+  //     position can't be exited at the planned level at all. Sizing
+  //     purely from the planned stop understates real worst-case exposure.
+  const plannedStopLossPerContract = entryPremium * premiumStopLossPct * contractMultiplier
+  const worstCaseLossPerContract = entryPremium * contractMultiplier // 100% of premium, if the stop never fills
+
+  const accountRiskBudget = accountEquity * effectiveRiskPct
+  const premiumOutlayBudget = accountEquity * maxPremiumOutlayPct
+
+  // Contract count must satisfy BOTH budgets simultaneously (the planned-
+  // stop risk budget AND the hard premium-outlay cap), plus any explicit
+  // maxContracts — take the minimum of all three, whole numbers only.
+  const contractsFromStopRisk = Math.floor(accountRiskBudget / plannedStopLossPerContract)
+  const contractsFromPremiumOutlay = Math.floor(premiumOutlayBudget / (entryPremium * contractMultiplier))
+  const contractsFromMaxCap = maxContracts === Infinity ? Infinity : Math.floor(maxContracts)
+
+  const contracts = Math.min(contractsFromStopRisk, contractsFromPremiumOutlay, contractsFromMaxCap)
+
+  let bindingConstraint
+  if (contracts === contractsFromStopRisk && contracts <= contractsFromPremiumOutlay && contracts <= contractsFromMaxCap) {
+    bindingConstraint = 'stop_risk_budget'
+  } else if (contracts === contractsFromPremiumOutlay) {
+    bindingConstraint = 'premium_outlay_cap'
+  } else {
+    bindingConstraint = 'max_contracts_cap'
+  }
+
+  if (!(contracts > 0)) {
+    return {
+      contracts: 0, reason: 'unaffordable', warnings,
+      plannedStopLoss: Math.round(plannedStopLossPerContract * 100) / 100,
+      worstCasePremiumLoss: Math.round(worstCaseLossPerContract * 100) / 100,
+      accountRiskBudget: Math.round(accountRiskBudget * 100) / 100,
+      premiumOutlay: 0, premiumOutlayPct: 0, bindingConstraint: null,
+    }
+  }
+
+  const premiumOutlay = contracts * entryPremium * contractMultiplier
   return {
     contracts,
     reason: null,
-    maxLossPerContract: Math.round(maxLossPerContract * 100) / 100,
-    totalMaxLoss: Math.round(contracts * maxLossPerContract * 100) / 100,
+    plannedStopLoss: Math.round(plannedStopLossPerContract * contracts * 100) / 100,
+    worstCasePremiumLoss: Math.round(worstCaseLossPerContract * contracts * 100) / 100,
     accountRiskBudget: Math.round(accountRiskBudget * 100) / 100,
+    premiumOutlay: Math.round(premiumOutlay * 100) / 100,
+    premiumOutlayPct: Math.round((premiumOutlay / accountEquity) * 10000) / 100,
+    bindingConstraint,
+    warnings,
   }
 }
 
-module.exports = { calculateContracts }
+module.exports = { calculateContracts, DEFAULT_MAX_ACCOUNT_RISK_PCT, DEFAULT_MAX_PREMIUM_OUTLAY_PCT }

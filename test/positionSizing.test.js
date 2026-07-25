@@ -7,7 +7,7 @@ test('normal case: sizes a single contract within the account risk budget', () =
   const r = calculateContracts({ accountEquity: 50000, entryPremium: 2.00, premiumStopLossPct: 0.50, plannedAccountRiskPct: 0.0025 })
   assert.equal(r.contracts, 1)
   assert.equal(r.reason, null)
-  assert.equal(r.maxLossPerContract, 100)
+  assert.equal(r.plannedStopLoss, 100)
   assert.equal(r.accountRiskBudget, 125)
 })
 
@@ -46,12 +46,58 @@ test('spread within the allowed limit proceeds with normal sizing', () => {
   assert.equal(r.contracts, 1)
 })
 
-test('maxContracts caps an otherwise-large calculated position size', () => {
-  const r = calculateContracts({ accountEquity: 5000000, entryPremium: 1.00, premiumStopLossPct: 0.50, plannedAccountRiskPct: 0.0025, maxContracts: 3 })
-  assert.equal(r.contracts, 3)
+// ── Validation report fixes: reproducing the exact bugs found, confirming each is fixed ──
+
+test('fractional maxContracts is rejected as invalid input, never produces fractional contracts', () => {
+  const r = calculateContracts({ accountEquity: 50000, entryPremium: 1, premiumStopLossPct: 0.5, plannedAccountRiskPct: 0.01, maxContracts: 2.5 })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+  assert.ok(Number.isInteger(r.contracts))
 })
 
-test('without maxContracts specified, a large position is not artificially capped', () => {
-  const r = calculateContracts({ accountEquity: 5000000, entryPremium: 1.00, premiumStopLossPct: 0.50, plannedAccountRiskPct: 0.0025 })
-  assert.equal(r.contracts, 250)
+test('non-finite accountEquity (Infinity) is rejected, not silently propagated', () => {
+  const r = calculateContracts({ accountEquity: Infinity, entryPremium: 2, premiumStopLossPct: 0.5, plannedAccountRiskPct: 0.0025 })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})
+
+test('non-finite entryPremium (NaN) is rejected', () => {
+  const r = calculateContracts({ accountEquity: 50000, entryPremium: NaN, premiumStopLossPct: 0.5, plannedAccountRiskPct: 0.0025 })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})
+
+test('requesting 100% account risk is capped to the hard ceiling, with a warning', () => {
+  const r = calculateContracts({ accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5, plannedAccountRiskPct: 1.0 })
+  assert.ok(r.accountRiskBudget <= 50000 * 0.02)
+  assert.ok(r.warnings.length > 0)
+  assert.ok(r.warnings[0].includes('hard ceiling'))
+})
+
+test('worst-case premium loss is distinct from and greater than the planned stop loss', () => {
+  const r = calculateContracts({ accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5, plannedAccountRiskPct: 0.02 })
+  assert.ok(r.worstCasePremiumLoss > r.plannedStopLoss)
+  // premiumStopLossPct=0.5 means worst case should be exactly double the planned stop
+  assert.equal(r.worstCasePremiumLoss, r.plannedStopLoss * 2)
+})
+
+test('premium outlay cap can bind even when the stop-risk budget would allow more contracts', () => {
+  // A low maxPremiumOutlayPct relative to the risk budget forces the
+  // outlay cap to bind before the stop-risk budget does.
+  const r = calculateContracts({ accountEquity: 10000, entryPremium: 0.10, premiumStopLossPct: 0.50, plannedAccountRiskPct: 0.02, maxPremiumOutlayPct: 0.01 })
+  assert.equal(r.bindingConstraint, 'premium_outlay_cap')
+  assert.equal(r.contracts, 10)
+  assert.ok(r.premiumOutlayPct <= 1.01) // should not exceed the 1% cap used in this test (small float tolerance)
+})
+
+test('maxContracts caps an otherwise-larger calculated position size', () => {
+  const r = calculateContracts({ accountEquity: 5000000, entryPremium: 1.00, premiumStopLossPct: 0.50, plannedAccountRiskPct: 0.02, maxContracts: 3 })
+  assert.equal(r.contracts, 3)
+  assert.equal(r.bindingConstraint, 'max_contracts_cap')
+})
+
+test('contractMultiplier must be a positive integer', () => {
+  const r = calculateContracts({ accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5, plannedAccountRiskPct: 0.02, contractMultiplier: 100.5 })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
 })
