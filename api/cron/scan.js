@@ -379,6 +379,7 @@ module.exports = async function handler(req, res) {
           .eq('primary_strike', r.primaryStrikeRaw)
           .eq('expiry_raw', r.expiryRaw)
           .is('outcome', null)
+          .is('resolved_at', null)
           .not('signal_lifecycle_id', 'is', null)
           .order('scanned_at', { ascending: true })
           .limit(1)
@@ -504,6 +505,9 @@ module.exports = async function handler(req, res) {
           delta: r.delta, iv: r.iv,
           profit_target_pct: r.profitTargetPct, stop_loss_pct: r.stopLossPct,
           score: r.score,
+        }, {
+          assigned_at: scannedAt.toISOString(),
+          qualification_source: 'LIVE_AT_SIGNAL',
         }),
         // Measurement infrastructure — added 2026-07-21, per outside review.
         // Neither affects scoring or the live signal; both are logged for

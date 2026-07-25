@@ -34,9 +34,42 @@ const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a ro
 // intraday confirmation and fall back to daily-bar-only resolution.
 const TIMESALES_RETENTION_DAYS = 9
 
-function daysAgo(dateStr) {
+function daysAgo(dateStr, now = new Date()) {
   const d = new Date(dateStr + 'T12:00:00')
-  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24))
+  return Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+function scanTimeInNewYork(scannedAt) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(scannedAt))
+  const p = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  const hour = p.hour === '24' ? '00' : p.hour
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    time: `${hour}:${p.minute}:${p.second}`,
+  }
+}
+
+function barIsOnOrAfterSignal(barTime, scanMarketTime) {
+  if (!barTime) return true
+  const raw = String(barTime)
+  const hasExplicitOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  if (hasExplicitOffset) {
+    const parsed = new Date(raw)
+    if (Number.isNaN(parsed.getTime())) return true
+    const barMarketTime = scanTimeInNewYork(parsed)
+    return `${barMarketTime.date}T${barMarketTime.time}` >=
+      `${scanMarketTime.date}T${scanMarketTime.time}`
+  }
+  const localMatch = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/)
+  if (!localMatch) return true
+  const localTime = localMatch[2].length === 5 ? `${localMatch[2]}:00` : localMatch[2]
+  return `${localMatch[1]}T${localTime}` >=
+    `${scanMarketTime.date}T${scanMarketTime.time}`
 }
 
 let _sb = null
@@ -48,6 +81,21 @@ function sb() {
     } catch (e) { console.error('[cron/resolve-outcomes] supabase init failed:', e.message) }
   }
   return _sb
+}
+
+function addPendingResolutionFilters(query) {
+  return query.is('outcome', null).is('resolved_at', null)
+}
+
+function buildDeadLetterQuery(client, row, attempts, resolvedAt) {
+  const query = client.from('signal_history').update({
+    resolve_attempts: attempts,
+    resolution_method: 'data_unavailable',
+    resolved_at: resolvedAt,
+  })
+  return row.signal_lifecycle_id
+    ? query.eq('signal_lifecycle_id', row.signal_lifecycle_id)
+    : query.eq('id', row.id)
 }
 
 // Walks one day's 1-min bars in chronological order, looking for the first
@@ -95,18 +143,21 @@ async function getUnderlyingCloseOn(ticker, day, rateTracker) {
 // Resolves a single signal_history row. Returns a Supabase update payload,
 // or null if the row should be left untouched this run (still genuinely
 // unresolved, no error).
-async function resolveOne(row, rateTracker) {
+async function resolveOne(row, rateTracker, dependencies = {}) {
+  const getHistory = dependencies.getOptionHistory || getOptionHistory
+  const getTimesales = dependencies.getOptionTimesales || getOptionTimesales
+  const now = dependencies.now ? new Date(dependencies.now) : new Date()
   const occSymbol = buildOccSymbol(row.ticker, row.option_type, row.primary_strike, row.expiry_raw)
   const entryMid    = parseFloat(row.entry_mid)
   const targetPrice = entryMid * (1 + parseFloat(row.profit_target_pct))
   const stopPrice   = entryMid * (1 - parseFloat(row.stop_loss_pct))
 
-  const scannedDate = new Date(row.scanned_at)
   const expiryDate  = new Date(row.expiry_raw + 'T12:00:00')
-  const today       = new Date()
+  const today       = now
+  const scanMarketTime = scanTimeInNewYork(row.scanned_at)
 
   // Walk forward from either the day after the last CONFIRMED-clean day
-  // (if we've checked this row before) or the day after scanned_at (first
+  // (if we've checked this row before) or scanned_at's market day (first
   // check), through either today or expiry, whichever is earlier.
   //
   // ROOT CAUSE FIX (2026-07-25): before this, startDay was ALWAYS
@@ -125,7 +176,7 @@ async function resolveOne(row, rateTracker) {
   const walkEnd = today < expiryDate ? today : expiryDate
   const startDay = row.last_walked_through
     ? (() => { const d = new Date(row.last_walked_through + 'T12:00:00'); d.setDate(d.getDate() + 1); return d })()
-    : (() => { const d = new Date(scannedDate); d.setDate(d.getDate() + 1); return d })()
+    : new Date(scanMarketTime.date + 'T12:00:00')
   const days = tradingDaysBetween(startDay, walkEnd)
 
   // Tracks whether the walk hit a crossing day that we COULD have confirmed
@@ -137,10 +188,40 @@ async function resolveOne(row, rateTracker) {
   let sawUnconfirmableRecentCrossing = false
 
   for (const day of days) {
+    const isEntryDay = !row.last_walked_through && day === scanMarketTime.date
+
+    // The daily bar contains price action before the signal. For entry day,
+    // inspect only one-minute bars at or after scanned_at.
+    if (isEntryDay && daysAgo(day, now) <= TIMESALES_RETENTION_DAYS) {
+      const bars = await getTimesales(
+        occSymbol,
+        `${day} ${scanMarketTime.time.slice(0, 5)}`,
+        `${day} 16:00`,
+        rateTracker,
+      )
+      if (bars.length === 0) {
+        sawUnconfirmableRecentCrossing = true
+        continue
+      }
+      const postSignalBars = bars.filter(bar => barIsOnOrAfterSignal(bar.time, scanMarketTime))
+      const hit = findFirstThresholdHit(postSignalBars, targetPrice, stopPrice)
+      if (hit) {
+        return {
+          outcome: hit.outcome,
+          hit_target_at: hit.outcome === 'WIN' ? hit.at : null,
+          hit_stop_at: hit.outcome === 'LOSS' ? hit.at : null,
+          resolved_at: now.toISOString(),
+          resolution_method: hit.type,
+          _resolvedDay: day,
+        }
+      }
+      continue
+    }
+
     // Step 1 — cheap pre-check via daily history. Skip the 1-min pull
     // entirely if neither threshold could possibly have been crossed that
     // day (spec §4 step 1).
-    const dailyBars = await getOptionHistory(occSymbol, day, day, rateTracker)
+    const dailyBars = await getHistory(occSymbol, day, day, rateTracker)
     const dailyBar = dailyBars[0]
     if (!dailyBar) {
       // No data this specific day — see note below; single missing day is
@@ -151,7 +232,16 @@ async function resolveOne(row, rateTracker) {
     if (!couldHaveCrossed) continue
 
     // A crossing is indicated. Decide HOW to confirm based on the day's age.
-    const ageDays = daysAgo(day)
+    const ageDays = daysAgo(day, now)
+
+    if (isEntryDay) {
+      return {
+        outcome: 'AMBIGUOUS',
+        resolved_at: now.toISOString(),
+        resolution_method: 'entry_day_daily_crossing_unverifiable',
+        _resolvedDay: day,
+      }
+    }
 
     if (ageDays > TIMESALES_RETENTION_DAYS) {
       // Intraday data for this day is permanently gone. Do NOT burn a
@@ -170,7 +260,7 @@ async function resolveOne(row, rateTracker) {
         // most likely to span both). Mark ambiguous, exclude from win-rate.
         return {
           outcome: 'AMBIGUOUS',
-          resolved_at: new Date().toISOString(),
+          resolved_at: now.toISOString(),
           resolution_method: 'daily_bar_both_crossed_ambiguous',
           _resolvedDay: day,
         }
@@ -179,7 +269,7 @@ async function resolveOne(row, rateTracker) {
         return {
           outcome: 'WIN',
           hit_target_at: `${day}T00:00:00Z`, // day-level only; no intraday timestamp available
-          resolved_at: new Date().toISOString(),
+          resolved_at: now.toISOString(),
           resolution_method: 'daily_bar_fallback_target',
           _resolvedDay: day,
         }
@@ -188,7 +278,7 @@ async function resolveOne(row, rateTracker) {
       return {
         outcome: 'LOSS',
         hit_stop_at: `${day}T00:00:00Z`,
-        resolved_at: new Date().toISOString(),
+        resolved_at: now.toISOString(),
         resolution_method: 'daily_bar_fallback_stop',
         _resolvedDay: day,
       }
@@ -196,7 +286,7 @@ async function resolveOne(row, rateTracker) {
 
     // Recent enough — intraday confirmation is still possible. Step 2: real
     // 1-min bars for this specific day only.
-    const bars = await getOptionTimesales(occSymbol, `${day} 09:30`, `${day} 16:00`, rateTracker)
+    const bars = await getTimesales(occSymbol, `${day} 09:30`, `${day} 16:00`, rateTracker)
     if (bars.length === 0) {
       // Daily bar said it crossed but timesales returned nothing, on a day
       // still INSIDE the retention window — genuine transient inconsistency,
@@ -213,7 +303,7 @@ async function resolveOne(row, rateTracker) {
         outcome: hit.outcome,
         hit_target_at: hit.outcome === 'WIN' ? hit.at : null,
         hit_stop_at:   hit.outcome === 'LOSS' ? hit.at : null,
-        resolved_at: new Date().toISOString(),
+        resolved_at: now.toISOString(),
         resolution_method: hit.type,
         _resolvedDay: day,
       }
@@ -249,7 +339,7 @@ async function resolveOne(row, rateTracker) {
   // data_unavailable path below, not a bug to paper over with a recomputed
   // range that would also come back empty for the same reason.
   const lastTradingDay = days[days.length - 1] || null
-  const closeBars = lastTradingDay ? await getOptionHistory(occSymbol, lastTradingDay, lastTradingDay, rateTracker) : []
+  const closeBars = lastTradingDay ? await getHistory(occSymbol, lastTradingDay, lastTradingDay, rateTracker) : []
   const exitMid = closeBars[0]?.close ?? null
 
   if (exitMid === null) {
@@ -265,7 +355,7 @@ async function resolveOne(row, rateTracker) {
     outcome: pnlPct > 0 ? 'EXPIRED_PARTIAL' : 'EXPIRED_FLAT',
     exit_mid_at_expiry: exitMid,
     pnl_pct_at_expiry: pnlPct,
-    resolved_at: new Date().toISOString(),
+    resolved_at: now.toISOString(),
     resolution_method: pnlPct > 0 ? 'expired_partial' : 'expired_flat',
     _resolvedDay: lastTradingDay,
   }
@@ -302,10 +392,10 @@ module.exports = async function handler(req, res) {
     // rides the partial index idx_signal_history_unresolved_primary (~200ms,
     // was ~9.2s full-scan which timed out the client and silently failed the
     // guard open — that's why the guard wasn't working).
-    const { count, error: countErr } = await client
+    const countQuery = client
       .from('signal_history')
       .select('id', { count: 'exact', head: true })
-      .is('outcome', null)
+    const { count, error: countErr } = await addPendingResolutionFilters(countQuery)
       .eq('is_lifecycle_primary', true)
       .in('timeframe', ['Quick (5–14 DTE)', 'Swing (21–45 DTE)'])
     if (countErr) {
@@ -335,10 +425,9 @@ module.exports = async function handler(req, res) {
   // point. The outcome gets propagated to every row in the lifecycle below
   // (not just the primary), so QA queries against any individual row still
   // see the real, correct final result.
-  let query = client
+  let query = addPendingResolutionFilters(client
     .from('signal_history')
-    .select('*')
-    .is('outcome', null)
+    .select('*'))
     .eq('is_lifecycle_primary', true)
 
   // BURNDOWN MODE targeting: the oldest unresolved rows are LEAP/Deep LEAP
@@ -444,13 +533,12 @@ module.exports = async function handler(req, res) {
         const attempts = (row.resolve_attempts || 0) + 1
         if (attempts >= MAX_RETRIES) {
           dataUnavailable++
-          const { error } = await client.from('signal_history')
-            .update({
-              resolve_attempts: attempts,
-              resolution_method: 'data_unavailable',
-              resolved_at: new Date().toISOString(),
-            })
-            .eq('id', row.id)
+          const { error } = await buildDeadLetterQuery(
+            client,
+            row,
+            attempts,
+            new Date().toISOString(),
+          )
           if (error) console.error(`[resolve-outcomes] failed to dead-letter id=${row.id}:`, error.message)
         } else {
           stillOpen++
@@ -516,4 +604,14 @@ module.exports = async function handler(req, res) {
     },
     results,
   })
+}
+
+module.exports._test = {
+  addPendingResolutionFilters,
+  barIsOnOrAfterSignal,
+  buildDeadLetterQuery,
+  daysAgo,
+  findFirstThresholdHit,
+  resolveOne,
+  scanTimeInNewYork,
 }
