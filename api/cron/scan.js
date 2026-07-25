@@ -20,6 +20,7 @@ const { getSRLevels } = require('../_lib/srLevels')
 const { SP500 } = require('../_lib/sp500')
 const { getTrendContext, getVix } = require('../_lib/trendContext')
 const { getRecentNewsSignal } = require('../_lib/newsSignal')
+const { buildQualificationRecord } = require('../_lib/strategyClassification')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -495,6 +496,15 @@ module.exports = async function handler(req, res) {
         // Phase 2 shadow reweight (2026-07-20) — see convictionScore.cjs
         // TF_WEIGHT_PROFILES comment. Never affects the live score/signal.
         shadow_technical_reweight_score: r.shadowTechnicalReweightScore ?? null,
+        // Qualified Strategy V1 (2026-07-25) — see strategyClassification.js.
+        // SHADOW ONLY, never filters/blocks — purely a classification label.
+        ...buildQualificationRecord({
+          option_type: r.optionType, timeframe: tf, dte_at_signal: r.dte,
+          entry_mid: r.midRaw, bid: r.bidRaw, ask: r.askRaw,
+          delta: r.delta, iv: r.iv,
+          profit_target_pct: r.profitTargetPct, stop_loss_pct: r.stopLossPct,
+          score: r.score,
+        }),
         // Measurement infrastructure — added 2026-07-21, per outside review.
         // Neither affects scoring or the live signal; both are logged for
         // future analysis. See scanLogic.js/convictionScore.cjs for details.
