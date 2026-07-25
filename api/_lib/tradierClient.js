@@ -77,6 +77,41 @@ async function tFetch(path, tracker) {
   if (!r.ok) return null
   try { return await r.json() } catch { return null }
 }
+
+// tFetchDetailed (added 2026-07-25, audit Finding 4) — preserves HTTP
+// status/error information that tFetch collapses into a bare null. Added
+// as a NEW, separate function rather than changing tFetch's own contract —
+// tFetch has many existing callers across the app (getQuote, getExpiries,
+// getChain, etc.); changing its return shape would be exactly the "change
+// every consumer in one risky deployment" the audit explicitly warned
+// against. This is scoped to the resolver's specific need for now, per the
+// audit's own suggested sequencing ("add a resolver-specific detailed
+// helper first, then migrate other callers later").
+async function tFetchDetailed(path, tracker) {
+  const url = `${TRADIER_BASE}${path}`
+  let r
+  try {
+    r = await fetch(url, { headers: { Authorization: `Bearer ${TRADIER_TOKEN}`, Accept: 'application/json' } })
+  } catch (e) {
+    // Network-level failure (DNS, timeout, connection reset) — genuinely
+    // no response at all, not even an HTTP status. Retryable by nature.
+    return { ok: false, status: 0, data: null, errorType: 'NETWORK_ERROR', retryable: true }
+  }
+  recordRateHeaders(tracker, r)
+  if (r.ok) {
+    try { return { ok: true, status: r.status, data: await r.json(), errorType: null, retryable: false } }
+    catch { return { ok: false, status: r.status, data: null, errorType: 'PARSE_ERROR', retryable: false } }
+  }
+  const errorType =
+    r.status === 429 ? 'RATE_LIMIT' :
+    r.status === 401 || r.status === 403 ? 'AUTH_ERROR' :
+    r.status >= 500 ? 'SERVER_ERROR' :
+    r.status === 400 ? 'BAD_REQUEST' :
+    'HTTP_ERROR'
+  const retryable = r.status === 429 || r.status >= 500
+  return { ok: false, status: r.status, data: null, errorType, retryable }
+}
+
 async function tFetchPost(path, body, tracker) {
   const url = `${TRADIER_BASE}${path}`
   const r = await fetch(url, {
@@ -137,10 +172,28 @@ const getOptionTimesales = async (occSymbol, startDateTime, endDateTime, tracker
   return Array.isArray(bars) ? bars : [bars]
 }
 
+// getOptionTimesalesDetailed (added 2026-07-25, audit Finding 4) —
+// resolver-specific variant using tFetchDetailed. Distinguishes a genuine
+// empty response (ok:true, no trades yet — a real, meaningful signal) from
+// a failed request (ok:false — tells us nothing about whether the option
+// actually traded, and should never count toward a signal's retry/dead-
+// letter progress). Scoped to the resolver's entry-day check for now, not
+// a replacement for plain getOptionTimesales (still used elsewhere as-is).
+const getOptionTimesalesDetailed = async (occSymbol, startDateTime, endDateTime, tracker) => {
+  const r = await tFetchDetailed(
+    `/markets/timesales?symbol=${occSymbol}&interval=1min&start=${encodeURIComponent(startDateTime)}&end=${encodeURIComponent(endDateTime)}`,
+    tracker
+  )
+  if (!r.ok) return { ok: false, errorType: r.errorType, retryable: r.retryable, status: r.status, bars: [] }
+  const bars = r.data?.series?.data
+  if (!bars) return { ok: true, errorType: null, retryable: false, status: r.status, bars: [] }
+  return { ok: true, errorType: null, retryable: false, status: r.status, bars: Array.isArray(bars) ? bars : [bars] }
+}
+
 module.exports = {
   TRADIER_TOKEN, TRADIER_BASE,
   newRateTracker, recordRateHeaders, logRateSummary,
-  tFetch, tFetchPost,
+  tFetch, tFetchPost, tFetchDetailed,
   getQuote, getExpiries, getChain,
-  getOptionHistory, getOptionTimesales,
+  getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed,
 }

@@ -18,7 +18,7 @@
 // bars across 5 real signals — the same-bar tie-break rule below is a rare-
 // case safety net, not a load-bearing assumption. See spec §6.
 
-const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales } = require('../_lib/tradierClient')
+const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed } = require('../_lib/tradierClient')
 const { buildOccSymbol } = require('../_lib/occSymbol')
 const { tradingDaysBetween } = require('../_lib/marketCalendar')
 
@@ -146,6 +146,7 @@ async function getUnderlyingCloseOn(ticker, day, rateTracker) {
 async function resolveOne(row, rateTracker, dependencies = {}) {
   const getHistory = dependencies.getOptionHistory || getOptionHistory
   const getTimesales = dependencies.getOptionTimesales || getOptionTimesales
+  const getTimesalesDetailed = dependencies.getOptionTimesalesDetailed || getOptionTimesalesDetailed
   const now = dependencies.now ? new Date(dependencies.now) : new Date()
   const occSymbol = buildOccSymbol(row.ticker, row.option_type, row.primary_strike, row.expiry_raw)
   const entryMid    = parseFloat(row.entry_mid)
@@ -193,12 +194,31 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     // The daily bar contains price action before the signal. For entry day,
     // inspect only one-minute bars at or after scanned_at.
     if (isEntryDay && daysAgo(day, now) <= TIMESALES_RETENTION_DAYS) {
-      const bars = await getTimesales(
+      // AUDIT FIX (2026-07-25, Finding 4): was getTimesales (bare array),
+      // which returns [] both when Tradier genuinely has no trades yet AND
+      // when the request itself failed (429/5xx/network error/auth) —
+      // completely indistinguishable. bars.length===0 then set
+      // sawUnconfirmableRecentCrossing=true, which DOES increment
+      // resolve_attempts toward dead-lettering (see _retryableGap below) —
+      // meaning a transient Tradier hiccup could push a signal toward being
+      // wrongly marked data_unavailable. getTimesalesDetailed distinguishes
+      // the two: a genuine empty response keeps the existing retryable
+      // behavior; a real failure just skips this day with NO penalty this
+      // run (the row is untouched, picked up fresh next run for free — the
+      // existing batch-level circuit breaker still catches a sustained
+      // outage across the run, so this isn't the only safety net).
+      const result = await getTimesalesDetailed(
         occSymbol,
         `${day} ${scanMarketTime.time.slice(0, 5)}`,
         `${day} 16:00`,
         rateTracker,
       )
+      if (!result.ok) {
+        // Real API failure, not genuine emptiness — leave this row
+        // completely untouched this run, no retry-count penalty.
+        continue
+      }
+      const bars = result.bars
       if (bars.length === 0) {
         sawUnconfirmableRecentCrossing = true
         continue
