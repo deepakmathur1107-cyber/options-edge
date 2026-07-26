@@ -20,7 +20,8 @@
 
 const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed, getOptionHistoryDetailed } = require('../_lib/tradierClient')
 const { buildOccSymbol } = require('../_lib/occSymbol')
-const { tradingDaysBetween, getSessionClose, timeToMinutes } = require('../_lib/marketCalendar')
+const { tradingDaysBetween, getSessionClose, timeToMinutes, isTradingDay } = require('../_lib/marketCalendar')
+const { buildProfitabilityMetrics } = require('../_lib/profitabilityMetrics')
 
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a row (spec §5)
@@ -131,6 +132,15 @@ function findFirstThresholdHit(bars, targetPrice, stopPrice) {
   return null
 }
 
+function shouldRunBurndownNow(now = new Date()) {
+  if (!isTradingDay(now)) return false
+  const marketTime = scanTimeInNewYork(now)
+  const close = getSessionClose(marketTime.date)
+  const minutes = timeToMinutes(marketTime.time)
+  const closeMinutes = timeToMinutes(close)
+  return minutes != null && closeMinutes != null && minutes >= closeMinutes + 15
+}
+
 // Looks up the UNDERLYING stock's closing price on the resolution day, so we
 // can natively record the entry-vs-exit stock move (distinguishing a genuine
 // wrong-direction loss from a theta/IV-decay loss). Uses /markets/history for
@@ -215,6 +225,30 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   // once set, it caps how far the cursor is allowed to advance THIS RUN.
   let stoppedEarlyAt = null
   let walkFailed = false
+  let maxOptionHigh = Number.isFinite(Number(row.walk_max_option_high))
+    ? Number(row.walk_max_option_high)
+    : null
+  let minOptionLow = Number.isFinite(Number(row.walk_min_option_low))
+    ? Number(row.walk_min_option_low)
+    : null
+  const recordBars = bars => {
+    for (const bar of bars || []) {
+      const high = Number(bar.high)
+      const low = Number(bar.low)
+      if (Number.isFinite(high)) maxOptionHigh = maxOptionHigh == null ? high : Math.max(maxOptionHigh, high)
+      if (Number.isFinite(low)) minOptionLow = minOptionLow == null ? low : Math.min(minOptionLow, low)
+    }
+  }
+  const terminal = update => ({
+    ...update,
+    _maxOptionHigh: maxOptionHigh,
+    _minOptionLow: minOptionLow,
+  })
+  const recordThroughHit = (bars, hit) => {
+    if (!hit?.at) return recordBars(bars)
+    const hitIndex = bars.findIndex(bar => bar.time === hit.at)
+    recordBars(hitIndex >= 0 ? bars.slice(0, hitIndex + 1) : bars)
+  }
 
   for (let dayIndex = 0; dayIndex < days.length; dayIndex++) {
     const day = days[dayIndex]
@@ -268,15 +302,16 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
       }
       const postSignalBars = bars.filter(bar => barIsOnOrAfterSignal(bar.time, scanMarketTime))
       const hit = findFirstThresholdHit(postSignalBars, targetPrice, stopPrice)
+      recordThroughHit(postSignalBars, hit)
       if (hit) {
-        return {
+        return terminal({
           outcome: hit.outcome,
           hit_target_at: hit.outcome === 'WIN' ? hit.at : null,
           hit_stop_at: hit.outcome === 'LOSS' ? hit.at : null,
           resolved_at: now.toISOString(),
           resolution_method: hit.type,
           _resolvedDay: day,
-        }
+        })
       }
       continue
     }
@@ -312,6 +347,7 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
       // skipped, walk continues.
       continue
     }
+    recordBars([dailyBar])
     const couldHaveCrossed = dailyBar.high >= targetPrice || dailyBar.low <= stopPrice
     if (!couldHaveCrossed) continue
 
@@ -319,12 +355,12 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     const ageDays = daysAgo(day, now)
 
     if (isEntryDay) {
-      return {
+      return terminal({
         outcome: 'AMBIGUOUS',
         resolved_at: now.toISOString(),
         resolution_method: 'entry_day_daily_crossing_unverifiable',
         _resolvedDay: day,
-      }
+      })
     }
 
     if (ageDays > TIMESALES_RETENTION_DAYS) {
@@ -342,30 +378,30 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
         // would fabricate a directional result and systematically depress
         // win rate on exactly the highest-volatility days (widest range =
         // most likely to span both). Mark ambiguous, exclude from win-rate.
-        return {
+        return terminal({
           outcome: 'AMBIGUOUS',
           resolved_at: now.toISOString(),
           resolution_method: 'daily_bar_both_crossed_ambiguous',
           _resolvedDay: day,
-        }
+        })
       }
       if (dHitTarget) {
-        return {
+        return terminal({
           outcome: 'WIN',
           hit_target_at: `${day}T00:00:00Z`, // day-level only; no intraday timestamp available
           resolved_at: now.toISOString(),
           resolution_method: 'daily_bar_fallback_target',
           _resolvedDay: day,
-        }
+        })
       }
       // dHitStop
-      return {
+      return terminal({
         outcome: 'LOSS',
         hit_stop_at: `${day}T00:00:00Z`,
         resolved_at: now.toISOString(),
         resolution_method: 'daily_bar_fallback_stop',
         _resolvedDay: day,
-      }
+      })
     }
 
     // Recent enough — intraday confirmation is still possible. Step 2: real
@@ -399,15 +435,16 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
       continue
     }
     const hit = findFirstThresholdHit(bars, targetPrice, stopPrice)
+    recordThroughHit(bars, hit)
     if (hit) {
-      return {
+      return terminal({
         outcome: hit.outcome,
         hit_target_at: hit.outcome === 'WIN' ? hit.at : null,
         hit_stop_at:   hit.outcome === 'LOSS' ? hit.at : null,
         resolved_at: now.toISOString(),
         resolution_method: hit.type,
         _resolvedDay: day,
-      }
+      })
     }
     // Daily range suggested a cross but 1-min walk didn't confirm — daily/
     // intraday aggregation mismatch. Continue to next day.
@@ -444,7 +481,12 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     const cursorDate = !walkFailed
       ? walkEnd.toISOString().slice(0, 10)
       : stoppedEarlyAt // already a 'YYYY-MM-DD' string or null
-    return { _stillOpen: true, _lastWalkedThrough: cursorDate }
+    return {
+      _stillOpen: true,
+      _lastWalkedThrough: cursorDate,
+      _maxOptionHigh: maxOptionHigh,
+      _minOptionLow: minOptionLow,
+    }
   }
 
   // Past expiry with no threshold ever crossed → terminal expired state
@@ -457,6 +499,7 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   const lastTradingDay = days[days.length - 1] || null
   const closeBars = lastTradingDay ? await getHistory(occSymbol, lastTradingDay, lastTradingDay, rateTracker) : []
   const exitMid = closeBars[0]?.close ?? null
+  recordBars(closeBars)
 
   if (exitMid === null) {
     // Expired and we never got a single usable price print for it. Don't
@@ -467,14 +510,14 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   }
 
   const pnlPct = (exitMid - entryMid) / entryMid
-  return {
+  return terminal({
     outcome: pnlPct > 0 ? 'EXPIRED_PARTIAL' : 'EXPIRED_FLAT',
     exit_mid_at_expiry: exitMid,
     pnl_pct_at_expiry: pnlPct,
     resolved_at: now.toISOString(),
     resolution_method: pnlPct > 0 ? 'expired_partial' : 'expired_flat',
     _resolvedDay: lastTradingDay,
-  }
+  })
 }
 
 module.exports = async function handler(req, res) {
@@ -502,6 +545,33 @@ module.exports = async function handler(req, res) {
   // Scoped to burndownMode so the nightly full-run cron (0 23) is unaffected:
   // it should always run its normal course regardless of backlog size.
   const burndownMode = req.query.burndown === '1'
+  if (burndownMode && !isManualTrigger && !shouldRunBurndownNow(runStartedAt)) {
+    await persistResolverRun(client, {
+      started_at: runStartedAt.toISOString(),
+      finished_at: new Date().toISOString(),
+      mode: 'burndown',
+      batch_limit: parseInt(req.query.limit, 10) || 100,
+      rows_fetched: 0,
+      rows_processed: 0,
+      resolved: 0,
+      still_open: 0,
+      data_unavailable: 0,
+      errors: 0,
+      circuit_broken: false,
+      timed_out: false,
+      tradier_calls: 0,
+      status_counts: {},
+      skip_reason: 'market_closed_no_new_outcome_data',
+      deployment_sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
+    })
+    return res.status(200).json({
+      burndown: true,
+      skipped: true,
+      reason: 'market_closed_no_new_outcome_data',
+      checked: 0,
+      resolved: 0,
+    })
+  }
   if (burndownMode) {
     // Count only the timeframes burndown actually processes (Quick+Swing) —
     // "backlog empty" for burndown means those are done, regardless of any
@@ -659,8 +729,11 @@ module.exports = async function handler(req, res) {
         // from scratch again (the OLD behavior) rather than anything
         // incorrect — never worth failing the whole batch over.
         if (update._lastWalkedThrough) {
+          const cursorUpdate = { last_walked_through: update._lastWalkedThrough }
+          if (update._maxOptionHigh != null) cursorUpdate.walk_max_option_high = update._maxOptionHigh
+          if (update._minOptionLow != null) cursorUpdate.walk_min_option_low = update._minOptionLow
           const { error: cursorErr } = await client.from('signal_history')
-            .update({ last_walked_through: update._lastWalkedThrough })
+            .update(cursorUpdate)
             .eq('id', row.id)
           if (cursorErr) console.error(`[resolve-outcomes] cursor persist failed id=${row.id}:`, cursorErr.message)
         }
@@ -710,6 +783,9 @@ module.exports = async function handler(req, res) {
             : underlyingAtResolution < row.underlying_price
         }
       }
+      Object.assign(update, buildProfitabilityMetrics(row, update))
+      delete update._maxOptionHigh
+      delete update._minOptionLow
       delete update._resolvedDay // internal-only, not a real column
       // Propagate to every row sharing this lifecycle, not just the primary
       // row we walked — the duplicate scans of this same real signal
@@ -776,5 +852,6 @@ module.exports._test = {
   findFirstThresholdHit,
   resolveOne,
   scanTimeInNewYork,
+  shouldRunBurndownNow,
   persistResolverRun,
 }

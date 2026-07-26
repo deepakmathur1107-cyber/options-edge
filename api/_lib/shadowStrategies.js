@@ -1,0 +1,56 @@
+const SHADOW_STRATEGY_VERSION = 'profitability_shadow_v2'
+
+function buildShadowStrategies(signal) {
+  const optionType = String(signal.option_type || '').toLowerCase()
+  const trend = String(signal.long_term_trend || '').toLowerCase()
+  const chgPct = Number(signal.chg_pct)
+  const spread = Number(signal.entry_spread_pct)
+  const volume = Number(signal.volume)
+  const openInterest = Number(signal.open_interest)
+  const trendAligned = (optionType === 'call' && trend === 'bullish') ||
+    (optionType === 'put' && trend === 'bearish')
+  const directionConfirmed = Number.isFinite(chgPct) &&
+    ((optionType === 'call' && chgPct >= 0.5) || (optionType === 'put' && chgPct <= -0.5))
+  const liquid = Number.isFinite(spread) && spread <= 20 &&
+    Number.isFinite(volume) && volume >= 50 &&
+    Number.isFinite(openInterest) && openInterest >= 500
+
+  return {
+    version: SHADOW_STRATEGY_VERSION,
+    assignments: {
+      regime_aligned_v2a: trendAligned,
+      entry_confirmation_v2b: directionConfirmed,
+      liquidity_gate_v2c: liquid,
+      combined_quality_v2d: trendAligned && directionConfirmed && liquid,
+      defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
+    },
+    exit_policies: {
+      time_stop_v2f: {
+        max_holding_trading_days: signal.timeframe?.startsWith('Quick') ? 3 : 10,
+      },
+      partial_profit_v2g: {
+        partial_exit_profit_pct: 0.30,
+        partial_size_pct: 0.50,
+        trailing_stop_pct_on_remainder: 0.20,
+      },
+      tighter_stop_v2h: {
+        profit_target_pct: Number.isFinite(Number(signal.profit_target_pct))
+          ? Number(signal.profit_target_pct)
+          : null,
+        stop_loss_pct: 0.35,
+      },
+    },
+    inputs: {
+      option_type: optionType || null,
+      long_term_trend: trend || null,
+      chg_pct: Number.isFinite(chgPct) ? chgPct : null,
+      entry_spread_pct: Number.isFinite(spread) ? spread : null,
+      volume: Number.isFinite(volume) ? volume : null,
+      open_interest: Number.isFinite(openInterest) ? openInterest : null,
+      timeframe: signal.timeframe || null,
+    },
+    shadow_only: true,
+  }
+}
+
+module.exports = { buildShadowStrategies, SHADOW_STRATEGY_VERSION }
