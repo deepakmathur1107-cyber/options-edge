@@ -12,6 +12,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { getAuth, ADMIN_IDS } = require('../_lib/auth');
+const { deriveResolverRunHealth } = require('../_lib/resolverHealth');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -50,6 +51,7 @@ module.exports = async (req, res) => {
       entryDayUnverifiable,
       dailyFallbackCount,
       oldestPendingRow,
+      resolverRuns,
     ] = await Promise.all([
       countQuery(q => q.is('outcome', null).is('resolved_at', null)),
       countQuery(q => q.is('outcome', null).not('resolved_at', 'is', null).eq('resolution_method', 'data_unavailable')),
@@ -65,19 +67,28 @@ module.exports = async (req, res) => {
         .eq('is_lifecycle_primary', true).is('outcome', null).is('resolved_at', null)
         .order('scanned_at', { ascending: true }).limit(1).maybeSingle()
         .then(({ data, error }) => { if (error) throw error; return data; }),
+      supabase.from('resolver_runs')
+        .select('started_at, finished_at, mode, rows_fetched, rows_processed, resolved, still_open, data_unavailable, errors, circuit_broken, timed_out, tradier_calls, status_counts, deployment_sha')
+        .order('started_at', { ascending: false }).limit(12)
+        .then(({ data, error }) => {
+          // Safe during a rolling deployment where API code may briefly arrive
+          // before the migration. The response reports the missing telemetry.
+          if (error?.code === '42P01' || error?.code === 'PGRST205') return [];
+          if (error) throw error;
+          return data || [];
+        }),
     ]);
 
     const oldestPendingAgeHours = oldestPendingRow
       ? Math.round((Date.now() - new Date(oldestPendingRow.scanned_at).getTime()) / (1000 * 60 * 60))
       : null;
 
-    const states = [];
-    if (resolvedLastHour === 0 && truePending > 0) states.push('RESOLVER_STALLED');
-    if (truePending > 0 && resolvedLastHour > 0) states.push('HEALTHY_PROCESSING_BACKLOG');
-    if (truePending === 0) states.push('HEALTHY_CAUGHT_UP');
-    if (cursorStalledRows > 50) states.push('CURSOR_STALLED');
-    if (truePending > 0 && terminalDataUnavailable / Math.max(1, truePending + terminalDataUnavailable) > 0.05) states.push('DEAD_LETTER_RATE_HIGH');
-    const healthStates = states.length ? states : ['HEALTHY_CAUGHT_UP'];
+    const { healthStates, lastRunAgeMinutes } = deriveResolverRunHealth({
+      runs: resolverRuns,
+      truePending,
+      cursorStalledRows,
+      terminalDataUnavailable,
+    });
 
     return res.status(200).json({
       generatedAt: new Date().toISOString(),
@@ -98,6 +109,10 @@ module.exports = async (req, res) => {
       throughput: {
         resolvedLastHour,
         resolvedLastDay,
+      },
+      resolverRuns: {
+        lastRunAgeMinutes,
+        recent: resolverRuns,
       },
       resolutionQuality: {
         dailyFallbackCount,

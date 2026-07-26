@@ -101,3 +101,39 @@ test('contractMultiplier must be a positive integer', () => {
   assert.equal(r.contracts, 0)
   assert.equal(r.reason, 'invalid_input')
 })
+
+test('caller cannot override the absolute account-risk ceiling', () => {
+  const r = calculateContracts({
+    accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5,
+    plannedAccountRiskPct: 0.02, maxAccountRiskPct: 0.50,
+  })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})
+
+test('caller cannot override the absolute premium-outlay ceiling', () => {
+  const r = calculateContracts({
+    accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5,
+    plannedAccountRiskPct: 0.02, maxPremiumOutlayPct: 0.50,
+  })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})
+
+test('percentage fractions above one are rejected', () => {
+  const r = calculateContracts({
+    accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 50,
+    plannedAccountRiskPct: 0.02,
+  })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})
+
+test('spread inputs must be finite and non-negative', () => {
+  const r = calculateContracts({
+    accountEquity: 50000, entryPremium: 2, premiumStopLossPct: 0.5,
+    plannedAccountRiskPct: 0.02, entrySpreadPct: -1, maxSpreadPctAllowed: 20,
+  })
+  assert.equal(r.contracts, 0)
+  assert.equal(r.reason, 'invalid_input')
+})

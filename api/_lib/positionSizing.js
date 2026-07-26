@@ -16,6 +16,8 @@
 
 const DEFAULT_MAX_ACCOUNT_RISK_PCT = 0.02   // hard ceiling: never risk more than 2% of account on the planned stop, regardless of what's requested
 const DEFAULT_MAX_PREMIUM_OUTLAY_PCT = 0.10 // hard ceiling: never commit more than 10% of account equity in premium, regardless of the risk-based sizing result
+const ABSOLUTE_MAX_ACCOUNT_RISK_PCT = 0.02
+const ABSOLUTE_MAX_PREMIUM_OUTLAY_PCT = 0.10
 
 function invalid(reason, warnings) {
   return { contracts: 0, reason, plannedStopLoss: null, worstCasePremiumLoss: null,
@@ -57,6 +59,20 @@ function calculateContracts({
 
   if (!(accountEquity > 0) || !(entryPremium > 0) || !(premiumStopLossPct > 0) || !(plannedAccountRiskPct > 0) || !(contractMultiplier > 0)) {
     return invalid('invalid_input', ['accountEquity, entryPremium, premiumStopLossPct, plannedAccountRiskPct, and contractMultiplier must all be positive'])
+  }
+  if (premiumStopLossPct > 1 || plannedAccountRiskPct > 1) {
+    return invalid('invalid_input', ['premiumStopLossPct and plannedAccountRiskPct must be fractions between 0 and 1'])
+  }
+  if (!(maxAccountRiskPct > 0) || maxAccountRiskPct > ABSOLUTE_MAX_ACCOUNT_RISK_PCT) {
+    return invalid('invalid_input', [`maxAccountRiskPct cannot exceed ${ABSOLUTE_MAX_ACCOUNT_RISK_PCT}`])
+  }
+  if (!(maxPremiumOutlayPct > 0) || maxPremiumOutlayPct > ABSOLUTE_MAX_PREMIUM_OUTLAY_PCT) {
+    return invalid('invalid_input', [`maxPremiumOutlayPct cannot exceed ${ABSOLUTE_MAX_PREMIUM_OUTLAY_PCT}`])
+  }
+  for (const [key, value] of Object.entries({ entrySpreadPct, maxSpreadPctAllowed })) {
+    if (value != null && (!Number.isFinite(value) || value < 0)) {
+      return invalid('invalid_input', [`${key} must be a non-negative finite number when provided`])
+    }
   }
 
   // Integer enforcement — options contracts are always whole numbers. The
@@ -140,4 +156,10 @@ function calculateContracts({
   }
 }
 
-module.exports = { calculateContracts, DEFAULT_MAX_ACCOUNT_RISK_PCT, DEFAULT_MAX_PREMIUM_OUTLAY_PCT }
+module.exports = {
+  calculateContracts,
+  DEFAULT_MAX_ACCOUNT_RISK_PCT,
+  DEFAULT_MAX_PREMIUM_OUTLAY_PCT,
+  ABSOLUTE_MAX_ACCOUNT_RISK_PCT,
+  ABSOLUTE_MAX_PREMIUM_OUTLAY_PCT,
+}
