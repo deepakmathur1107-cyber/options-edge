@@ -22,6 +22,7 @@ const { getTrendContext, getVix } = require('../_lib/trendContext')
 const { getRecentNewsSignal } = require('../_lib/newsSignal')
 const { buildQualificationRecord } = require('../_lib/strategyClassification')
 const { classifyOptionMarketSession } = require('../_lib/marketCalendar')
+const { buildShadowStrategies } = require('../_lib/shadowStrategies')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -548,6 +549,17 @@ module.exports = async function handler(req, res) {
         // for this piece.
         shadow_recent_news_count: newsSignal?.count ?? null,
         shadow_recent_news_headlines: newsSignal?.headlines?.length ? newsSignal.headlines : null,
+        shadow_strategy_assignments: buildShadowStrategies({
+          option_type: r.optionType,
+          long_term_trend: trendContext?.direction,
+          chg_pct: parseFloat(r.chgPct),
+          entry_spread_pct: r.entrySpreadPct,
+          volume: r.volume,
+          open_interest: r.oi,
+          shadow_vertical_spread: r.shadowSpread,
+          timeframe: tf,
+          profit_target_pct: r.profitTargetPct,
+        }),
       }
       bufferedRows.push(historyRow)
 

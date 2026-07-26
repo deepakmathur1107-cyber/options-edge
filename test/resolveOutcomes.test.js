@@ -18,6 +18,12 @@ function row(overrides = {}) {
   }
 }
 
+test('burndown only runs after a real trading session has closed', () => {
+  assert.equal(resolver.shouldRunBurndownNow(new Date('2026-07-26T20:00:00Z')), false)
+  assert.equal(resolver.shouldRunBurndownNow(new Date('2026-07-27T19:00:00Z')), false)
+  assert.equal(resolver.shouldRunBurndownNow(new Date('2026-07-27T20:20:00Z')), true)
+})
+
 test('pending filter excludes terminal null-outcome dead letters', () => {
   const calls = []
   const fakeQuery = {

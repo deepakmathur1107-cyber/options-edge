@@ -1,0 +1,1 @@
+drop index if exists public.idx_signal_history_forward_profitability;

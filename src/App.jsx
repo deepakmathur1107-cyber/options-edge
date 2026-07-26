@@ -9,6 +9,7 @@ import TradeOutcomesTable from './components/TradeOutcomesTable'
 import TrackRecordCard from './components/TrackRecordCard'
 import ConvictionCorrelationCard from './components/ConvictionCorrelationCard'
 import ClusterDistributionPanel from './components/ClusterDistributionPanel'
+import ForwardPerformancePanel from './components/ForwardPerformancePanel'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
@@ -5207,6 +5208,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 doesn't mean scrolling past four heavy tables (Signal
                 Outcomes alone shows up to 1000 rows) every single time. */}
             <div style={{fontSize:11,fontWeight:500,letterSpacing:'0.08em',color:C.dim,textTransform:'uppercase',margin:'1.5rem 0 0.75rem'}}>Data &amp; debugging</div>
+
+            <CollapsibleSection title="Forward Profitability & Promotion Gates" icon="◎" color={C.blue} C={C} defaultOpen>
+              <ForwardPerformancePanel getToken={getAuthToken} theme={C} />
+            </CollapsibleSection>
 
             <CollapsibleSection title="User Feedback" icon="💬" color={C.purple} C={C}
               summary={adminFeedback.length>0 ? `${adminFeedback.length} loaded` : 'not loaded'}>
