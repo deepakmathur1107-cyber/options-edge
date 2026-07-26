@@ -2383,6 +2383,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         // a glance when the real stock price was already ~$325, $20 ITM.
         underlyingPrice: row.underlying_price ? Number(row.underlying_price) : null,
         positionSizing: row.position_sizing || null,
+        lifecycleSummary: row.lifecycle_summary || null,
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -3850,6 +3851,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                     const isSelected = selectedAlert===i
                     const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
                     const grade = al.score>=80?'A':al.score>=65?'B':'C'
+                    const lifecycleStatus = al.lifecycleSummary?.lifecycle_status || 'TRACKING'
+                    const lifecycleMeta = {
+                      LIVE: { label:'LIVE · FORWARD', color:C.green, title:'Counts toward forward validation after resolution' },
+                      RESEARCH: { label:'RESEARCH ONLY', color:C.orange, title:'Does not count toward forward performance' },
+                      RESOLVED: { label:'RESOLVED', color:C.blue, title:'Outcome resolution is complete' },
+                      DATA_UNAVAILABLE: { label:'DATA UNAVAILABLE', color:C.red, title:'Excluded because reliable outcome data was unavailable' },
+                      TRACKING: { label:'TRACKING', color:C.dim, title:'Observed signal; not enrolled in the Qualified forward cohort' },
+                    }[lifecycleStatus]
                     // moneyness — how far the strike sits from the REAL
                     // underlying price at scan time. Confirmed-live gap
                     // (PANW $305C, stock already at ~$325, $20 ITM, nothing
@@ -3938,6 +3947,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
                             <span style={{fontFamily:"'Fraunces',serif",fontSize:19,fontWeight:600,color:scoreCol,letterSpacing:0.3}}>${al.ticker}</span>
                             <div style={{display:'flex',alignItems:'center',gap:8}}>
+                              <span title={lifecycleMeta.title} style={{fontSize:9,color:lifecycleMeta.color,border:`1px solid ${lifecycleMeta.color}55`,background:`${lifecycleMeta.color}12`,padding:'2px 6px',borderRadius:3,fontWeight:700,letterSpacing:0.5}}>
+                                {lifecycleMeta.label}
+                              </span>
                               {staleness&&<span title="Time since this result was scanned" style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:staleCol,fontFamily:"'IBM Plex Mono',monospace"}}>
                                 <span style={{width:5,height:5,borderRadius:'50%',background:staleCol,flexShrink:0,display:'inline-block'}}/>{staleness.label}
                               </span>}
@@ -4033,6 +4045,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           transition:'all .15s',
                         }}>
                           <span className="alert-row-ticker" style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>${al.ticker}</span>
+                          <span title={lifecycleMeta.title} style={{fontSize:8.5,color:lifecycleMeta.color,border:`1px solid ${lifecycleMeta.color}55`,background:`${lifecycleMeta.color}12`,padding:'2px 5px',borderRadius:3,fontWeight:700,whiteSpace:'nowrap'}}>
+                            {lifecycleMeta.label}
+                          </span>
                           <span className="alert-row-contract" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
                           {moneyness&&<span className="alert-row-moneyness" title={`Stock was $${al.underlyingPrice.toFixed(2)} at scan time`} style={{fontSize:10.5,color:moneyness.itm?C.orange:C.dim,border:`1px solid ${moneyness.itm?C.orange:C.border}50`,padding:'1px 6px',borderRadius:2,flexShrink:0,whiteSpace:'nowrap',fontFamily:"'IBM Plex Mono',monospace"}}>
                             ${al.underlyingPrice.toFixed(2)} · {moneyness.itm?'ITM':'OTM'} {Math.abs(moneyness.pct).toFixed(1)}%
@@ -4084,9 +4099,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                                 {al.positionSizing.reason&&<div style={{fontSize:10.5,color:C.orange,marginTop:4}}>{al.positionSizing.reason.replaceAll('_',' ')}</div>}
                                 {al.positionSizing.contracts>0&&(
                                   <div style={{fontSize:10.5,color:C.subtext,marginTop:4,lineHeight:1.5}}>
-                                    Planned loss ${al.positionSizing.plannedStopLoss} · Premium ${al.positionSizing.premiumOutlay} · {al.positionSizing.bindingConstraint?.replaceAll('_',' ')}
+                                    Planned stop loss ${al.positionSizing.plannedStopLoss} · Maximum premium at risk ${al.positionSizing.worstCasePremiumLoss} · Premium outlay {al.positionSizing.premiumOutlayPct}% · {al.positionSizing.bindingConstraint?.replaceAll('_',' ')}
                                   </div>
                                 )}
+                                <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>Slippage and fees are modeled in resolved forward results, not included in this pre-trade size.</div>
                                 <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>{al.positionSizing.disclaimer}</div>
                               </div>
                             )}
