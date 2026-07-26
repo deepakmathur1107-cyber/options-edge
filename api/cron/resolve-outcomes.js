@@ -291,6 +291,14 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     // request failure.
     const historyResult = await getHistoryDetailed(occSymbol, day, day, rateTracker)
     if (!historyResult.ok) {
+      // TEMPORARY DIAGNOSTIC (2026-07-26) — investigating a confirmed,
+      // reproducible ~80% 400-rate on this call site (consistent across
+      // both manual and scheduled runs, diverse tickers, all currently-
+      // valid future-expiry contracts — ruling out expired/malformed
+      // symbols as the obvious explanation). Logging the exact request
+      // details so the real cause is visible on the next run instead of
+      // guessed at. REMOVE once root-caused.
+      console.warn(`[resolve-outcomes DIAG] 400-investigation: occSymbol=${occSymbol} day=${day} status=${historyResult.status} errorType=${historyResult.errorType} ticker=${row.ticker} strike=${row.primary_strike} expiry=${row.expiry_raw} optType=${row.option_type}`)
       stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
         walkFailed = true
       break
