@@ -34,12 +34,24 @@ test('reports no progress only when recent runs processed rows without resolving
   assert.ok(result.healthStates.includes('RESOLVER_NO_PROGRESS'))
 })
 
-test('reports upstream degradation for circuit breaks, 429s, or server errors', () => {
+test('classifies rate limits independently from upstream failures', () => {
   const result = deriveResolverRunHealth({
     runs: [run({ circuit_broken: true, status_counts: { 429: 1 } })],
     truePending: 100,
     now,
   })
+  assert.ok(result.healthStates.includes('RATE_LIMITED'))
+  assert.ok(!result.healthStates.includes('UPSTREAM_DEGRADED'))
+})
+
+test('classifies bad requests, auth failures, and server failures separately', () => {
+  const result = deriveResolverRunHealth({
+    runs: [run({ status_counts: { 400: 2, 401: 1, 500: 1 } })],
+    truePending: 100,
+    now,
+  })
+  assert.ok(result.healthStates.includes('BAD_REQUEST_BURST'))
+  assert.ok(result.healthStates.includes('AUTH_FAILURE'))
   assert.ok(result.healthStates.includes('UPSTREAM_DEGRADED'))
 })
 

@@ -16,15 +16,25 @@ function deriveResolverRunHealth({ runs = [], truePending = 0, cursorStalledRows
     const recent = runs.slice(0, 3)
     const processed = recent.reduce((sum, run) => sum + Number(run.rows_processed || 0), 0)
     const resolved = recent.reduce((sum, run) => sum + Number(run.resolved || 0), 0)
-    const degraded = recent.some(run =>
-      run.circuit_broken ||
-      Number(run.errors || 0) > 0 ||
-      Object.entries(run.status_counts || {}).some(([status, count]) =>
-        Number(count) > 0 && (status === '429' || Number(status) >= 500)
-      )
+    const statuses = recent.reduce((all, run) => {
+      for (const [status, count] of Object.entries(run.status_counts || {})) {
+        all[status] = (all[status] || 0) + Number(count || 0)
+      }
+      return all
+    }, {})
+    const hasAuthFailure = Number(statuses['401'] || 0) + Number(statuses['403'] || 0) > 0
+    const hasRateLimit = Number(statuses['429'] || 0) > 0
+    const hasBadRequests = Number(statuses['400'] || 0) > 0
+    const hasUpstreamFailure = Object.entries(statuses).some(([status, count]) =>
+      Number(count) > 0 && (status === '0' || Number(status) >= 500)
     )
 
-    if (degraded) states.push('UPSTREAM_DEGRADED')
+    if (hasBadRequests) states.push('BAD_REQUEST_BURST')
+    if (hasAuthFailure) states.push('AUTH_FAILURE')
+    if (hasRateLimit) states.push('RATE_LIMITED')
+    if (hasUpstreamFailure || recent.some(run => Number(run.errors || 0) > 0)) {
+      states.push('UPSTREAM_DEGRADED')
+    }
     if (truePending > 0 && processed > 0 && resolved === 0) states.push('RESOLVER_NO_PROGRESS')
     if (truePending > 0 && resolved > 0) states.push('HEALTHY_PROCESSING_BACKLOG')
     if (truePending === 0) states.push('HEALTHY_CAUGHT_UP')

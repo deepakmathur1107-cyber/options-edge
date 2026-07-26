@@ -108,6 +108,10 @@ module.exports = async function handler(req, res) {
         // same convention as never re-displaying a saved API key.
         tg_token_set:   !!row.tg_token,
         tg_chat_id:     row.tg_chat_id     ?? null,
+        account_equity: row.account_equity ?? null,
+        planned_account_risk_pct: row.planned_account_risk_pct ?? 0.0025,
+        max_premium_outlay_pct: row.max_premium_outlay_pct ?? 0.10,
+        max_position_contracts: row.max_position_contracts ?? 10,
       },
     })
   }
@@ -176,6 +180,37 @@ module.exports = async function handler(req, res) {
       sms_on:         body.sms_alerts     ?? false,
       phone_number:   (body.phone_number  || '').trim(),
       updated_at:     new Date().toISOString(),
+    }
+
+    if (body.account_equity !== undefined) {
+      const equity = body.account_equity === '' || body.account_equity == null
+        ? null
+        : Number(body.account_equity)
+      if (equity != null && (!Number.isFinite(equity) || equity <= 0 || equity > 100000000)) {
+        return res.status(400).json({ error: 'Account equity must be between $0 and $100,000,000.' })
+      }
+      payload.account_equity = equity
+    }
+    if (body.planned_account_risk_pct !== undefined) {
+      const risk = Number(body.planned_account_risk_pct)
+      if (!Number.isFinite(risk) || risk <= 0 || risk > 0.02) {
+        return res.status(400).json({ error: 'Planned account risk must be greater than 0 and no more than 2%.' })
+      }
+      payload.planned_account_risk_pct = risk
+    }
+    if (body.max_premium_outlay_pct !== undefined) {
+      const outlay = Number(body.max_premium_outlay_pct)
+      if (!Number.isFinite(outlay) || outlay <= 0 || outlay > 0.10) {
+        return res.status(400).json({ error: 'Maximum premium outlay must be greater than 0 and no more than 10%.' })
+      }
+      payload.max_premium_outlay_pct = outlay
+    }
+    if (body.max_position_contracts !== undefined) {
+      const maxContracts = Number(body.max_position_contracts)
+      if (!Number.isInteger(maxContracts) || maxContracts < 1 || maxContracts > 1000) {
+        return res.status(400).json({ error: 'Maximum contracts must be a whole number between 1 and 1,000.' })
+      }
+      payload.max_position_contracts = maxContracts
     }
     // Admin-only: save Telegram credentials
     if (ADMIN_IDS.includes(clerkId)) {

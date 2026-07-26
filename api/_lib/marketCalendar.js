@@ -117,4 +117,43 @@ function getSessionClose(dateStr) {
   return getEarlyCloseDays(year).has(dateStr) ? '13:00' : '16:00'
 }
 
-module.exports = { isTradingDay, isMarketHours, getHolidays, tzParts, tradingDaysBetween, getEarlyCloseDays, getSessionClose }
+function timeToMinutes(value) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value || '')
+  if (!match) return null
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+function classifyOptionMarketSession(date, executionBufferMinutes = 15) {
+  const instant = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(instant.getTime())) return 'UNKNOWN_HISTORICAL'
+  const p = tzParts(instant, 'America/New_York')
+  if (p.weekday === 'Sat' || p.weekday === 'Sun') return 'WEEKEND_RESEARCH'
+
+  const dateStr = `${p.year}-${p.month}-${p.day}`
+  const close = getSessionClose(dateStr)
+  if (!close) return 'HOLIDAY_RESEARCH'
+
+  const mins = Number(p.hour) * 60 + Number(p.minute)
+  const closeMins = timeToMinutes(close)
+  if (mins < 9 * 60 + 30) return 'PREMARKET_RESEARCH'
+  if (mins >= closeMins) return 'AFTER_HOURS_RESEARCH'
+  if (mins >= closeMins - executionBufferMinutes) return 'LATE_SESSION_RESEARCH'
+  return 'LIVE_REGULAR_SESSION'
+}
+
+function isActionableOptionSession(date, executionBufferMinutes = 15) {
+  return classifyOptionMarketSession(date, executionBufferMinutes) === 'LIVE_REGULAR_SESSION'
+}
+
+module.exports = {
+  isTradingDay,
+  isMarketHours,
+  getHolidays,
+  tzParts,
+  tradingDaysBetween,
+  getEarlyCloseDays,
+  getSessionClose,
+  timeToMinutes,
+  classifyOptionMarketSession,
+  isActionableOptionSession,
+}

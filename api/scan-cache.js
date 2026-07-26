@@ -13,6 +13,7 @@
 
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
+const { buildSizingForScanRow } = require('./_lib/userPositionSizing')
 
 let _sb = null
 function sb() {
@@ -36,6 +37,21 @@ async function hasActiveSub(clerkId, supabase) {
     const s = data?.status || 'inactive'
     return s === 'active' || s === 'trialing'
   } catch { return false }
+}
+
+async function getSizingPrefs(client, clerkId) {
+  const { data, error } = await client
+    .from('alert_prefs')
+    .select('account_equity,planned_account_risk_pct,max_premium_outlay_pct,max_position_contracts')
+    .eq('clerk_user_id', clerkId)
+    .maybeSingle()
+  // Safe during a rolling deploy if API code arrives before the migration.
+  if (error) return {}
+  return data || {}
+}
+
+function attachPositionSizing(rows, prefs) {
+  for (const row of rows || []) row.position_sizing = buildSizingForScanRow(row, prefs)
 }
 
 // CLUSTER_MIN_COUNT: minimum same-sector + same-direction signals in a single
@@ -115,6 +131,7 @@ module.exports = async function handler(req, res) {
   }
 
   const { ticker, tf, minScore } = req.query
+  const sizingPrefs = await getSizingPrefs(client, clerkId)
   // tf is required for single-ticker lookups (an exact cache check before a
   // manual scan needs one specific timeframe), but optional in list mode —
   // the Auto-scanner now shows all timeframes mixed together by default,
@@ -135,6 +152,7 @@ module.exports = async function handler(req, res) {
       if (error) return res.status(200).json({ cached: false, reason: error.message })
       if (!data)  return res.status(200).json({ cached: false })
       await attachLifecycleSummaries(client, [data])
+      attachPositionSizing([data], sizingPrefs)
       return res.status(200).json({ cached: true, result: data })
     }
 
@@ -169,6 +187,7 @@ module.exports = async function handler(req, res) {
       const clusters = clusterErr ? [] : computeClusters(allFresh || [])
 
       await attachLifecycleSummaries(client, data || [])
+      attachPositionSizing(data || [], sizingPrefs)
       return res.status(200).json({ cached: true, results: data || [], clusters })
     }
     // No tf filter — mixing all 4 timeframes. A flat ORDER BY score LIMIT 50
@@ -211,6 +230,7 @@ module.exports = async function handler(req, res) {
     }))
 
     await attachLifecycleSummaries(client, data)
+    attachPositionSizing(data, sizingPrefs)
     return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {
     console.error('[scan-cache] error:', e.message)
