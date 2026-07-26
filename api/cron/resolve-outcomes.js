@@ -292,13 +292,16 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     const historyResult = await getHistoryDetailed(occSymbol, day, day, rateTracker)
     if (!historyResult.ok) {
       // TEMPORARY DIAGNOSTIC (2026-07-26) — investigating a confirmed,
-      // reproducible ~80% 400-rate on this call site (consistent across
-      // both manual and scheduled runs, diverse tickers, all currently-
-      // valid future-expiry contracts — ruling out expired/malformed
-      // symbols as the obvious explanation). Logging the exact request
-      // details so the real cause is visible on the next run instead of
-      // guessed at. REMOVE once root-caused.
-      console.warn(`[resolve-outcomes DIAG] 400-investigation: occSymbol=${occSymbol} day=${day} status=${historyResult.status} errorType=${historyResult.errorType} ticker=${row.ticker} strike=${row.primary_strike} expiry=${row.expiry_raw} optType=${row.option_type}`)
+      // reproducible ~80% 400-rate on this call site. First attempt at
+      // this diagnostic logged on EVERY failure (~40/run) and produced no
+      // visible log output despite the code being confirmed correctly
+      // deployed and placed — narrowing to the FIRST failure per run only,
+      // in case 40 warn-lines in one invocation was hitting a log-volume
+      // limit. REMOVE once root-caused.
+      if (!rateTracker.__diag400Logged) {
+        rateTracker.__diag400Logged = true
+        console.warn(`[resolve-outcomes DIAG-FIRST] occSymbol=${occSymbol} day=${day} status=${historyResult.status} errorType=${historyResult.errorType} ticker=${row.ticker} strike=${row.primary_strike} expiry=${row.expiry_raw} optType=${row.option_type} rawStatus=${JSON.stringify(historyResult)}`)
+      }
       stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
         walkFailed = true
       break
