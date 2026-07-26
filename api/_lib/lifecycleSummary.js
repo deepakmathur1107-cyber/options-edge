@@ -22,6 +22,21 @@
 const DIVERGENCE_PREMIUM_DROP_PCT = 0.08   // premium down >=8% from first scan
 const DIVERGENCE_MIN_ELAPSED_MIN  = 30     // ignore noise in the first 30 min
 
+function classifyLifecycle(primary) {
+  if (!primary) return { status: 'TRACKING', measurement: 'NOT_ENROLLED' }
+  if (primary.resolved_at || primary.outcome) {
+    if (primary.resolution_method === 'data_unavailable') {
+      return { status: 'DATA_UNAVAILABLE', measurement: 'EXCLUDED' }
+    }
+    return { status: 'RESOLVED', measurement: primary.realized_r_multiple == null ? 'PENDING_METRICS' : 'MEASURED' }
+  }
+  const isForwardLive = primary.qualification_source === 'LIVE_AT_SIGNAL'
+    && primary.market_session_status === 'LIVE_REGULAR_SESSION'
+  if (!isForwardLive) return { status: 'RESEARCH', measurement: 'EXCLUDED' }
+  if (primary.strategy_qualified) return { status: 'LIVE', measurement: 'FORWARD_COHORT' }
+  return { status: 'TRACKING', measurement: 'NOT_QUALIFIED' }
+}
+
 /**
  * Batch-fetch signal_history rows for a set of lifecycle IDs and compute a
  * summary per lifecycle. One query for the whole set, not one per row.
@@ -37,7 +52,7 @@ async function getLifecycleSummaries(client, lifecycleIds) {
 
   const { data: rows, error } = await client
     .from('signal_history')
-    .select('signal_lifecycle_id, score, entry_mid, underlying_price, scanned_at')
+    .select('signal_lifecycle_id, score, entry_mid, underlying_price, scanned_at, is_lifecycle_primary, outcome, resolved_at, resolution_method, realized_r_multiple, qualification_source, market_session_status, strategy_qualified')
     .in('signal_lifecycle_id', ids)
     .order('scanned_at', { ascending: true })
 
@@ -57,6 +72,8 @@ async function getLifecycleSummaries(client, lifecycleIds) {
     if (!history.length) continue
     const first  = history[0]
     const latest = history[history.length - 1]
+    const primary = history.find(row => row.is_lifecycle_primary) || first
+    const lifecycle = classifyLifecycle(primary)
 
     const firstScore  = Number(first.score)
     const latestScore = Number(latest.score)
@@ -88,6 +105,8 @@ async function getLifecycleSummaries(client, lifecycleIds) {
       score_delta: scoreDelta,
       premium_delta_pct: premiumDeltaPct,
       divergence,
+      lifecycle_status: lifecycle.status,
+      measurement_status: lifecycle.measurement,
     })
   }
 
@@ -112,4 +131,4 @@ async function attachLifecycleSummaries(client, rows) {
   return rows
 }
 
-module.exports = { getLifecycleSummaries, attachLifecycleSummaries }
+module.exports = { getLifecycleSummaries, attachLifecycleSummaries, classifyLifecycle }

@@ -59,7 +59,7 @@ function FeatureBars({ features, C }) {
   );
 }
 
-function SystemStatus({ health, C }) {
+function SystemStatus({ health, details, C }) {
   // health (systemHealth from the API) now reflects real checks for all 5
   // services -- confirmed live (screenshot, June 28) that all 5 dots
   // previously showed green unconditionally regardless of actual status,
@@ -68,20 +68,35 @@ function SystemStatus({ health, C }) {
   // real via the old systemOk field -- it wasn't; systemOk was hardcoded
   // true in this file's entire history).
   const services = [
-    { label: 'Market Data API', ok: health?.tradier !== false },
-    { label: 'Supabase',        ok: health?.supabase !== false },
-    { label: 'Redis cache',     ok: health?.redis !== false },
-    { label: 'Resend email',    ok: health?.resend !== false },
-    { label: 'Auto-scanner',    ok: health?.scanner !== false },
+    { key: 'tradier', label: 'Market Data API', ok: health?.tradier !== false },
+    { key: 'supabase', label: 'Supabase',        ok: health?.supabase !== false },
+    { key: 'redis', label: 'Redis cache',     ok: health?.redis !== false },
+    { key: 'resend', label: 'Resend email',    ok: health?.resend !== false },
+    { key: 'scanner', label: 'Auto-scanner',    ok: health?.scanner !== false },
   ];
   return (
     <div>
-      {services.map(s => (
-        <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', fontSize: 12, color: C.dim }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: s.ok ? C.green : C.orange, flexShrink: 0 }} />
-          {s.label}
+      {services.map(s => {
+        const detail = details?.[s.key]
+        const paused = detail?.status === 'paused'
+        const statusColor = !s.ok ? C.red : paused ? C.blue : C.green
+        const lastObserved = detail?.lastObservedAt
+          ? new Date(detail.lastObservedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+          : null
+        return (
+        <div key={s.label} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderDim}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor, flexShrink: 0 }} />
+            <span style={{ color: C.text, flex: 1 }}>{s.label}</span>
+            <span style={{ color: statusColor, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.7, textTransform: 'uppercase' }}>
+              {detail?.status || (s.ok ? 'operational' : 'degraded')}
+            </span>
+          </div>
+          {detail?.detail && <div style={{ color: C.dim, fontSize: 10.5, margin: '3px 0 0 14px', lineHeight: 1.45 }}>
+            {detail.detail}{lastObserved ? ` · Last result ${lastObserved}` : ''}
+          </div>}
         </div>
-      ))}
+      )})}
     </div>
   );
 }
@@ -305,7 +320,7 @@ export default function AdminDashboard({ getToken, theme }) {
         </div>
         <div style={card}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>System status</div>
-          <SystemStatus C={C} health={data?.systemHealth} />
+          <SystemStatus C={C} health={data?.systemHealth} details={data?.systemHealthDetails} />
         </div>
       </div>
 

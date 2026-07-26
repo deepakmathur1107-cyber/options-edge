@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getAuth, ADMIN_IDS } = require('../_lib/auth');
 const { TRADIER_TOKEN, TRADIER_BASE } = require('../_lib/tradierClient');
+const { deriveScannerHealth } = require('../_lib/adminHealth');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -36,7 +37,11 @@ async function checkTradier() {
       signal,
     })
   );
-  return res.ok;
+  return {
+    ok: res.ok,
+    status: res.ok ? 'operational' : 'degraded',
+    detail: res.ok ? 'Authentication and market clock reachable' : `Market clock returned HTTP ${res.status}`,
+  };
 }
 
 async function checkSupabase() {
@@ -45,22 +50,30 @@ async function checkSupabase() {
   // anything meaningful. subscriptions is already queried elsewhere in
   // this same file, so it's known-present.
   const { error } = await supabase.from('subscriptions').select('clerk_id').limit(1);
-  return !error;
+  return {
+    ok: !error,
+    status: error ? 'degraded' : 'operational',
+    detail: error ? 'Database health query failed' : 'Database query completed',
+  };
 }
 
 async function checkRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return false;
+  if (!url || !token) return { ok: false, status: 'unconfigured', detail: 'Redis environment variables are missing' };
   const res = await withTimeout(signal =>
     fetch(`${url}/ping`, { headers: { Authorization: `Bearer ${token}` }, signal })
   );
-  return res.ok;
+  return {
+    ok: res.ok,
+    status: res.ok ? 'operational' : 'degraded',
+    detail: res.ok ? 'Cache ping succeeded' : `Cache ping returned HTTP ${res.status}`,
+  };
 }
 
 async function checkResend() {
   const key = process.env.RESEND_API_KEY;
-  if (!key) return false;
+  if (!key) return { ok: false, status: 'unconfigured', detail: 'Resend API key is missing' };
   // GET /domains is read-only and doesn't send anything -- sending a real
   // test email on every dashboard load would be wasteful and would spam
   // the verified sender's send history for no reason.
@@ -70,7 +83,11 @@ async function checkResend() {
       signal,
     })
   );
-  return res.ok;
+  return {
+    ok: res.ok,
+    status: res.ok ? 'operational' : 'degraded',
+    detail: res.ok ? 'Email API authentication succeeded' : `Email API returned HTTP ${res.status}`,
+  };
 }
 
 async function checkScanner() {
@@ -90,22 +107,26 @@ async function checkScanner() {
     .select('scanned_at')
     .order('scanned_at', { ascending: false })
     .limit(1);
-  if (error || !data?.length) return false;
-  const ageMs = Date.now() - new Date(data[0].scanned_at).getTime();
-  return ageMs < 45 * 60 * 1000;
+  return deriveScannerHealth({ lastObservedAt: error || !data?.length ? null : data[0].scanned_at });
 }
 
 async function checkSystemHealth() {
   const [tradier, supabaseOk, redis, resend, scanner] = await Promise.allSettled([
     checkTradier(), checkSupabase(), checkRedis(), checkResend(), checkScanner(),
   ]);
-  const ok = r => r.status === 'fulfilled' && r.value === true;
+  const normalize = (result, fallback) => result.status === 'fulfilled'
+    ? { ...result.value, checkedAt: new Date().toISOString() }
+    : { ok: false, status: 'degraded', detail: fallback, checkedAt: new Date().toISOString() };
+  const details = {
+    tradier: normalize(tradier, 'Market Data API check failed or timed out'),
+    supabase: normalize(supabaseOk, 'Database check failed or timed out'),
+    redis: normalize(redis, 'Cache check failed or timed out'),
+    resend: normalize(resend, 'Email API check failed or timed out'),
+    scanner: normalize(scanner, 'Scanner freshness check failed or timed out'),
+  };
   return {
-    tradier: ok(tradier),
-    supabase: ok(supabaseOk),
-    redis: ok(redis),
-    resend: ok(resend),
-    scanner: ok(scanner),
+    summary: Object.fromEntries(Object.entries(details).map(([key, value]) => [key, value.ok])),
+    details,
   };
 }
 
@@ -204,13 +225,15 @@ module.exports = async (req, res) => {
       s.updated_at && new Date(s.updated_at) >= startOfToday
     ).length;
 
-    const systemHealth = await healthPromise;
+    const systemHealthResult = await healthPromise;
+    const systemHealth = systemHealthResult.summary;
 
     return res.status(200).json({
       totalUsers, paidUsers, trialUsers,
       activeToday, newThisWeek, expiringTrials,
       signupsByDay, recentUsers, features,
       systemHealth,
+      systemHealthDetails: systemHealthResult.details,
       // All 5 services are now genuinely checked (see checkSystemHealth) —
       // previously this was hardcoded true unconditionally, including for
       // the scanner, which this comment's earlier draft incorrectly
