@@ -21,6 +21,7 @@ const { SP500 } = require('../_lib/sp500')
 const { getTrendContext, getVix } = require('../_lib/trendContext')
 const { getRecentNewsSignal } = require('../_lib/newsSignal')
 const { buildQualificationRecord } = require('../_lib/strategyClassification')
+const { classifyOptionMarketSession } = require('../_lib/marketCalendar')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -211,6 +212,19 @@ module.exports = async function handler(req, res) {
     // would otherwise just 400 with no trace in the cron's own dashboard.
     console.error(`[cron/scan] Unknown timeframe "${tf}" — known keys: ${Object.keys(TF_CONFIG).join(', ')}`)
     return res.status(400).json({ error: `Unknown timeframe: ${tf}`, knownKeys: Object.keys(TF_CONFIG) })
+  }
+
+  const scanInstant = new Date()
+  const marketSessionStatus = classifyOptionMarketSession(scanInstant)
+  if (marketSessionStatus !== 'LIVE_REGULAR_SESSION') {
+    console.log(`[cron/scan] skipped tf=${tf} marketSessionStatus=${marketSessionStatus}`)
+    return res.status(200).json({
+      timeframe: tf,
+      skipped: true,
+      reason: 'outside_actionable_option_session',
+      marketSessionStatus,
+      generatedAt: scanInstant.toISOString(),
+    })
   }
 
   const client = sb()
@@ -470,6 +484,7 @@ module.exports = async function handler(req, res) {
         signal_lifecycle_id: lifecycleId,
         is_lifecycle_primary: isLifecyclePrimary,
         scanned_at: scannedAt.toISOString(),
+        market_session_status: marketSessionStatus,
         // Regime context at scan time — same spxChg/ndxChg values already
         // computed above and fed into scoreConviction's tailwind/headwind
         // term (see convictionScore.cjs), but never persisted before this.

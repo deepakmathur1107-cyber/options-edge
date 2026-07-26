@@ -959,7 +959,12 @@ export default function App(props={}) {
   const clColor = clScore>=80?C.green:clScore>=60?C.orange:C.red
 
   // ── alert preferences (Settings tab — source of truth) ──
-  const [alertPrefs,       setAlertPrefs]       = useState({ email_alerts:false, alert_email:'', sms_alerts:false, phone_number:'', min_edge_score:50, symbols:['SPY','QQQ'] })
+  const [alertPrefs,       setAlertPrefs]       = useState({
+    email_alerts:false, alert_email:'', sms_alerts:false, phone_number:'',
+    min_edge_score:50, symbols:['SPY','QQQ'], account_equity:'',
+    planned_account_risk_pct:0.0025, max_premium_outlay_pct:0.10,
+    max_position_contracts:10,
+  })
   const [alertPrefsLoaded, setAlertPrefsLoaded] = useState(false)
   const [alertPrefsSaving, setAlertPrefsSaving] = useState(false)
   const [alertPrefsSaved,  setAlertPrefsSaved]  = useState(false)
@@ -2376,6 +2381,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         // money — confirmed live: a $305 strike read as near-the-money at
         // a glance when the real stock price was already ~$325, $20 ITM.
         underlyingPrice: row.underlying_price ? Number(row.underlying_price) : null,
+        positionSizing: row.position_sizing || null,
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -4066,6 +4072,23 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                               ))}
                             </div>
                             {al.tfLabel&&<div style={{fontSize:11,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
+                            {al.positionSizing?.configured&&(
+                              <div style={{background:`${C.blue}10`,border:`1px solid ${C.blue}35`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
+                                <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}>
+                                  <span style={{fontSize:10.5,color:C.dim,letterSpacing:0.8}}>EDUCATIONAL SIZE</span>
+                                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13,color:C.blue,fontWeight:700}}>
+                                    {al.positionSizing.contracts||0} contract{al.positionSizing.contracts===1?'':'s'}
+                                  </span>
+                                </div>
+                                {al.positionSizing.reason&&<div style={{fontSize:10.5,color:C.orange,marginTop:4}}>{al.positionSizing.reason.replaceAll('_',' ')}</div>}
+                                {al.positionSizing.contracts>0&&(
+                                  <div style={{fontSize:10.5,color:C.subtext,marginTop:4,lineHeight:1.5}}>
+                                    Planned loss ${al.positionSizing.plannedStopLoss} · Premium ${al.positionSizing.premiumOutlay} · {al.positionSizing.bindingConstraint?.replaceAll('_',' ')}
+                                  </div>
+                                )}
+                                <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>{al.positionSizing.disclaimer}</div>
+                              </div>
+                            )}
                             {al.hardBlocks?.length>0&&(
                               <div style={{marginBottom:10}}>
                                 {al.hardBlocks.map((b,bi)=>(
@@ -4744,6 +4767,26 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       <div>
                         <div style={{fontSize:12,color:C.text,fontWeight:600,marginBottom:3}}>Sent once daily at 10 AM ET, Mon–Fri</div>
                         <div style={{fontSize:12,color:C.dim,lineHeight:1.6}}>You'll only receive an email when high-conviction setups exist. No email means no strong setups today — that's normal.</div>
+                      </div>
+                    </div>
+
+                    <div style={{background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px',marginBottom:14}}>
+                      <div style={{fontSize:11,color:C.text,fontWeight:700,marginBottom:4}}>Educational Position Sizing</div>
+                      <div style={{fontSize:11,color:C.dim,lineHeight:1.5,marginBottom:10}}>
+                        Optional. Used server-side to calculate a conservative contract suggestion. This is not personalized financial advice.
+                      </div>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}>
+                        <Field C={C} label="Account Equity ($)" type="number"
+                          value={alertPrefs.account_equity ?? ''}
+                          onChange={v=>setAlertPrefs(p=>({...p,account_equity:v}))}
+                          placeholder="50000"/>
+                        <Field C={C} label="Max Contracts" type="number"
+                          value={alertPrefs.max_position_contracts ?? 10}
+                          onChange={v=>setAlertPrefs(p=>({...p,max_position_contracts:Number(v)}))}
+                          placeholder="10"/>
+                      </div>
+                      <div style={{fontSize:10.5,color:C.dim,marginTop:8}}>
+                        Planned risk: {((alertPrefs.planned_account_risk_pct||0.0025)*100).toFixed(2)}% · Maximum premium outlay: {((alertPrefs.max_premium_outlay_pct||0.10)*100).toFixed(0)}%
                       </div>
                     </div>
 

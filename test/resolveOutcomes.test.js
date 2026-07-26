@@ -231,3 +231,56 @@ test('entry-day timesales request uses the correct early-close time, not always 
   )
   assert.equal(requestedEnd, '2026-11-27 13:00')
 })
+
+test('after-hours signals skip the invalid entry-day window and begin on the next trading day', async () => {
+  const historyDays = []
+  let timesalesCalls = 0
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-07-24T20:05:00.000Z' }), // 16:05 ET, after close
+    {},
+    {
+      now: '2026-07-27T19:00:00.000Z',
+      getOptionTimesalesDetailed: async () => { timesalesCalls++; return { ok: true, status: 200, bars: [] } },
+      getOptionHistoryDetailed: async (_symbol, day) => {
+        historyDays.push(day)
+        return { ok: true, errorType: null, retryable: false, status: 200, days: [] }
+      },
+    },
+  )
+  assert.equal(timesalesCalls, 0)
+  assert.deepEqual(historyDays, ['2026-07-27'])
+  assert.equal(result._lastWalkedThrough, '2026-07-27')
+})
+
+test('premarket signals clamp their entry-day timesales request to 09:30 ET', async () => {
+  let requestedStart = null
+  await resolver.resolveOne(
+    row({ scanned_at: '2026-07-24T12:00:00.000Z' }), // 08:00 ET
+    {},
+    {
+      now: '2026-07-24T19:00:00.000Z',
+      getOptionTimesalesDetailed: async (_symbol, start) => {
+        requestedStart = start
+        return { ok: true, errorType: null, retryable: false, status: 200, bars: [] }
+      },
+      getOptionHistoryDetailed: async () => ({ ok: true, status: 200, days: [] }),
+    },
+  )
+  assert.equal(requestedStart, '2026-07-24 09:30')
+})
+
+test('deterministic HTTP 400 history failures enter capped data-unavailable handling', async () => {
+  const result = await resolver.resolveOne(
+    row({ scanned_at: '2026-07-20T15:00:00.000Z' }),
+    {},
+    {
+      now: '2026-07-25T15:00:00.000Z',
+      getOptionTimesalesDetailed: async () => ({ ok: true, status: 200, bars: [] }),
+      getOptionHistoryDetailed: async () => ({
+        ok: false, errorType: 'BAD_REQUEST', retryable: false, status: 400, days: [],
+      }),
+    },
+  )
+  assert.equal(result._noUsableData, true)
+  assert.equal(result._badRequest, true)
+})

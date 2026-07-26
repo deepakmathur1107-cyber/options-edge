@@ -20,7 +20,7 @@
 
 const { newRateTracker, logRateSummary, getOptionHistory, getOptionTimesales, getOptionTimesalesDetailed, getOptionHistoryDetailed } = require('../_lib/tradierClient')
 const { buildOccSymbol } = require('../_lib/occSymbol')
-const { tradingDaysBetween, getSessionClose } = require('../_lib/marketCalendar')
+const { tradingDaysBetween, getSessionClose, timeToMinutes } = require('../_lib/marketCalendar')
 
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a row (spec §5)
@@ -166,6 +166,9 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   const expiryDate  = new Date(row.expiry_raw + 'T12:00:00')
   const today       = now
   const scanMarketTime = scanTimeInNewYork(row.scanned_at)
+  const scanClose = getSessionClose(scanMarketTime.date)
+  const scanMinutes = timeToMinutes(scanMarketTime.time)
+  const closeMinutes = timeToMinutes(scanClose)
 
   // Walk forward from either the day after the last CONFIRMED-clean day
   // (if we've checked this row before) or scanned_at's market day (first
@@ -185,9 +188,12 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   // row checked yesterday now only re-walks the 1-2 NEW trading days since
   // then instead of the full history back to entry.
   const walkEnd = today < expiryDate ? today : expiryDate
-  const startDay = row.last_walked_through
+  let startDay = row.last_walked_through
     ? (() => { const d = new Date(row.last_walked_through + 'T12:00:00'); d.setDate(d.getDate() + 1); return d })()
     : new Date(scanMarketTime.date + 'T12:00:00')
+  if (!row.last_walked_through && scanMinutes != null && closeMinutes != null && scanMinutes >= closeMinutes) {
+    startDay.setDate(startDay.getDate() + 1)
+  }
   const days = tradingDaysBetween(startDay, walkEnd)
 
   // Tracks whether the walk hit a crossing day that we COULD have confirmed
@@ -239,10 +245,13 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
       // trades" — getSessionClose returns the correct close for the date;
       // day is always a real trading day here (from tradingDaysBetween),
       // so the '16:00' fallback is defensive, not expected to fire.
+      const entryStartMinutes = Math.max(scanMinutes ?? 9 * 60 + 30, 9 * 60 + 30)
+      if (closeMinutes == null || entryStartMinutes >= closeMinutes) continue
+      const entryStart = `${String(Math.floor(entryStartMinutes / 60)).padStart(2, '0')}:${String(entryStartMinutes % 60).padStart(2, '0')}`
       const result = await getTimesalesDetailed(
         occSymbol,
-        `${day} ${scanMarketTime.time.slice(0, 5)}`,
-        `${day} ${getSessionClose(day) || '16:00'}`,
+        `${day} ${entryStart}`,
+        `${day} ${scanClose}`,
         rateTracker,
       )
       if (!result.ok) {
@@ -291,19 +300,9 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
     // request failure.
     const historyResult = await getHistoryDetailed(occSymbol, day, day, rateTracker)
     if (!historyResult.ok) {
-      // TEMPORARY DIAGNOSTIC (2026-07-26) — investigating a confirmed,
-      // reproducible ~80% 400-rate on this call site. First attempt at
-      // this diagnostic logged on EVERY failure (~40/run) and produced no
-      // visible log output despite the code being confirmed correctly
-      // deployed and placed — narrowing to the FIRST failure per run only,
-      // in case 40 warn-lines in one invocation was hitting a log-volume
-      // limit. REMOVE once root-caused.
-      if (!rateTracker.__diag400Logged) {
-        rateTracker.__diag400Logged = true
-        console.warn(`[resolve-outcomes DIAG-FIRST] occSymbol=${occSymbol} day=${day} status=${historyResult.status} errorType=${historyResult.errorType} ticker=${row.ticker} strike=${row.primary_strike} expiry=${row.expiry_raw} optType=${row.option_type} rawStatus=${JSON.stringify(historyResult)}`)
-      }
+      if (historyResult.status === 400) return { _noUsableData: true, _badRequest: true }
       stoppedEarlyAt = dayIndex > 0 ? days[dayIndex - 1] : null
-        walkFailed = true
+      walkFailed = true
       break
     }
     const dailyBars = historyResult.days
@@ -632,13 +631,17 @@ module.exports = async function handler(req, res) {
     // path) — no resolve_attempts penalty, they're picked up fresh next run
     // once the API (hopefully) recovers.
     // Thresholds: only evaluate once tracker.calls >= 50 (avoid tripping on
-    // early-run noise), trip at >25% non-200 responses.
+    // early-run noise), then trip only on retryable upstream failures.
+    // Deterministic 400s are row-level data problems and must not make the
+    // entire resolver pretend Tradier is unavailable.
     if (rateTracker.calls >= 50) {
-      const okCount = rateTracker.statusCounts[200] || 0
-      const failureRate = 1 - (okCount / rateTracker.calls)
+      const retryableFailures = (rateTracker.statusCounts[429] || 0) +
+        Object.entries(rateTracker.statusCounts).reduce((sum, [status, count]) =>
+          Number(status) >= 500 ? sum + Number(count) : sum, 0)
+      const failureRate = retryableFailures / rateTracker.calls
       if (failureRate > 0.25) {
         console.warn(`[resolve-outcomes] ⚠️ CIRCUIT BREAKER — stopping early: ` +
-          `${rateTracker.calls} calls, ${Math.round(failureRate * 100)}% non-200 ` +
+          `${rateTracker.calls} calls, ${Math.round(failureRate * 100)}% retryable failures ` +
           `(statusCounts=${JSON.stringify(rateTracker.statusCounts)}). ` +
           `Tradier appears degraded — not burning the rest of this batch's budget for no progress.`)
         circuitBroken = true
