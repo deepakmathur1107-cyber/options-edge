@@ -67,7 +67,7 @@ function evaluatePromotion(rows, gates = DEFAULT_GATES) {
     positiveExpectancy: metrics.expectancyR != null && metrics.expectancyR >= gates.minimumExpectancyR,
     profitFactor: metrics.profitFactor != null && metrics.profitFactor >= gates.minimumProfitFactor,
     winRate: metrics.winRate != null && metrics.winRate >= gates.minimumWinRate,
-    maximumDrawdown: metrics.maximumDrawdownR <= gates.maximumDrawdownR,
+    maximumDrawdown: metrics.resolved > 0 && metrics.maximumDrawdownR <= gates.maximumDrawdownR,
     cohortStability: cohortExpectancies.length >= gates.minimumCohorts &&
       cohortExpectancies.every(cohort => cohort.resolved >= 30 && cohort.expectancyR >= gates.minimumExpectancyR),
     tickerConcentration: metrics.tickerConcentration != null &&

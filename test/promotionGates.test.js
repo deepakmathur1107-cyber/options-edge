@@ -17,6 +17,7 @@ test('promotion remains blocked while no forward measurement exists', () => {
   const result = evaluatePromotion([])
   assert.equal(result.eligible, false)
   assert.equal(result.status, 'WAITING_FOR_FORWARD_RESOLUTIONS')
+  assert.equal(result.checks.maximumDrawdown, false)
 })
 
 test('promotion requires every sample, expectancy, profit factor, and concentration gate', () => {
