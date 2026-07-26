@@ -197,7 +197,7 @@ export default function AdminDashboard({ getToken, theme }) {
   // tiers, discounts, or annual plans. A correct fix would pull actual MRR
   // from Stripe's API rather than guessing a flat per-user rate client-side.
   // Labeled "(est.)" in the UI below so it's never mistaken for real revenue.
-  const ASSUMED_FLAT_RATE = 29;
+  const ASSUMED_FLAT_RATE = 19;
   const mrr = data ? data.paidUsers * ASSUMED_FLAT_RATE : null;
 
   const sectionLabel = {
