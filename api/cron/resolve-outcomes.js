@@ -87,6 +87,15 @@ function addPendingResolutionFilters(query) {
   return query.is('outcome', null).is('resolved_at', null)
 }
 
+async function persistResolverRun(client, run) {
+  try {
+    const { error } = await client.from('resolver_runs').insert(run)
+    if (error) console.error('[resolve-outcomes] resolver_runs insert failed:', error.message)
+  } catch (e) {
+    console.error('[resolve-outcomes] resolver_runs insert threw:', e.message)
+  }
+}
+
 function buildDeadLetterQuery(client, row, attempts, resolvedAt) {
   const query = client.from('signal_history').update({
     resolve_attempts: attempts,
@@ -459,6 +468,7 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
 }
 
 module.exports = async function handler(req, res) {
+  const runStartedAt = new Date()
   const authHeader = req.headers['authorization'] || ''
   const isVercelCron = authHeader === `Bearer ${process.env.CRON_SECRET || '__never__'}`
                      || req.headers['x-vercel-cron'] === '1'
@@ -506,7 +516,7 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  const startedAt = Date.now()
+  const startedAt = runStartedAt.getTime()
   const MAX_MS = 280_000
   const rateTracker = newRateTracker()
 
@@ -583,15 +593,18 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: fetchErr.message })
   }
 
-  let resolved = 0, stillOpen = 0, dataUnavailable = 0, errors = 0
+  let resolved = 0, stillOpen = 0, dataUnavailable = 0, errors = 0, rowsProcessed = 0
   const results = []
   let circuitBroken = false
+  let timedOut = false
 
   for (const row of rows) {
     if (Date.now() - startedAt > MAX_MS) {
       console.warn('[resolve-outcomes] time budget reached, stopping early this run')
+      timedOut = true
       break
     }
+    rowsProcessed++
 
     // Circuit breaker (added 2026-07-17): confirmed live overnight that
     // sustained Tradier 400s get silently absorbed by tFetch (returns null on
@@ -707,8 +720,27 @@ module.exports = async function handler(req, res) {
   const durationMs = Date.now() - startedAt
   logRateSummary('resolve-outcomes', rateTracker, durationMs)
 
+  await persistResolverRun(client, {
+    started_at: runStartedAt.toISOString(),
+    finished_at: new Date().toISOString(),
+    mode: burndownMode ? 'burndown' : (isManualTrigger ? 'manual' : 'nightly'),
+    batch_limit: BATCH_LIMIT,
+    rows_fetched: rows.length,
+    rows_processed: rowsProcessed,
+    resolved,
+    still_open: stillOpen,
+    data_unavailable: dataUnavailable,
+    errors,
+    circuit_broken: circuitBroken,
+    timed_out: timedOut,
+    tradier_calls: rateTracker.calls,
+    status_counts: rateTracker.statusCounts,
+    min_available: rateTracker.minAvailable,
+    deployment_sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
+  })
+
   return res.status(200).json({
-    checked: rows.length,
+    checked: rowsProcessed,
     resolved, stillOpen, dataUnavailable, errors,
     circuitBroken, // true if this run stopped early due to a Tradier failure-rate spike, not the normal batch/time limits
     durationMs,
@@ -730,4 +762,5 @@ module.exports._test = {
   findFirstThresholdHit,
   resolveOne,
   scanTimeInNewYork,
+  persistResolverRun,
 }
