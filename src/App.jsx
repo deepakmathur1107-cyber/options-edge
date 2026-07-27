@@ -1247,7 +1247,13 @@ export default function App(props={}) {
     return tradierGet(path, tradierToken, tradierMode, authToken)
   }, [tradierToken, tradierMode, getAuthToken])
   const getQuote    = async t=>{const d=await tGet(`/markets/quotes?symbols=${t}&greeks=false`);return d?.quotes?.quote||null}
-  const getExpiries = async (t,includeAllRoots=false)=>{const d=await tGet(`/markets/options/expirations?symbol=${t}&includeAllRoots=${includeAllRoots?'true':'false'}`);return d?.expirations?.date||[]}
+  const getExpiries = async (t,includeAllRoots=false)=>{
+    const d=await tGet(`/markets/options/expirations?symbol=${t}&includeAllRoots=${includeAllRoots?'true':'false'}`)
+    const raw=d?.expirations?.date??d?.expirations?.expiration??[]
+    return (Array.isArray(raw)?raw:[raw])
+      .map(item=>typeof item==='string'?item:item?.date)
+      .filter(Boolean)
+  }
   const getChain    = async(t,e)=>{const d=await tGet(`/markets/options/chains?symbol=${t}&expiration=${e}&greeks=true`);return d?.options?.option||[]}
 
   // ─── Price bar fetch ──────────────────────────────────────────────────────
