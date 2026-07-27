@@ -2644,6 +2644,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
   // Quality Shortlist gates used by the main scanner.
   const MAX_PREMIUM_PER_CONTRACT = 1500
   const INDEX_QUICK_TF = 'Quick (5–14 DTE)'
+  const INDEX_SPREAD_WIDTH = 10
 
   const getDashboardQualityDecision = ({score, bid, ask, mid, volume, oi, warnings, hardBlocks}) => {
     const exclusions = []
@@ -2708,8 +2709,49 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         const ndxChgToday = marketConviction?.ndxChg ?? nqBar?.chgPct ?? 0
 
         const buildSide = (optType) => {
-          const td = buildNakedResult(chain, price, step, optType, tfCfg)
-          if (!td || td.mid*100 > MAX_PREMIUM_PER_CONTRACT) return null
+          const longLeg = buildNakedResult(chain, price, step, optType, tfCfg)
+          if (!longLeg) return null
+          const shortTarget = optType==='call'
+            ? longLeg.primaryStrike+INDEX_SPREAD_WIDTH
+            : longLeg.primaryStrike-INDEX_SPREAD_WIDTH
+          const shortCandidates = chain.filter(option =>
+            option.option_type===optType &&
+            parseFloat(option.bid||0)>0 &&
+            (optType==='call'
+              ? option.strike>longLeg.primaryStrike
+              : option.strike<longLeg.primaryStrike)
+          )
+          if (!shortCandidates.length) return null
+          const shortLeg = shortCandidates.reduce((a,b)=>
+            Math.abs(b.strike-shortTarget)<Math.abs(a.strike-shortTarget)?b:a
+          )
+          const width = Math.abs(shortLeg.strike-longLeg.primaryStrike)
+          if (width>INDEX_SPREAD_WIDTH || width<=0) return null
+          const shortBid=Math.max(0,parseFloat(shortLeg.bid||0))
+          const shortAsk=Math.max(0,parseFloat(shortLeg.ask||0))
+          const spreadBid=Math.max(0,longLeg.bid-shortAsk)
+          const spreadAsk=Math.max(0,longLeg.ask-shortBid)
+          const spreadMid=Math.round(((spreadBid+spreadAsk)/2)*100)/100
+          if (spreadMid<=0 || spreadMid>=width || spreadMid*100>MAX_PREMIUM_PER_CONTRACT) return null
+          const suffix=optType==='call'?'C':'P'
+          const maxProfit=Math.round((width-spreadMid)*100)/100
+          const targetDebit=Math.min(width,Math.round(spreadMid*1.5*100)/100)
+          const stopDebit=Math.round(spreadMid*0.5*100)/100
+          const td = {
+            ...longLeg,
+            structureType:optType==='call'?'Bull Call Spread':'Bear Put Spread',
+            strikeStr:`$${longLeg.primaryStrike}/$${shortLeg.strike}${suffix}`,
+            bid:spreadBid, ask:spreadAsk, mid:spreadMid,
+            entry:`$${spreadBid.toFixed(2)} – $${spreadAsk.toFixed(2)}  (mid $${spreadMid.toFixed(2)})`,
+            target:`$${targetDebit.toFixed(2)}  (+50% debit)`,
+            stop:`$${stopDebit.toFixed(2)}  (−50% debit)`,
+            volume:Math.min(Number(longLeg.volume||0),Number(shortLeg.volume||0)),
+            oi:Math.min(Number(longLeg.oi||0),Number(shortLeg.open_interest||0)),
+            shortStrike:shortLeg.strike,
+            spreadWidth:width,
+            maxProfit,
+            maxLoss:spreadMid,
+          }
           let breakevenReqPct = null
           if (td.primaryStrike && td.mid>0) {
             const be = optType==='put' ? td.primaryStrike-td.mid : td.primaryStrike+td.mid
@@ -2747,10 +2789,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           bid:fmtP(td.bid), ask:fmtP(td.ask), mid:fmtP(td.mid),
           iv:fmtPct(td.iv), delta:td.delta?td.delta.toFixed(3):'—',
           entry:td.entry, target:td.target, stop:td.stop,
-          legsList:[], reasons, warnings, hardBlocks,
+          legsList:[
+            {action:'BUY',strike:td.primaryStrike,type:optType.toUpperCase()},
+            {action:'SELL',strike:td.shortStrike,type:optType.toUpperCase()},
+          ], reasons, warnings, hardBlocks,
           volume:td.volume||0, oi:td.oi||0,
           qualityVersion:'quality_shortlist_v1',
           spreadPct:quality.spreadPct,
+          spreadWidth:td.spreadWidth,
+          maxProfit:td.maxProfit,
+          maxLoss:td.maxLoss,
           chgPct:chgPct.toFixed(2)+'%',
           optionType:optType,
         })
@@ -3175,6 +3223,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       <div style={{fontSize:11.5,color:C.subtext}}>
                         Entry {al.entry} {'·'} Tgt <span style={{color:C.green}}>{al.target}</span> {'·'} Stp <span style={{color:C.red}}>{al.stop}</span> {'·'} Exp {al.expiryDisplay} {'·'} IV {al.iv}
                       </div>
+                      {al.spreadWidth&&<div style={{fontSize:10.5,color:C.dim,marginTop:3}}>
+                        Defined risk {'·'} {al.spreadWidth}-point width {'·'} max loss ${Math.round(al.maxLoss*100)} {'·'} max profit ${Math.round(al.maxProfit*100)} at expiry
+                      </div>}
                       {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:10.5,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
                       {(al.sector||al.earningsDate)&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4}}>
                         {al.sector&&<span style={{fontSize:10,padding:'1px 6px',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:3,color:C.subtext}}>{al.sector}</span>}
