@@ -949,6 +949,7 @@ export default function App(props={}) {
   // ── index alerts & conviction ──
   const [indexAlerts,        setIndexAlerts]        = useState([])
   const [indexAlertsLoading, setIndexAlertsLoading] = useState(false)
+  const [indexAlertsMessage, setIndexAlertsMessage] = useState('')
   const [marketConviction,   setMarketConviction]   = useState(null)
   // Hero headline reads brief.why/brief.bias from MorningBrief's fetch (via
   // its onBriefLoaded callback) rather than re-fetching /api/brief separately.
@@ -2634,27 +2635,50 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     setTimeout(()=>setPaperToast(''), 4000)
   }
 
-  // ─── Generate SPY/QQQ index-proxy alerts across all timeframes ───────────
-  // (was SPX/NDX until 2026-07-17 — switched to the ETF proxies for
-  // retail-accessible contract sizing; see MAX_PREMIUM_PER_CONTRACT below)
-  // MAX_PREMIUM_PER_CONTRACT (added 2026-07-17): SPX/NDX are cash-settled
-  // index options — at ~7,400 and ~28,000 points respectively, even a
-  // short-DTE near-ATM contract runs into the thousands of dollars per
-  // contract (100x multiplier), regardless of timeframe. That's a notional
-  // problem, not a time-value one — shortening DTE alone doesn't fix it.
-  // Switched the underlying to SPY/QQQ (the standard retail-accessible
-  // proxies, same directional exposure, ~1/10th-ish the per-contract cost,
-  // tighter spreads) AND added this premium cap as a second, independent
-  // filter so nothing above a sane dollar amount surfaces regardless of
-  // which timeframe/underlying combination produces it. $1,500/contract is
-  // a starting default — tune based on subscriber feedback, not a
-  // rigorously-derived number.
+  // ─── Generate Quality-classified SPX/NDX Quick setups ─────────────────────
+  // This intentionally uses the real cash-settled indices rather than their
+  // ETF proxies, but keeps a hard premium ceiling because the $100 multiplier
+  // makes near-ATM SPX/NDX contracts unsuitable for many retail accounts.
+  // "No setup" is a valid result: the dashboard should not manufacture a
+  // trade when score, spread, volume, OI, warnings, or price fail the same
+  // Quality Shortlist gates used by the main scanner.
   const MAX_PREMIUM_PER_CONTRACT = 1500
+  const INDEX_QUICK_TF = 'Quick (5–14 DTE)'
+
+  const getDashboardQualityDecision = ({score, bid, ask, mid, volume, oi, warnings, hardBlocks}) => {
+    const exclusions = []
+    const spreadPct = mid > 0 ? ((ask - bid) / mid) * 100 : null
+    if (!Number.isFinite(score) || score < 80) exclusions.push('score')
+    if ((hardBlocks||[]).length) exclusions.push('hard block')
+    if (spreadPct == null || spreadPct > 8) exclusions.push('spread')
+    if (Number(volume||0) < 100) exclusions.push('volume')
+    if (Number(oi||0) < 500) exclusions.push('open interest')
+    const warningText = (warnings||[]).join(' | ')
+    const warningRules = [
+      /market open|first 30 min/i,
+      /earnings/i,
+      /resistance/i,
+      /counter-trend/i,
+      /against this (call|put)|doesn.t support the thesis/i,
+      /low probability/i,
+      /no identifiable catalyst|needs catalyst/i,
+      /low volume|weak conviction/i,
+      /gap play|premium is expanded/i,
+      /correlated market-wide bet|signals are calls|signals are puts/i,
+    ]
+    if (warningRules.some(rule=>rule.test(warningText))) exclusions.push('risk warning')
+    return {
+      eligible: exclusions.length===0,
+      exclusions:[...new Set(exclusions)],
+      spreadPct,
+    }
+  }
 
   const generateIndexAlerts = useCallback(async()=>{
-    setIndexAlertsLoading(true); setIndexAlerts([])
+    setIndexAlertsLoading(true); setIndexAlerts([]); setIndexAlertsMessage('')
     const results = []
-    for (const sym of ['SPY','QQQ']) {
+    let candidatesChecked = 0
+    for (const sym of ['SPX','NDX']) {
       try {
         const quote = await getQuote(sym)
         if (!quote) continue
@@ -2662,75 +2686,86 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         if (!price) continue
         const expDates = await getExpiries(sym)
         if (!expDates.length) continue
-        const chgPct = safeChgPct(quote).pct
+        const tfKey = INDEX_QUICK_TF
+        const tfCfg = TF_CONFIG[tfKey]
+        const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
+        if (!expiryRaw) continue
+        const chain = await getChain(sym, expiryRaw)
+        if (!chain.length) continue
 
-        for (const [tfKey, tfCfg] of Object.entries(TF_CONFIG)) {
-          try {
-            const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
-            if (!expiryRaw) continue
-            const chain = await getChain(sym, expiryRaw)
-            if (!chain.length) continue
+        const chgInfo = safeChgPct(quote)
+        const chgPct = chgInfo.pct
+        const step = autoStep(price)
+        const expiryDate = new Date(expiryRaw+'T12:00:00')
+        const dte = Math.round((expiryDate-new Date())/(1000*60*60*24))
+        const hi52=parseFloat(quote.week_52_high||price)
+        const lo52=parseFloat(quote.week_52_low||price)
+        const pos52=(price-lo52)/((hi52-lo52)||1)
+        const vol=quote.volume||0, avg=quote.average_volume||vol
+        const volRatio=vol/(avg||1)
+        const spxChgToday = marketConviction?.spxChg ?? esBar?.chgPct ?? 0
+        const ndxChgToday = marketConviction?.ndxChg ?? nqBar?.chgPct ?? 0
 
-            // Determine bias from price action
-            const bearish = chgPct < -0.2
-            const optType = bearish ? 'put' : 'call'
-            const step = autoStep(price)
-            const tgtStrike = bearish
-              ? Math.round(price*(2-tfCfg.strikePct)/step)*step
-              : Math.round(price*tfCfg.strikePct/step)*step
-            const side = chain.filter(o=>o.option_type===optType)
-            if (!side.length) continue
-            const best = side.reduce((a,b)=>Math.abs(b.strike-tgtStrike)<Math.abs(a.strike-tgtStrike)?b:a)
-            const bid=parseFloat(best.bid||0), ask=parseFloat(best.ask||0), mid=(bid+ask)/2
-            if (mid===0) continue
-            if (mid*100 > MAX_PREMIUM_PER_CONTRACT) continue // premium cap — see comment above
-            const ivRaw3=parseFloat(best.greeks?.mid_iv)
-            const iv=(!isNaN(ivRaw3)&&ivRaw3>0)?ivRaw3:0, delta=best.greeks?.delta||null
-
-            // Score — generous for indices (predictable trend vehicles)
-            const vol=quote.volume||0, avg=quote.average_volume||vol
-            const volRatio=vol/(avg||1)
-            let score=52; const reasons=[],warnings=[]
-            if(volRatio>=1.5){score+=14;reasons.push(`Volume ${volRatio.toFixed(1)}x avg`)}
-            else if(volRatio<0.8){score-=8;warnings.push(`Low volume`)}
-            if(Math.abs(chgPct)>=0.5){score+=12;reasons.push(`${chgPct>0?'+':''}${chgPct.toFixed(2)}% today`)}
-            else if(Math.abs(chgPct)>=0.2){score+=6}
-            if(iv>=0.10&&iv<=0.40){score+=12;reasons.push(`IV ${(iv*100).toFixed(0)}% — tradeable`)}
-            else if(iv>0.50){warnings.push(`Elevated IV ${(iv*100).toFixed(0)}%`)}
-            if(delta&&Math.abs(delta)>=0.30&&Math.abs(delta)<=0.70){score+=10;reasons.push(`Delta ${delta.toFixed(2)}`)}
-            // Bonus: broad market regime (real SPX/NDX index direction) confirms
-            // this SPY/QQQ trade's bias — SPY tracks SPX, QQQ tracks NDX, so
-            // checking the underlying index's own move is still the right
-            // confirmation signal even though the panel trades the ETF.
-            if(marketConviction&&((marketConviction.spxChg>0&&!bearish)||(marketConviction.spxChg<0&&bearish))){score+=8;reasons.push('Market aligned')}
-            score=Math.min(96,Math.max(30,score))
-
-            const expiryDisplay=new Date(expiryRaw+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
-            const td_ia = buildNakedResult(chain, price, step, optType, tfCfg)
-            if (!td_ia) continue
-            results.push({
-              sym, tfKey, tfLabel:tfCfg.label, tfBadge:tfCfg.badge, tfColor:tfCfg.color,
-              tradeType:    td_ia.structureType,
-              strikeStr:    td_ia.strikeStr,
-              expiryDisplay, score,
-              grade:score>=90?'A+':score>=80?'A':score>=70?'B':'C',
-              price:fmtP(price),
-              bid:fmtP(td_ia.bid), ask:fmtP(td_ia.ask), mid:fmtP(td_ia.mid),
-              iv:fmtPct(td_ia.iv), delta:td_ia.delta?td_ia.delta.toFixed(3):'—',
-              entry:   td_ia.entry,
-              target:  td_ia.target,
-              stop:    td_ia.stop,
-              legsList:[],
-              reasons, warnings, chgPct:chgPct.toFixed(2)+'%',
-            })
-          } catch {}
+        const buildSide = (optType) => {
+          const td = buildNakedResult(chain, price, step, optType, tfCfg)
+          if (!td || td.mid*100 > MAX_PREMIUM_PER_CONTRACT) return null
+          let breakevenReqPct = null
+          if (td.primaryStrike && td.mid>0) {
+            const be = optType==='put' ? td.primaryStrike-td.mid : td.primaryStrike+td.mid
+            breakevenReqPct = ((be/price)-1)*100
+          }
+          const scored = scoreConviction({
+            price, chgPct, chgPctEstimated:chgInfo.estimated, optType,
+            iv:td.iv||0, delta:td.delta||null, volRatio,
+            strikeVolume:td.volume||0, pos52, dte,
+            spxChgToday, ndxChgToday, breakevenReqPct,
+            isMorningWindow:isOpeningWindow(), fundamentals:null, now:new Date(), tf:tfKey,
+            gexSign:td.gexSign, gexMagnitude01:td.gexMagnitude01,
+            srPosition:null, srDistPct:null,
+          })
+          return {td, ...scored}
         }
+
+        const picked = pickBetterSide(buildSide('call'), buildSide('put'))
+        if (!picked) continue
+        candidatesChecked++
+        const {side:optType, winner} = picked
+        const {td, score, reasons, warnings, hardBlocks} = winner
+        const quality = getDashboardQualityDecision({
+          score, bid:td.bid, ask:td.ask, mid:td.mid,
+          volume:td.volume, oi:td.oi, warnings, hardBlocks,
+        })
+        if (!quality.eligible) continue
+
+        const expiryDisplay=expiryDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+        results.push({
+          sym, tfKey, tfLabel:tfCfg.label, tfBadge:tfCfg.badge, tfColor:tfCfg.color,
+          tradeType:td.structureType, strikeStr:td.strikeStr,
+          expiryDisplay, score, grade:score>=90?'A+':'A',
+          price:fmtP(price),
+          bid:fmtP(td.bid), ask:fmtP(td.ask), mid:fmtP(td.mid),
+          iv:fmtPct(td.iv), delta:td.delta?td.delta.toFixed(3):'—',
+          entry:td.entry, target:td.target, stop:td.stop,
+          legsList:[], reasons, warnings, hardBlocks,
+          volume:td.volume||0, oi:td.oi||0,
+          qualityVersion:'quality_shortlist_v1',
+          spreadPct:quality.spreadPct,
+          chgPct:chgPct.toFixed(2)+'%',
+          optionType:optType,
+        })
       } catch {}
     }
     results.sort((a,b)=>b.score-a.score)
     setIndexAlerts(results)
+    setIndexAlertsMessage(
+      results.length
+        ? `${results.length} quality-qualified Quick setup${results.length===1?'':'s'} · verify live quotes before acting`
+        : candidatesChecked
+          ? 'No SPX/NDX setup passed every Quality gate. Waiting is the signal.'
+          : 'SPX/NDX data is unavailable right now. Try again during market hours.'
+    )
     setIndexAlertsLoading(false)
-  },[tradierToken,tradierMode,marketConviction])
+  },[tradierToken,tradierMode,marketConviction,esBar,nqBar])
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
@@ -3094,12 +3129,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
             )}
 
-            {/* ── Today's Signals (SPY/QQQ, was "Index Setups", was SPX/NDX until 2026-07-17 — switched for retail-accessible contract sizing) ── */}
+            {/* ── Quality-classified SPX/NDX Quick setups ── */}
             <div className="dash-today-signals" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
-                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>TODAY'S SIGNALS</div>
-                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPY / QQQ {'·'} all timeframes {'·'} sorted by conviction {'·'} under ${MAX_PREMIUM_PER_CONTRACT}/contract</div>
+                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>QUICK INDEX SHORTLIST</div>
+                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPX / NDX {'·'} 5–14 DTE {'·'} Quality Shortlist V1 {'·'} max ${MAX_PREMIUM_PER_CONTRACT}/contract</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background: indexAlertsLoading ? C.cardAlt : C.green,
@@ -3115,9 +3150,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
                 <div style={{fontSize:12,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
-                  {'Hit GENERATE to scan SPY & QQQ across all 4 timeframes'}
+                  {indexAlertsMessage||'Hit GENERATE to check SPX & NDX against every Quality gate'}
                 </div>
               )}
+              {indexAlerts.length>0&&indexAlertsMessage&&<div style={{fontSize:10.5,color:C.green,marginBottom:4}}>{indexAlertsMessage}</div>}
               {indexAlerts.slice(0,6).map((al,i)=>{
                 const high=al.score>=90; const midHit=al.score>=75
                 const cardC=high?C.green:midHit?C.blue:C.dim
