@@ -1247,7 +1247,7 @@ export default function App(props={}) {
     return tradierGet(path, tradierToken, tradierMode, authToken)
   }, [tradierToken, tradierMode, getAuthToken])
   const getQuote    = async t=>{const d=await tGet(`/markets/quotes?symbols=${t}&greeks=false`);return d?.quotes?.quote||null}
-  const getExpiries = async t=>{const d=await tGet(`/markets/options/expirations?symbol=${t}&includeAllRoots=false`);return d?.expirations?.date||[]}
+  const getExpiries = async (t,includeAllRoots=false)=>{const d=await tGet(`/markets/options/expirations?symbol=${t}&includeAllRoots=${includeAllRoots?'true':'false'}`);return d?.expirations?.date||[]}
   const getChain    = async(t,e)=>{const d=await tGet(`/markets/options/chains?symbol=${t}&expiration=${e}&greeks=true`);return d?.options?.option||[]}
 
   // ─── Price bar fetch ──────────────────────────────────────────────────────
@@ -2686,7 +2686,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         if (!quote) { unavailable.push(`${sym} quote`); continue }
         const price = parseFloat(quote.last||quote.prevclose||0)
         if (!price) { unavailable.push(`${sym} price`); continue }
-        const expDates = await getExpiries(sym)
+        // SPX/NDX daily and weekly contracts use alternate roots (SPXW/NDXP).
+        // includeAllRoots=true is required or Tradier can return only standard
+        // monthly expirations, making pickExpiry fall back outside Quick DTE.
+        const expDates = await getExpiries(sym,true)
         if (!Array.isArray(expDates) || !expDates.length) { unavailable.push(`${sym} expirations`); continue }
         const tfKey = INDEX_QUICK_TF
         const tfCfg = TF_CONFIG[tfKey]
@@ -2700,6 +2703,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         const step = autoStep(price)
         const expiryDate = new Date(expiryRaw+'T12:00:00')
         const dte = Math.round((expiryDate-new Date())/(1000*60*60*24))
+        if (dte<tfCfg.minDTE || dte>tfCfg.maxDTE) {
+          unavailable.push(`${sym} 5–14 DTE expiry`)
+          continue
+        }
         const hi52=parseFloat(quote.week_52_high||price)
         const lo52=parseFloat(quote.week_52_low||price)
         const pos52=(price-lo52)/((hi52-lo52)||1)
