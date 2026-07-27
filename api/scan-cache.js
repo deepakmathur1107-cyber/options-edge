@@ -14,6 +14,7 @@
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
 const { buildSizingForScanRow } = require('./_lib/userPositionSizing')
+const { attachQualityShortlist } = require('./_lib/qualityShortlist')
 
 let _sb = null
 function sb() {
@@ -153,6 +154,7 @@ module.exports = async function handler(req, res) {
       if (!data)  return res.status(200).json({ cached: false })
       await attachLifecycleSummaries(client, [data])
       attachPositionSizing([data], sizingPrefs)
+      attachQualityShortlist([data])
       return res.status(200).json({ cached: true, result: data })
     }
 
@@ -188,6 +190,7 @@ module.exports = async function handler(req, res) {
 
       await attachLifecycleSummaries(client, data || [])
       attachPositionSizing(data || [], sizingPrefs)
+      attachQualityShortlist(data || [])
       return res.status(200).json({ cached: true, results: data || [], clusters })
     }
     // No tf filter — mixing all 4 timeframes. A flat ORDER BY score LIMIT 50
@@ -231,6 +234,7 @@ module.exports = async function handler(req, res) {
 
     await attachLifecycleSummaries(client, data)
     attachPositionSizing(data, sizingPrefs)
+    attachQualityShortlist(data)
     return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {
     console.error('[scan-cache] error:', e.message)
