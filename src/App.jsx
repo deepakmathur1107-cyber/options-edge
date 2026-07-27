@@ -41,6 +41,19 @@ function getETHour() {
   const [h, m] = etStr.split(':').map(Number)
   return h + m / 60
 }
+
+function pickQuickFridayExpiry() {
+  for (let dte=5;dte<=14;dte++) {
+    const candidate=new Date(Date.now()+dte*86400000)
+    const weekday=candidate.toLocaleDateString('en-US',{timeZone:'America/New_York',weekday:'short'})
+    if (weekday!=='Fri') continue
+    const parts=candidate.toLocaleDateString('en-US',{
+      timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',
+    }).split('/')
+    return {date:`${parts[2]}-${parts[0]}-${parts[1]}`,dte}
+  }
+  return null
+}
 function isMarketOpen() {
   const h = getETHour()
   const now = new Date()
@@ -2695,23 +2708,22 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         if (!quote) { unavailable.push(`${sym} quote`); continue }
         const price = parseFloat(quote.last||quote.prevclose||0)
         if (!price) { unavailable.push(`${sym} price`); continue }
-        // SPX/NDX daily and weekly contracts trade under distinct roots.
-        // Query those roots directly; requesting "all roots" on the underlying
-        // still returns only standard monthlies in Tradier's production feed.
-        const expDates = await getExpiries(chainSym)
-        if (!Array.isArray(expDates) || !expDates.length) { unavailable.push(`${sym} expirations`); continue }
         const tfKey = INDEX_QUICK_TF
         const tfCfg = TF_CONFIG[tfKey]
-        const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
+        // Tradier's expirations endpoint exposes standard monthlies for these
+        // underlyings inconsistently. Request the next Friday that is strictly
+        // inside the Quick window; SPXW/NDXP weeklies are listed for Fridays.
+        const quickExpiry = pickQuickFridayExpiry()
+        const expiryRaw = quickExpiry?.date
         if (!expiryRaw) { unavailable.push(`${sym} Quick expiry`); continue }
-        const chain = await getChain(chainSym, expiryRaw)
+        const chain = await getChain(sym, expiryRaw)
         if (!Array.isArray(chain) || !chain.length) { unavailable.push(`${sym} option chain`); continue }
 
         const chgInfo = safeChgPct(quote)
         const chgPct = chgInfo.pct
         const step = autoStep(price)
         const expiryDate = new Date(expiryRaw+'T12:00:00')
-        const dte = Math.round((expiryDate-new Date())/(1000*60*60*24))
+        const dte = quickExpiry.dte
         if (dte<tfCfg.minDTE || dte>tfCfg.maxDTE) {
           unavailable.push(`${sym} 5–14 DTE expiry`)
           continue
