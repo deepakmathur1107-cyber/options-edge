@@ -10,6 +10,7 @@ import TrackRecordCard from './components/TrackRecordCard'
 import ConvictionCorrelationCard from './components/ConvictionCorrelationCard'
 import ClusterDistributionPanel from './components/ClusterDistributionPanel'
 import ForwardPerformancePanel from './components/ForwardPerformancePanel'
+import StockWorkspace from './components/StockWorkspace'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
@@ -891,7 +892,7 @@ export default function App(props={}) {
   // CLOSE button instead of just clicking another tab. Folded into `tab`
   // here so Tools behaves exactly like Dash/Scan/Admin.
   const tabParam = searchParams.get('tab')
-  const initialTab = ['dash','scan','admin','tools'].includes(tabParam) ? tabParam : 'dash'
+  const initialTab = ['dash','scan','stocks','admin','tools'].includes(tabParam) ? tabParam : 'dash'
   const [tab,        setTab]        = useState(initialTab)
   // Keep the URL's ?tab= param in sync with every tab change, not just the
   // ones that arrive via TradeLog's separate navigate-based setTab. Without
@@ -3066,6 +3067,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
       {/* ═══════════════ MAIN CONTENT ════════════════════════════════════════ */}
       <div style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
+
+        {tab==='stocks' && <StockWorkspace C={C} getToken={getAuthToken} />}
 
         {/* ── DASHBOARD TAB ──────────────────────────────────────────────── */}
         {tab==='dash' && (

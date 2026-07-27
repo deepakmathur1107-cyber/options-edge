@@ -125,6 +125,7 @@ export default function AppNav({
             {[
               { id:'dash',  icon:'◈', label:'DASH'  },
               { id:'scan',  icon:'⌁', label:'SCAN'  },
+              { id:'stocks', icon:'↗', label:'STOCKS' },
             ].map(t => (
               <button key={t.id} className="oe-navbtn oe-toptab"
                 onClick={() => setTab(t.id)}
@@ -245,10 +246,11 @@ export default function AppNav({
         borderTop: `1px solid ${C.border}`,
         boxShadow: '0 -2px 12px rgba(0,0,0,.08)',
       }}>
-        <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 5 : 4},1fr)` }}>
+        <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 6 : 5},1fr)` }}>
           {[
             { id:'dash',   icon:'◈', label:'DASH'   },
             { id:'scan',   icon:'⌁', label:'SCAN'   },
+            { id:'stocks', icon:'↗', label:'STOCKS' },
             { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
             { id:'tools',  icon:'⚙', label:'TOOLS'  },
             ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),

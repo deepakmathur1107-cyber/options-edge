@@ -25,11 +25,11 @@ const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const FREE_LIMIT  = 4
 
 // FIX: allowlist of Tradier endpoints this proxy is permitted to forward to.
-// Matches the only three paths the frontend actually calls (markets/quotes,
-// markets/options/expirations, markets/options/chains). Anything else is
+// Matches the market-data paths the frontend calls. Anything else is
 // rejected before we ever build the upstream URL.
 const ALLOWED_PATH_PATTERNS = [
   /^\/markets\/quotes$/,
+  /^\/markets\/history$/,
   /^\/markets\/options\/expirations$/,
   /^\/markets\/options\/chains$/,
 ]
@@ -96,6 +96,7 @@ async function usageIncr(clerkId) {
 
 function getTTL(path) {
   if (path.includes('expirations')) return 86400
+  if (path.includes('history'))     return 900
   if (path.includes('chains'))      return 300
   return 30
 }
