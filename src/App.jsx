@@ -2678,20 +2678,21 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     setIndexAlertsLoading(true); setIndexAlerts([]); setIndexAlertsMessage('')
     const results = []
     let candidatesChecked = 0
+    const unavailable = []
     for (const sym of ['SPX','NDX']) {
       try {
         const quote = await getQuote(sym)
-        if (!quote) continue
+        if (!quote) { unavailable.push(`${sym} quote`); continue }
         const price = parseFloat(quote.last||quote.prevclose||0)
-        if (!price) continue
+        if (!price) { unavailable.push(`${sym} price`); continue }
         const expDates = await getExpiries(sym)
-        if (!expDates.length) continue
+        if (!Array.isArray(expDates) || !expDates.length) { unavailable.push(`${sym} expirations`); continue }
         const tfKey = INDEX_QUICK_TF
         const tfCfg = TF_CONFIG[tfKey]
         const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
-        if (!expiryRaw) continue
+        if (!expiryRaw) { unavailable.push(`${sym} Quick expiry`); continue }
         const chain = await getChain(sym, expiryRaw)
-        if (!chain.length) continue
+        if (!Array.isArray(chain) || !chain.length) { unavailable.push(`${sym} option chain`); continue }
 
         const chgInfo = safeChgPct(quote)
         const chgPct = chgInfo.pct
@@ -2753,7 +2754,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           chgPct:chgPct.toFixed(2)+'%',
           optionType:optType,
         })
-      } catch {}
+      } catch (error) {
+        console.warn(`[index-shortlist] ${sym} unavailable:`, error.message)
+        unavailable.push(`${sym} market data`)
+      }
     }
     results.sort((a,b)=>b.score-a.score)
     setIndexAlerts(results)
@@ -2762,7 +2766,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         ? `${results.length} quality-qualified Quick setup${results.length===1?'':'s'} · verify live quotes before acting`
         : candidatesChecked
           ? 'No SPX/NDX setup passed every Quality gate. Waiting is the signal.'
-          : 'SPX/NDX data is unavailable right now. Try again during market hours.'
+          : `SPX/NDX data is unavailable (${unavailable.join(', ')||'provider response'}). Try again during market hours.`
     )
     setIndexAlertsLoading(false)
   },[tradierToken,tradierMode,marketConviction,esBar,nqBar])
