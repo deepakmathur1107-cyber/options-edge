@@ -1201,6 +1201,7 @@ export default function App(props={}) {
   const [autoLog,     setAutoLog]     = useState([])
   const [lastAlert,   setLastAlert]   = useState(null)
   const [alertHistory, setAlertHistory] = useState([])   // last 10 full alert objects
+  const [shortlistOnly, setShortlistOnly] = useState(true)
   // Sector/direction concentration clusters for the current scan batch — see
   // loadOrRefreshAlerts and api/scan-cache.js. Each entry: { sector, direction, tickers: [...] }.
   const [scanClusters, setScanClusters] = useState([])
@@ -2384,6 +2385,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         underlyingPrice: row.underlying_price ? Number(row.underlying_price) : null,
         positionSizing: row.position_sizing || null,
         lifecycleSummary: row.lifecycle_summary || null,
+        qualityShortlist: row.quality_shortlist || null,
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -3807,6 +3809,23 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               {/* Alert history — last 10 alerts, clickable for full details */}
               {alertHistory.length>0&&(
                 <div style={{marginBottom:10}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:0.7}}>QUALITY SHORTLIST</div>
+                      <div style={{fontSize:10,color:C.dim,marginTop:2}}>
+                        {alertHistory.filter(row=>row.qualityShortlist?.eligible).length} of {alertHistory.length} fresh signals pass every selection rule.
+                      </div>
+                    </div>
+                    <div style={{display:'flex',gap:5}}>
+                      <button className="hv" onClick={()=>setShortlistOnly(true)} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${shortlistOnly?C.green:C.border}`,background:shortlistOnly?`${C.green}16`:C.bgDeep,color:shortlistOnly?C.green:C.dim}}>★ SHORTLIST</button>
+                      <button className="hv" onClick={()=>setShortlistOnly(false)} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${!shortlistOnly?C.blue:C.border}`,background:!shortlistOnly?`${C.blue}16`:C.bgDeep,color:!shortlistOnly?C.blue:C.dim}}>ALL SIGNALS</button>
+                    </div>
+                  </div>
+                  {shortlistOnly && !alertHistory.some(row=>row.qualityShortlist?.eligible) && (
+                    <div style={{background:`${C.orange}0D`,border:`1px solid ${C.orange}35`,borderRadius:6,padding:'11px 13px',fontSize:11,color:C.subtext,lineHeight:1.55,marginBottom:8}}>
+                      No setup passes every Quality Shortlist rule right now. This is a valid wait signal—not a reason to lower the safety filters. Switch to All Signals to review exclusions.
+                    </div>
+                  )}
                   {/* Table header — hidden on mobile, where rows become
                       self-labeled cards instead of table columns (no header
                       row needed when each value already has visual context). */}
@@ -3845,7 +3864,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       const diffDay = Math.round(diffHr / 24)
                       return { label: `${diffDay}d ago`, tier: 'stale' }
                     }
-                  return alertHistory.map((al,i)=>({al,i})).filter(({al})=>!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)).map(({al,i})=>{
+                  return alertHistory.map((al,i)=>({al,i}))
+                    .filter(({al})=>(!shortlistOnly || al.qualityShortlist?.eligible) && (!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)))
+                    .map(({al,i})=>{
                     const staleness = stalenessOf(al.scannedAtMs)
                     const staleCol = staleness?.tier==='fresh' ? C.green : staleness?.tier==='aging' ? C.orange : C.dim
                     const isSelected = selectedAlert===i
@@ -3945,7 +3966,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           {/* Row 1 — the headline: ticker + grade, the two
                               things worth seeing before anything else */}
                           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-                            <span style={{fontFamily:"'Fraunces',serif",fontSize:19,fontWeight:600,color:scoreCol,letterSpacing:0.3}}>${al.ticker}</span>
+                            <span style={{fontFamily:"'Fraunces',serif",fontSize:19,fontWeight:600,color:scoreCol,letterSpacing:0.3}}>{al.qualityShortlist?.eligible?'★ ':''}${al.ticker}</span>
                             <div style={{display:'flex',alignItems:'center',gap:8}}>
                               <span title={lifecycleMeta.title} style={{fontSize:9,color:lifecycleMeta.color,border:`1px solid ${lifecycleMeta.color}55`,background:`${lifecycleMeta.color}12`,padding:'2px 6px',borderRadius:3,fontWeight:700,letterSpacing:0.5}}>
                                 {lifecycleMeta.label}
@@ -4044,7 +4065,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           borderLeft:`3px solid ${scoreCol}`,
                           transition:'all .15s',
                         }}>
-                          <span className="alert-row-ticker" style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>${al.ticker}</span>
+                          <span className="alert-row-ticker" style={{fontFamily:"'Fraunces',serif",fontSize:15,color:scoreCol,letterSpacing:0.3,width:52}}>{al.qualityShortlist?.eligible?'★ ':''}${al.ticker}</span>
                           <span title={lifecycleMeta.title} style={{fontSize:8.5,color:lifecycleMeta.color,border:`1px solid ${lifecycleMeta.color}55`,background:`${lifecycleMeta.color}12`,padding:'2px 5px',borderRadius:3,fontWeight:700,whiteSpace:'nowrap'}}>
                             {lifecycleMeta.label}
                           </span>
@@ -4088,6 +4109,17 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                               ))}
                             </div>
                             {al.tfLabel&&<div style={{fontSize:11,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
+                            {al.qualityShortlist && (
+                              <div style={{background:al.qualityShortlist.eligible?`${C.green}10`:`${C.orange}0D`,border:`1px solid ${al.qualityShortlist.eligible?C.green:C.orange}35`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
+                                <div style={{fontSize:10.5,fontWeight:700,color:al.qualityShortlist.eligible?C.green:C.orange,letterSpacing:0.7}}>
+                                  {al.qualityShortlist.eligible ? '★ QUALITY SHORTLIST' : 'NOT SHORTLISTED'}
+                                </div>
+                                {!al.qualityShortlist.eligible && <div style={{fontSize:10.5,color:C.subtext,marginTop:4,lineHeight:1.5}}>
+                                  {al.qualityShortlist.exclusions.map(reason=>reason.replaceAll('_',' ').toLowerCase()).join(' · ')}
+                                </div>}
+                                <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>{al.qualityShortlist.disclaimer}</div>
+                              </div>
+                            )}
                             {al.positionSizing?.configured&&(
                               <div style={{background:`${C.blue}10`,border:`1px solid ${C.blue}35`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
                                 <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}>
