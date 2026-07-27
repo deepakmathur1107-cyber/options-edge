@@ -2778,7 +2778,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           score, bid:td.bid, ask:td.ask, mid:td.mid,
           volume:td.volume, oi:td.oi, warnings, hardBlocks,
         })
-        if (!quality.eligible) continue
+        const decision = quality.eligible
+          ? 'QUALIFIED'
+          : score>=70 && !(hardBlocks||[]).length
+            ? 'WATCH'
+            : 'AVOID'
 
         const expiryDisplay=expiryDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
         results.push({
@@ -2795,6 +2799,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           ], reasons, warnings, hardBlocks,
           volume:td.volume||0, oi:td.oi||0,
           qualityVersion:'quality_shortlist_v1',
+          decision,
+          failedGates:quality.exclusions,
           spreadPct:quality.spreadPct,
           spreadWidth:td.spreadWidth,
           maxProfit:td.maxProfit,
@@ -2807,11 +2813,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         unavailable.push(`${sym} market data`)
       }
     }
-    results.sort((a,b)=>b.score-a.score)
+    const decisionRank = {QUALIFIED:0,WATCH:1,AVOID:2}
+    results.sort((a,b)=>decisionRank[a.decision]-decisionRank[b.decision]||b.score-a.score)
     setIndexAlerts(results)
+    const qualifiedCount=results.filter(row=>row.decision==='QUALIFIED').length
+    const watchCount=results.filter(row=>row.decision==='WATCH').length
     setIndexAlertsMessage(
       results.length
-        ? `${results.length} quality-qualified Quick setup${results.length===1?'':'s'} · verify live quotes before acting`
+        ? qualifiedCount
+          ? `${qualifiedCount} qualified · ${watchCount} watch · verify live quotes before acting`
+          : `${watchCount} watch · no setup qualified. Waiting remains the actionable conclusion.`
         : candidatesChecked
           ? 'No SPX/NDX setup passed every Quality gate. Waiting is the signal.'
           : `SPX/NDX data is unavailable (${unavailable.join(', ')||'provider response'}). Try again during market hours.`
@@ -3207,8 +3218,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               )}
               {indexAlerts.length>0&&indexAlertsMessage&&<div style={{fontSize:10.5,color:C.green,marginBottom:4}}>{indexAlertsMessage}</div>}
               {indexAlerts.slice(0,6).map((al,i)=>{
-                const high=al.score>=90; const midHit=al.score>=75
-                const cardC=high?C.green:midHit?C.blue:C.dim
+                const high=al.decision==='QUALIFIED'
+                const cardC=al.decision==='QUALIFIED'?C.green:al.decision==='WATCH'?C.orange:C.red
                 return (
                   <div key={i} style={{display:'flex',gap:10,padding:'10px 0',borderBottom:i<indexAlerts.slice(0,6).length-1?`1px solid ${C.borderDim}`:'none'}}>
                     <div style={{width:8,height:8,borderRadius:'50%',background:cardC,marginTop:5,flexShrink:0}}/>
@@ -3217,7 +3228,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         <span style={{fontFamily:"'Fraunces',serif",fontSize:16,color:cardC,letterSpacing:0.3}}>{al.sym}</span>
                         <span style={{fontSize:12,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
                         <span style={{fontSize:10,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 6px',borderRadius:2,whiteSpace:'nowrap'}}>{al.tfLabel||al.tfBadge}</span>
-                        {high&&<span style={{fontSize:10,fontWeight:700,color:C.purple,background:`${C.purple}15`,border:`1px solid ${C.purple}50`,padding:'1px 7px',borderRadius:4}}>HIGH CONVICTION</span>}
+                        <span style={{fontSize:10,fontWeight:700,color:cardC,background:`${cardC}15`,border:`1px solid ${cardC}50`,padding:'1px 7px',borderRadius:4}}>{al.decision}</span>
                         <span style={{fontFamily:"'Fraunces',serif",fontSize:14,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
                       </div>
                       <div style={{fontSize:11.5,color:C.subtext}}>
@@ -3225,6 +3236,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       </div>
                       {al.spreadWidth&&<div style={{fontSize:10.5,color:C.dim,marginTop:3}}>
                         Defined risk {'·'} {al.spreadWidth}-point width {'·'} max loss ${Math.round(al.maxLoss*100)} {'·'} max profit ${Math.round(al.maxProfit*100)} at expiry
+                      </div>}
+                      {al.failedGates?.length>0&&<div style={{fontSize:10.5,color:C.red,marginTop:3}}>
+                        Do not take yet {'·'} failed: {al.failedGates.join(', ')}
+                      </div>}
+                      {al.decision==='QUALIFIED'&&<div style={{fontSize:10.5,color:C.green,marginTop:3}}>
+                        Passed every automated gate {'·'} confirm the live debit and personal risk before considering entry
                       </div>}
                       {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:10.5,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
                       {(al.sector||al.earningsDate)&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4}}>
