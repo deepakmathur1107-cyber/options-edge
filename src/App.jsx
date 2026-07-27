@@ -2686,22 +2686,25 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
     const results = []
     let candidatesChecked = 0
     const unavailable = []
-    for (const sym of ['SPX','NDX']) {
+    for (const {sym,chainSym} of [
+      {sym:'SPX',chainSym:'SPXW'},
+      {sym:'NDX',chainSym:'NDXP'},
+    ]) {
       try {
         const quote = await getQuote(sym)
         if (!quote) { unavailable.push(`${sym} quote`); continue }
         const price = parseFloat(quote.last||quote.prevclose||0)
         if (!price) { unavailable.push(`${sym} price`); continue }
-        // SPX/NDX daily and weekly contracts use alternate roots (SPXW/NDXP).
-        // includeAllRoots=true is required or Tradier can return only standard
-        // monthly expirations, making pickExpiry fall back outside Quick DTE.
-        const expDates = await getExpiries(sym,true)
+        // SPX/NDX daily and weekly contracts trade under distinct roots.
+        // Query those roots directly; requesting "all roots" on the underlying
+        // still returns only standard monthlies in Tradier's production feed.
+        const expDates = await getExpiries(chainSym)
         if (!Array.isArray(expDates) || !expDates.length) { unavailable.push(`${sym} expirations`); continue }
         const tfKey = INDEX_QUICK_TF
         const tfCfg = TF_CONFIG[tfKey]
         const expiryRaw = pickExpiry(expDates, tfCfg.minDTE, tfCfg.maxDTE)
         if (!expiryRaw) { unavailable.push(`${sym} Quick expiry`); continue }
-        const chain = await getChain(sym, expiryRaw)
+        const chain = await getChain(chainSym, expiryRaw)
         if (!Array.isArray(chain) || !chain.length) { unavailable.push(`${sym} option chain`); continue }
 
         const chgInfo = safeChgPct(quote)
@@ -2820,6 +2823,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           maxLoss:td.maxLoss,
           chgPct:chgPct.toFixed(2)+'%',
           optionType:optType,
+          contractRoot:chainSym,
         })
       } catch (error) {
         console.warn(`[index-shortlist] ${sym} unavailable:`, error.message)
