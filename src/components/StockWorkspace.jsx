@@ -7,6 +7,21 @@ const STOCKS = [
   { symbol:'JPM', name:'JPMorgan Chase', sector:'Financials', price:296.48, change:0.44, score:81, setup:'Trend continuation', stage:'READY', entry:'294.00–297.00', stop:287.50, target1:307, target2:316, rr:'2.2×', trend:'Constructive', rsi:58, volume:'1.0×', support:290.20, resistance:299.40, thesis:'Best-in-class execution and resilient net interest income support a steady, lower-volatility trend.', catalyst:'Investor update in 18 days', risk:'Falling yields or credit deterioration could pressure the multiple.', quality:93, growth:68, value:82, momentum:79 },
   { symbol:'COST', name:'Costco', sector:'Consumer Staples', price:1007.84, change:1.09, score:79, setup:'Support bounce', stage:'READY', entry:'998.00–1008.00', stop:976.00, target1:1042, target2:1068, rr:'2.0×', trend:'Constructive', rsi:57, volume:'1.2×', support:991.00, resistance:1024.00, thesis:'Membership renewal strength and pricing power provide defensive growth with unusually consistent execution.', catalyst:'Monthly sales next week', risk:'Premium valuation leaves little room for a soft sales print.', quality:98, growth:75, value:48, momentum:77 },
 ]
+const DEFAULT_TOP_10 = ['NVDA','AMZN','GOOGL','JPM','COST','AAPL','MSFT','META','AVGO','LLY']
+const makeSeed = (symbol, scan={}) => {
+  const known=STOCKS.find(s=>s.symbol===symbol)
+  if(known) return {...known,scannerScore:Number(scan.score)||known.score,sector:scan.sector||known.sector}
+  return {
+    symbol,name:symbol,sector:scan.sector||'Sector pending',price:0,change:0,
+    score:Number(scan.score)||65,scannerScore:Number(scan.score)||65,
+    setup:scan.trade_type?`${scan.trade_type} scanner leader`:'Technical analysis',
+    stage:'WAIT',entry:'—',stop:0,target1:0,target2:0,rr:'2.5×',trend:'Analyzing',
+    rsi:50,volume:'—',support:0,resistance:0,
+    thesis:`${symbol} was identified by the Options Edge scanner. Review its live technical structure, company fundamentals, and risk plan below.`,
+    risk:'Wait for complete live history and a valid entry trigger before simulating a position.',
+    quality:75,growth:75,value:65,momentum:70,
+  }
+}
 
 const stageColor = (stage, C) => stage === 'READY' ? C.green : C.orange
 
@@ -69,12 +84,44 @@ export default function StockWorkspace({ C, getToken }) {
   const [dataError, setDataError] = useState('')
   const [updatedAt, setUpdatedAt] = useState(null)
   const [tradeMessage, setTradeMessage] = useState('')
+  const [topStocks, setTopStocks] = useState(()=>DEFAULT_TOP_10.map(symbol=>makeSeed(symbol)))
+  const [manualStocks, setManualStocks] = useState([])
+  const [tickerInput, setTickerInput] = useState('')
+  const [tickerError, setTickerError] = useState('')
+  const universe=useMemo(()=>{
+    const merged=[...manualStocks,...topStocks]
+    return merged.filter((item,index)=>merged.findIndex(x=>x.symbol===item.symbol)===index)
+  },[topStocks,manualStocks])
+
+  useEffect(()=>{
+    let cancelled=false
+    const loadTopTen=async()=>{
+      try {
+        const headers=await authHeaders(getToken)
+        const res=await fetch('/api/scan-cache?minScore=60',{headers})
+        const data=await res.json()
+        if(!res.ok||!Array.isArray(data.results)) return
+        const unique=[]
+        for(const row of data.results) {
+          const symbol=String(row.ticker||'').toUpperCase()
+          if(symbol&&!unique.some(x=>x.symbol===symbol)) unique.push(makeSeed(symbol,row))
+          if(unique.length===10) break
+        }
+        if(!cancelled&&unique.length) {
+          setTopStocks(unique)
+          setSelected(current=>unique.some(item=>item.symbol===current)?current:unique[0].symbol)
+        }
+      } catch {}
+    }
+    loadTopTen()
+    return()=>{cancelled=true}
+  },[getToken])
 
   const fetchQuotes = useCallback(async()=>{
     setDataError('')
     try {
       const headers=await authHeaders(getToken)
-      const symbols=STOCKS.map(s=>s.symbol).join(',')
+      const symbols=universe.map(s=>s.symbol).join(',')
       const path=`/markets/quotes?symbols=${symbols}&greeks=false`
       const res=await fetch(`/api/tradier?path=${encodeURIComponent(path)}`,{headers})
       const data=await res.json()
@@ -86,7 +133,7 @@ export default function StockWorkspace({ C, getToken }) {
       setUpdatedAt(new Date())
     } catch(e) { setDataError(e.message) }
     finally { setLoading(false) }
-  },[getToken])
+  },[getToken,universe])
 
   useEffect(()=>{
     fetchQuotes()
@@ -120,7 +167,7 @@ export default function StockWorkspace({ C, getToken }) {
     return()=>{cancelled=true}
   },[selected,getToken])
 
-  const enriched = useMemo(()=>STOCKS.map(seed=>{
+  const enriched = useMemo(()=>universe.map(seed=>{
     const q=quotes[seed.symbol]
     const t=technicals[seed.symbol]
     const price=Number(q?.last ?? seed.price)
@@ -129,7 +176,8 @@ export default function StockWorkspace({ C, getToken }) {
     const resistance=Number.isFinite(t?.resistance)?t.resistance:seed.resistance
     const trend=Number.isFinite(t?.sma20)?(price>t.sma20?'Above 20-day':'Below 20-day'):seed.trend
     const momentum=Number.isFinite(t?.rsi)?Math.min(99,Math.max(35,Math.round(50+(t.rsi-50)*1.4))):seed.momentum
-    const score=Math.round(Math.min(96,Math.max(45,seed.quality*.32+seed.growth*.18+momentum*.30+(change>0?12:7))))
+    const technicalScore=Math.round(Math.min(96,Math.max(45,seed.quality*.32+seed.growth*.18+momentum*.30+(change>0?12:7))))
+    const score=Math.round((technicalScore+(seed.scannerScore||technicalScore))/2)
     const stage=price>=support&&price<=support*1.035&&trend!=='Below 20-day'?'READY':'WAIT'
     const stop=Number((support*.985).toFixed(2))
     const risk=Math.max(.01,price-stop)
@@ -138,7 +186,7 @@ export default function StockWorkspace({ C, getToken }) {
       entry:`${Math.max(support,price*.985).toFixed(2)}–${Math.min(resistance,price*1.01).toFixed(2)}`,
       target1:Number((price+risk*1.5).toFixed(2)),target2:Number((price+risk*2.5).toFixed(2)),
       rr:'2.5×',live:!!q}
-  }),[quotes,technicals])
+  }),[universe,quotes,technicals])
   const stock = enriched.find(s=>s.symbol===selected) || enriched[0]
   const rows = useMemo(()=>enriched.filter(s=>(filter==='ALL'||s.stage===filter)&&(`${s.symbol} ${s.name}`.toLowerCase().includes(query.toLowerCase()))).sort((a,b)=>b.score-a.score),[enriched,filter,query])
   const fund=fundamentals[selected]
@@ -167,6 +215,29 @@ export default function StockWorkspace({ C, getToken }) {
     } catch(e) { setTradeMessage(e.message) }
   }
   const toggleWatch = (symbol) => setWatchlist(p=>p.includes(symbol)?p.filter(x=>x!==symbol):[...p,symbol])
+  const analyzeTicker = async(event) => {
+    event.preventDefault()
+    const symbol=tickerInput.trim().toUpperCase()
+    if(!/^[A-Z][A-Z.-]{0,5}$/.test(symbol)) {
+      setTickerError('Enter a valid ticker, for example AAPL or BRK.B.')
+      return
+    }
+    setTickerError('')
+    setDetailLoading(true)
+    try {
+      const headers=await authHeaders(getToken)
+      const path=`/markets/quotes?symbols=${symbol}&greeks=false`
+      const res=await fetch(`/api/tradier?path=${encodeURIComponent(path)}`,{headers})
+      const data=await res.json()
+      const quote=asArray(data?.quotes?.quote)[0]
+      if(!res.ok||!quote?.symbol||!Number(quote.last)) throw new Error('Ticker not found or no live quote is available.')
+      setQuotes(p=>({...p,[symbol]:quote}))
+      setManualStocks(p=>p.some(s=>s.symbol===symbol)?p:[makeSeed(symbol),...p])
+      setSelected(symbol)
+      setTickerInput('')
+    } catch(e) { setTickerError(e.message) }
+    finally { setDetailLoading(false) }
+  }
 
   return <div className="si stock-workspace">
     <style>{`
@@ -190,7 +261,17 @@ export default function StockWorkspace({ C, getToken }) {
     </div>
     <div className="stock-body">
       <section style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden',boxShadow:C.shadow}}>
-        <div style={{padding:14,borderBottom:`1px solid ${C.border}`}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Opportunity list</strong><span style={{fontSize:9,color:C.dim}}>{rows.length} QUALIFY</span></div><input aria-label="Search stocks" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search symbol or company…" style={{width:'100%',background:C.inputBg,border:`1px solid ${C.border}`,color:C.text,padding:'9px 10px',borderRadius:7,fontSize:11}} /><div style={{display:'flex',gap:6,marginTop:9}}>{['ALL','READY','WAIT'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f}</button>)}</div></div>
+        <div style={{padding:14,borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:9,color:C.green,letterSpacing:1.3,marginBottom:6}}>ANALYZE ANY STOCK</div>
+          <form onSubmit={analyzeTicker} style={{display:'grid',gridTemplateColumns:'1fr auto',gap:7}}>
+            <input aria-label="Ticker symbol" value={tickerInput} onChange={e=>{setTickerInput(e.target.value.toUpperCase());setTickerError('')}} placeholder="Enter ticker · AAPL" autoCapitalize="characters" style={{width:'100%',background:C.inputBg,border:`1px solid ${tickerError?C.red:C.border}`,color:C.text,padding:'10px 11px',borderRadius:7,fontSize:12,fontWeight:700}} />
+            <button type="submit" disabled={detailLoading||!tickerInput.trim()} style={{border:'none',background:C.green,color:'#1c1916',padding:'0 13px',borderRadius:7,fontSize:10,fontWeight:800,cursor:'pointer',opacity:(detailLoading||!tickerInput.trim())?.55:1}}>ANALYZE →</button>
+          </form>
+          {tickerError&&<div style={{fontSize:9,color:C.red,marginTop:6,lineHeight:1.4}}>{tickerError}</div>}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'18px 0 10px'}}><div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Options Edge Top 10</strong><div style={{fontSize:9,color:C.dim,marginTop:3}}>Found by the live scanner · ranked by combined edge</div></div><span style={{fontSize:9,color:C.dim}}>{topStocks.length} FOUND</span></div>
+          <input aria-label="Filter top stocks" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter this list…" style={{width:'100%',background:C.inputBg,border:`1px solid ${C.border}`,color:C.text,padding:'9px 10px',borderRadius:7,fontSize:11}} />
+          <div style={{display:'flex',gap:6,marginTop:9}}>{['ALL','READY','WAIT'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f}</button>)}</div>
+        </div>
         <div style={{maxHeight:650,overflowY:'auto'}}>{rows.map(s=><button key={s.symbol} onClick={()=>setSelected(s.symbol)} style={{width:'100%',display:'grid',gridTemplateColumns:'1fr auto',gap:10,textAlign:'left',padding:'14px',border:'none',borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${selected===s.symbol?C.green:'transparent'}`,background:selected===s.symbol?`${C.green}0d`:'transparent',cursor:'pointer',color:C.text}}><div><div style={{display:'flex',alignItems:'center',gap:7}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{s.symbol}</strong><span style={{fontSize:9,color:stageColor(s.stage,C)}}>{s.stage}</span>{watchlist.includes(s.symbol)&&<span style={{color:C.orange,fontSize:10}}>★</span>}</div><div style={{fontSize:10,color:C.dim,margin:'3px 0 7px'}}>{s.name} · {s.sector}</div><div style={{fontSize:10,color:C.subtext}}>{s.setup}</div></div><div style={{textAlign:'right'}}><div style={{fontFamily:"'Inter',sans-serif",fontWeight:800}}>${s.price.toFixed(2)}</div><div style={{fontSize:10,color:s.change>=0?C.green:C.red,marginTop:3}}>{s.change>=0?'+':''}{s.change}%</div><div style={{fontSize:10,color:C.green,marginTop:8}}>{s.score} EDGE</div></div></button>)}</div>
       </section>
       <section>
