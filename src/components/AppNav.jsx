@@ -13,6 +13,7 @@
  *   - PRO         : green badge
  *   - OUT         : red badge, solid fill
  */
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 export default function AppNav({
@@ -27,6 +28,7 @@ export default function AppNav({
   // '/app/trades'. That's been removed — Trades is now a full peer tab,
   // consistent with Dash/Scan/Tools/Admin, on both desktop and mobile.
   const isTradesPage = location.pathname === '/app/trades'
+  const [moreOpen, setMoreOpen] = useState(false)
 
   // ── Shared base ───────────────────────────────────────────────────────────
   const base = {
@@ -240,22 +242,31 @@ export default function AppNav({
       {/* ══════════════════════════════════════════════════════════════════════
           MOBILE BOTTOM TAB BAR
       ══════════════════════════════════════════════════════════════════════ */}
+      {moreOpen&&<div className="oe-more-sheet" style={{
+        position:'fixed',left:12,right:12,bottom:'calc(66px + env(safe-area-inset-bottom, 0px))',zIndex:95,
+        background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:10,boxShadow:'0 -8px 30px rgba(0,0,0,.35)',
+      }}>
+        <div style={{fontSize:11,fontWeight:700,color:C.dim,letterSpacing:1,padding:'5px 8px 9px'}}>MORE</div>
+        <button onClick={()=>{setTab('tools');setMoreOpen(false)}} style={{...base,width:'100%',padding:'12px',borderRadius:8,textAlign:'left',background:tab==='tools'?`${C.green}18`:'transparent',color:tab==='tools'?C.green:C.text,fontSize:14}}>⚙ Tools & settings</button>
+        {isAdmin&&<button onClick={()=>{setTab('admin');setMoreOpen(false)}} style={{...base,width:'100%',padding:'12px',borderRadius:8,textAlign:'left',background:tab==='admin'?`${C.green}18`:'transparent',color:tab==='admin'?C.green:C.text,fontSize:14}}>★ Admin monitor</button>}
+        <button onClick={()=>setIsDark(p=>!p)} style={{...base,width:'100%',padding:'12px',borderRadius:8,textAlign:'left',background:'transparent',color:C.text,fontSize:14}}>{isDark?'☀ Light mode':'☾ Dark mode'}</button>
+        <button onClick={onSignOut} style={{...base,width:'100%',padding:'12px',borderRadius:8,textAlign:'left',background:`${C.red}12`,color:C.red,fontSize:14}}>Sign out</button>
+      </div>}
       <div className="oe-bot" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90,
         background: C.bgAlt,
         borderTop: `1px solid ${C.border}`,
         boxShadow: '0 -2px 12px rgba(0,0,0,.08)',
       }}>
-        <div style={{ display:'grid', gridTemplateColumns:`repeat(${isAdmin ? 6 : 5},1fr)` }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)' }}>
           {[
             { id:'dash',   icon:'◈', label:'DASH'   },
             { id:'scan',   icon:'⌁', label:'SCAN'   },
             { id:'stocks', icon:'↗', label:'STOCKS' },
             { id:'trades', icon:'≡', label:'TRADES', link:'/app/trades' },
-            { id:'tools',  icon:'⚙', label:'TOOLS'  },
-            ...(isAdmin ? [{ id:'admin', icon:'★', label:'ADMIN' }] : []),
+            { id:'more',   icon:'•••', label:'MORE' },
           ].map(t => {
-            const active = t.id === 'trades' ? isTradesPage : tab === t.id
+            const active = t.id === 'trades' ? isTradesPage : t.id === 'more' ? moreOpen || tab==='tools' || tab==='admin' : tab === t.id
             const col    = active ? C.green : C.dim
 
             if (t.link) return (
@@ -270,7 +281,7 @@ export default function AppNav({
 
             return (
               <button key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => t.id==='more' ? setMoreOpen(open=>!open) : (setMoreOpen(false),setTab(t.id))}
                 style={mobileTab(active)}>
                 <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
                 <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>

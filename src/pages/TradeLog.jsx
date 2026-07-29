@@ -37,6 +37,15 @@ function calcPnl(trade) {
   return side === 'sell' ? (entry - exit)*qty*100 : (exit - entry)*qty*100
 }
 
+function calcR(trade) {
+  const pnl=calcPnl(trade)
+  const entry=parseFloat(trade.entry_price??trade.entry)
+  const stop=parseFloat(trade.stop_price??trade.stop)
+  const qty=parseInt(trade.contracts??1)
+  const plannedRisk=Math.abs(entry-stop)*qty*100
+  return pnl===null||!Number.isFinite(plannedRisk)||plannedRisk<=0?null:pnl/plannedRisk
+}
+
 // A trade only has a real, computable P&L if calcPnl didn't have to bail
 // (missing/zero entry or exit price). Previously, closed-trade stats fell
 // back to `parseFloat(t.pnl ?? 0)` whenever calcPnl returned null — since
@@ -860,6 +869,7 @@ export default function TradeLog(props) {
                   const isClosed  = (trade.status??'').toLowerCase()==='closed' || !!trade.exit_price
                   const isClosing = closingId===trade.id
                   const pnl       = calcPnl(trade)
+                  const rMultiple = calcR(trade)
                   const pnlColor  = pnl===null ? C.dim : pnl>=0 ? C.green : C.red
                   const leftBorder= isClosed
                     ? `3px solid ${pnl!==null && pnl>=0 ? C.green : C.red}`
@@ -948,7 +958,7 @@ export default function TradeLog(props) {
                           fontSize:16, color:pnlColor, letterSpacing:0.5,
                         }}>
                           {pnl!==null
-                            ? `${pnl>=0?'+':'-'}$${Math.abs(pnl).toFixed(0)}`
+                            ? <>{`${pnl>=0?'+':'-'}$${Math.abs(pnl).toFixed(0)}`}<small style={{display:'block',fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:pnlColor,marginTop:2}}>{rMultiple===null?'R unavailable':`${rMultiple>=0?'+':''}${rMultiple.toFixed(2)}R`}</small></>
                             : <span style={{fontSize:12, color:C.dim}}>—</span>
                           }
                         </span>
@@ -976,6 +986,17 @@ export default function TradeLog(props) {
                               opacity:deletingId===trade.id?0.5:1,
                             }}>✕</button>
                         </div>
+                      </div>
+                      <div style={{minWidth:790,padding:'7px 20px 9px 23px',display:'flex',alignItems:'center',gap:8,borderBottom:`1px solid ${C.border}30`,background:i%2===0?'transparent':C.cardAlt}}>
+                        {[
+                          ['LOGGED',true],
+                          ['MONITORED',!!trade.last_verdict_check_at||isClosed],
+                          ['RESOLVED',isClosed],
+                        ].map(([label,complete],step)=><div key={label} style={{display:'flex',alignItems:'center',gap:6,flex:step<2?1:0}}>
+                          <span style={{width:8,height:8,borderRadius:'50%',background:complete?C.green:C.border,flexShrink:0}}/>
+                          <span style={{fontSize:10,fontWeight:700,color:complete?C.green:C.dim,letterSpacing:.5}}>{label}</span>
+                          {step<2&&<span style={{height:1,background:complete?`${C.green}60`:C.border,flex:1}}/>}
+                        </div>)}
                       </div>
 
                       {/* Inline close form */}

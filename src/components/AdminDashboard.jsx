@@ -292,6 +292,21 @@ export default function AdminDashboard({ getToken, theme }) {
       </div>
       {lastUpdated && <div style={{ fontSize: 11, color: C.dim, marginBottom: '1rem' }}>Last updated: {lastUpdated}</div>}
 
+      <div style={{...card,marginTop:8,borderColor:(data?.expiringTrials>0||Object.values(data?.systemHealth||{}).some(value=>!value))?`${C.orange}70`:`${C.green}55`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
+          <div><div style={{fontSize:14,fontWeight:700}}>Action required</div><div style={{fontSize:12,color:C.dim,marginTop:2}}>Exceptions first; healthy systems stay quiet.</div></div>
+          <span style={{fontSize:11,fontWeight:700,color:(data?.expiringTrials>0||Object.values(data?.systemHealth||{}).some(value=>!value))?C.orange:C.green}}>
+            {(data?.expiringTrials||0)+Object.values(data?.systemHealth||{}).filter(value=>!value).length} OPEN
+          </span>
+        </div>
+        {Object.values(data?.systemHealth||{}).every(Boolean)&&!(data?.expiringTrials>0)
+          ? <div style={{fontSize:13,color:C.green,padding:'10px 12px',background:`${C.green}0d`,borderRadius:7}}>No immediate operational or trial-conversion exceptions.</div>
+          : <div style={{display:'grid',gap:7}}>
+              {Object.entries(data?.systemHealth||{}).filter(([,healthy])=>!healthy).map(([service])=><div key={service} style={{fontSize:13,color:C.red}}>● {service} needs attention</div>)}
+              {data?.expiringTrials>0&&<div style={{fontSize:13,color:C.orange}}>● {data.expiringTrials} trial{data.expiringTrials===1?'':'s'} expire within 48 hours</div>}
+            </div>}
+      </div>
+
       <div style={sectionLabel}>Users</div>
       <div style={grid4}>
         <MetricCard C={C} label="Total users" value={data?.totalUsers} sub="all time" />

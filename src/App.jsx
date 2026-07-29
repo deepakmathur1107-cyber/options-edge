@@ -2862,11 +2862,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
-    <div style={{background:C.bg,minHeight:'100vh',fontFamily:"'IBM Plex Mono',monospace",color:C.text,paddingBottom:80,transition:'background .25s, color .25s'}}>
+    <div className="oe-app" style={{background:C.bg,minHeight:'100vh',fontFamily:"'Inter',sans-serif",fontSize:14,lineHeight:1.5,color:C.text,paddingBottom:80,transition:'background .25s, color .25s'}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
         body { font-family: 'Inter', sans-serif; }
         *{box-sizing:border-box}
+        .oe-app button,.oe-app input,.oe-app select,.oe-app textarea{font-family:'Inter',sans-serif}
+        .oe-app button{touch-action:manipulation}
+        .oe-section-title{font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+        .oe-helper{font-size:12px;line-height:1.55}
         .hv{cursor:pointer;transition:opacity .15s}.hv:hover{opacity:.8}
         .si{animation:si .25s ease}@keyframes si{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
         .pulse{animation:pu 1.1s infinite}@keyframes pu{0%,100%{opacity:1}50%{opacity:.35}}
@@ -3015,6 +3019,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
            anymore — each value already carries its own visual context
            (color, badge, units) without needing a column label above it. ── */
         @media(max-width:639px){
+          .oe-app{font-size:14px;line-height:1.55}
+          .oe-app button,.oe-app input,.oe-app select,.oe-app textarea{font-size:12px}
+          .oe-main-content{padding:14px 12px!important;max-width:100%!important}
           .alert-table-header{display:none!important}
           .alert-card-mobile{display:block}
           .alert-row-mobile-only{display:none!important}
@@ -3066,7 +3073,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
       )}
 
       {/* ═══════════════ MAIN CONTENT ════════════════════════════════════════ */}
-      <div style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
+      <div className="oe-main-content" style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
 
         {tab==='stocks' && <StockWorkspace C={C} getToken={getAuthToken} />}
 
@@ -3223,6 +3230,29 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 <div style={{fontSize:12,color:C.dim}}>⏳ Loading market data...</div>
               </div>
             )}
+
+            {/* Decision-first summary: turn the scanner stream into three
+                plain-language actions before exposing the detailed controls. */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 18px',marginBottom:12,boxShadow:C.shadow}}>
+              <div className="oe-section-title" style={{color:C.text,marginBottom:3}}>Top actions now</div>
+              <div className="oe-helper" style={{color:C.dim,marginBottom:12}}>The highest-ranked fresh signals, translated into Take, Watch, or Avoid. “Take” still requires a live-price and personal-risk check.</div>
+              {alertHistory.length===0?(
+                <div style={{padding:'12px',border:`1px dashed ${C.border}`,borderRadius:7,color:C.dim,fontSize:12}}>No fresh scanner decisions yet. Start the auto-scanner or generate the index shortlist below.</div>
+              ):(
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:8}}>
+                  {[...alertHistory].sort((a,b)=>(Number(b.qualityShortlist?.eligible)-Number(a.qualityShortlist?.eligible))||(b.score-a.score)).slice(0,3).map((signal,index)=>{
+                    const action=signal.qualityShortlist?.eligible?'TAKE':signal.score>=70?'WATCH':'AVOID'
+                    const color=action==='TAKE'?C.green:action==='WATCH'?C.orange:C.red
+                    const why=action==='TAKE'?'Passed every Quality gate':signal.qualityShortlist?.exclusions?.[0]||signal.hardBlocks?.[0]||'Does not meet the current quality threshold'
+                    return <div key={`${signal.ticker}-${index}`} style={{background:C.bgDeep,border:`1px solid ${color}45`,borderRadius:8,padding:12}}>
+                      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'center'}}><strong style={{fontSize:16}}>{signal.ticker}</strong><span style={{fontSize:11,fontWeight:800,color}}>{action}</span></div>
+                      <div style={{fontSize:12,color:C.subtext,marginTop:6}}>{signal.tradeType||signal.option_type||'Options setup'} · {signal.score}% edge</div>
+                      <div style={{fontSize:11,color,marginTop:7,lineHeight:1.45}}>{why}</div>
+                    </div>
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* ── Quality-classified SPX/NDX Quick setups ── */}
             <div className="dash-today-signals" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
@@ -4806,7 +4836,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   {/* ═══════════════════════════════════════════════
                       ADMIN-ONLY SECTION
                   ═══════════════════════════════════════════════ */}
-                  {isAdmin&&(<>
+                  {isAdmin&&(<div style={{border:`1px solid ${C.orange}35`,background:`${C.orange}08`,borderRadius:10,padding:12,marginBottom:16}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.orange,letterSpacing:1,marginBottom:10}}>ADMIN INTEGRATIONS</div>
 
                     {/* Feedback Viewer */}
                     <Card C={C} style={{marginBottom:12}}>
@@ -4884,7 +4915,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       </div>
                     </Card>
 
-                  </>)}
+                  </div>)}
 
                   {/* ═══════════════════════════════════════════════
                       ALL USERS
