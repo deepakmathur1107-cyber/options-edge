@@ -3,6 +3,23 @@ const assert = require('node:assert/strict')
 
 const resolver = require('../api/cron/resolve-outcomes')._test
 
+test('resolver mode reserves a small qualified queue', () => {
+  assert.deepEqual(resolver.resolverModeConfig({ qualified: '1' }), {
+    qualifiedMode: true,
+    burndownMode: false,
+    batchLimit: 25,
+    maxTradierCalls: 100,
+  })
+  assert.equal(resolver.resolverModeConfig({ burndown: '1', limit: '75' }).batchLimit, 75)
+})
+
+test('resolver API budget preserves call and rate-limit headroom', () => {
+  assert.equal(resolver.rateBudgetReached({ calls: 99, minAvailable: 76 }, 100), false)
+  assert.equal(resolver.rateBudgetReached({ calls: 100, minAvailable: 100 }, 100), true)
+  assert.equal(resolver.rateBudgetReached({ calls: 10, minAvailable: 75 }, 100), true)
+  assert.equal(resolver.rateBudgetReached({ calls: 10, minAvailable: null }, 100), false)
+})
+
 function row(overrides = {}) {
   return {
     ticker: 'AAPL',
@@ -17,6 +34,16 @@ function row(overrides = {}) {
     ...overrides,
   }
 }
+
+test('missing walk extrema stay null instead of becoming a false zero', async () => {
+  const result = await resolver.resolveOne(row({ last_walked_through: '2026-07-24' }), {}, {
+    now: '2026-07-24T20:00:00.000Z',
+    getOptionTimesalesDetailed: async () => ({ ok: true, bars: [] }),
+    getOptionHistoryDetailed: async () => ({ ok: true, days: [] }),
+  })
+  assert.equal(result._maxOptionHigh, null)
+  assert.equal(result._minOptionLow, null)
+})
 
 test('burndown only runs after a real trading session has closed', () => {
   assert.equal(resolver.shouldRunBurndownNow(new Date('2026-07-26T20:00:00Z')), false)

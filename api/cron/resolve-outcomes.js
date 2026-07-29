@@ -25,6 +25,10 @@ const { buildProfitabilityMetrics } = require('../_lib/profitabilityMetrics')
 
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const MAX_RETRIES = 5   // cap on resolution attempts before dead-lettering a row (spec §5)
+const MIN_TRADIER_HEADROOM = 75
+const QUALIFIED_BATCH_LIMIT = 25
+const QUALIFIED_MAX_CALLS = 100
+const BURNDOWN_MAX_CALLS = 300
 
 // Tradier's /markets/timesales retains 1-min bars for only ~10 calendar days
 // (confirmed against Tradier docs, 2026-07). Any crossing day older than this
@@ -86,6 +90,25 @@ function sb() {
 
 function addPendingResolutionFilters(query) {
   return query.is('outcome', null).is('resolved_at', null)
+}
+
+function resolverModeConfig(query = {}) {
+  const qualifiedMode = query.qualified === '1'
+  const burndownMode = query.burndown === '1'
+  const requestedLimit = parseInt(query.limit, 10)
+  return {
+    qualifiedMode,
+    burndownMode,
+    batchLimit: requestedLimit || (qualifiedMode ? QUALIFIED_BATCH_LIMIT : 50),
+    maxTradierCalls: qualifiedMode ? QUALIFIED_MAX_CALLS : BURNDOWN_MAX_CALLS,
+  }
+}
+
+function rateBudgetReached(rateTracker, maxTradierCalls) {
+  if ((rateTracker.calls || 0) >= maxTradierCalls) return true
+  return rateTracker.minAvailable != null &&
+    Number.isFinite(Number(rateTracker.minAvailable)) &&
+    Number(rateTracker.minAvailable) <= MIN_TRADIER_HEADROOM
 }
 
 async function persistResolverRun(client, run) {
@@ -225,10 +248,12 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   // once set, it caps how far the cursor is allowed to advance THIS RUN.
   let stoppedEarlyAt = null
   let walkFailed = false
-  let maxOptionHigh = Number.isFinite(Number(row.walk_max_option_high))
+  let maxOptionHigh = row.walk_max_option_high != null &&
+    Number.isFinite(Number(row.walk_max_option_high))
     ? Number(row.walk_max_option_high)
     : null
-  let minOptionLow = Number.isFinite(Number(row.walk_min_option_low))
+  let minOptionLow = row.walk_min_option_low != null &&
+    Number.isFinite(Number(row.walk_min_option_low))
     ? Number(row.walk_min_option_low)
     : null
   const recordBars = bars => {
@@ -544,13 +569,19 @@ module.exports = async function handler(req, res) {
   //
   // Scoped to burndownMode so the nightly full-run cron (0 23) is unaffected:
   // it should always run its normal course regardless of backlog size.
-  const burndownMode = req.query.burndown === '1'
-  if (burndownMode && !isManualTrigger && !shouldRunBurndownNow(runStartedAt)) {
+  const {
+    qualifiedMode,
+    burndownMode,
+    batchLimit: BATCH_LIMIT,
+    maxTradierCalls,
+  } = resolverModeConfig(req.query)
+  const priorityMode = qualifiedMode || burndownMode
+  if (priorityMode && !isManualTrigger && !shouldRunBurndownNow(runStartedAt)) {
     await persistResolverRun(client, {
       started_at: runStartedAt.toISOString(),
       finished_at: new Date().toISOString(),
-      mode: 'burndown',
-      batch_limit: parseInt(req.query.limit, 10) || 100,
+      mode: qualifiedMode ? 'qualified' : 'burndown',
+      batch_limit: BATCH_LIMIT,
       rows_fetched: 0,
       rows_processed: 0,
       resolved: 0,
@@ -565,7 +596,8 @@ module.exports = async function handler(req, res) {
       deployment_sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
     })
     return res.status(200).json({
-      burndown: true,
+      burndown: burndownMode,
+      qualified: qualifiedMode,
       skipped: true,
       reason: 'market_closed_no_new_outcome_data',
       checked: 0,
@@ -600,7 +632,6 @@ module.exports = async function handler(req, res) {
   const MAX_MS = 280_000
   const rateTracker = newRateTracker()
 
-  const BATCH_LIMIT = parseInt(req.query.limit, 10) || 50
   // Per explicit decision (2026-06-29): only walk the PRIMARY row of each
   // signal lifecycle — the same real contract can have 30+ rows from
   // re-qualifying every 15-60 min throughout the day (confirmed live: one
@@ -648,7 +679,14 @@ module.exports = async function handler(req, res) {
   // left to the nightly full-run cron (0 23), which has no such filter. This
   // is a burndown-only optimization; the nightly cron still covers everything.
   if (burndownMode) {
-    query = query.in('timeframe', ['Quick (5–14 DTE)', 'Swing (21–45 DTE)'])
+    query = query
+      .in('timeframe', ['Quick (5–14 DTE)', 'Swing (21–45 DTE)'])
+      .or('qualification_source.neq.LIVE_AT_SIGNAL,qualification_source.is.null,strategy_qualified.neq.true,strategy_qualified.is.null')
+  } else if (qualifiedMode) {
+    query = query
+      .eq('qualification_source', 'LIVE_AT_SIGNAL')
+      .eq('strategy_qualified', true)
+      .eq('market_session_status', 'LIVE_REGULAR_SESSION')
   }
 
   const { data: rows, error: fetchErr } = await query
@@ -677,11 +715,18 @@ module.exports = async function handler(req, res) {
   const results = []
   let circuitBroken = false
   let timedOut = false
+  let rateBudgetHit = false
 
   for (const row of rows) {
     if (Date.now() - startedAt > MAX_MS) {
       console.warn('[resolve-outcomes] time budget reached, stopping early this run')
       timedOut = true
+      break
+    }
+    if (rateBudgetReached(rateTracker, maxTradierCalls)) {
+      console.warn(`[resolve-outcomes] API budget reached: calls=${rateTracker.calls}, ` +
+        `remaining=${rateTracker.minAvailable}, reserve=${MIN_TRADIER_HEADROOM}`)
+      rateBudgetHit = true
       break
     }
     rowsProcessed++
@@ -813,7 +858,7 @@ module.exports = async function handler(req, res) {
   await persistResolverRun(client, {
     started_at: runStartedAt.toISOString(),
     finished_at: new Date().toISOString(),
-    mode: burndownMode ? 'burndown' : (isManualTrigger ? 'manual' : 'nightly'),
+    mode: qualifiedMode ? 'qualified' : (burndownMode ? 'burndown' : (isManualTrigger ? 'manual' : 'nightly')),
     batch_limit: BATCH_LIMIT,
     rows_fetched: rows.length,
     rows_processed: rowsProcessed,
@@ -833,6 +878,7 @@ module.exports = async function handler(req, res) {
     checked: rowsProcessed,
     resolved, stillOpen, dataUnavailable, errors,
     circuitBroken, // true if this run stopped early due to a Tradier failure-rate spike, not the normal batch/time limits
+    rateBudgetHit,
     durationMs,
     rateHealth: {
       tradierCalls: rateTracker.calls,
@@ -854,4 +900,6 @@ module.exports._test = {
   scanTimeInNewYork,
   shouldRunBurndownNow,
   persistResolverRun,
+  rateBudgetReached,
+  resolverModeConfig,
 }

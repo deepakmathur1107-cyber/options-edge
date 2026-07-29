@@ -33,8 +33,12 @@
       "schedule": "0 23 * * *"
     },
     {
-      "path": "/api/cron/resolve-outcomes?burndown=1&limit=100",
+      "path": "/api/cron/resolve-outcomes?burndown=1&limit=75",
       "schedule": "*/15 0-4 * * 2-6"
+    },
+    {
+      "path": "/api/cron/resolve-outcomes?qualified=1&limit=25",
+      "schedule": "2,7,12,17,22,27,32,37,42,47,52,57 0-4 * * 2-6"
     },
     {
       "path": "/api/cron/verdict-check?dryRun=false",

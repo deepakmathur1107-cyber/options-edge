@@ -36,7 +36,7 @@ function summarizeShadowStrategies(rows) {
       if (!summaries[strategy]) summaries[strategy] = { assigned: 0, resolved: 0, rSum: 0, wins: 0 }
       const bucket = summaries[strategy]
       bucket.assigned++
-      if (Number.isFinite(Number(row.realized_r_multiple))) {
+      if (row.realized_r_multiple != null && Number.isFinite(Number(row.realized_r_multiple))) {
         bucket.resolved++
         bucket.rSum += Number(row.realized_r_multiple)
         if (row.outcome === 'WIN') bucket.wins++
@@ -68,7 +68,8 @@ module.exports = async function handler(req, res) {
   try {
     const rows = await fetchForwardRows()
     const promotion = evaluatePromotion(rows)
-    const measured = rows.filter(row => Number.isFinite(Number(row.realized_r_multiple)))
+    const measured = rows.filter(row =>
+      row.realized_r_multiple != null && Number.isFinite(Number(row.realized_r_multiple)))
     const averageHoldingMinutes = measured.length
       ? measured.reduce((sum, row) => sum + Number(row.holding_minutes || 0), 0) / measured.length
       : null
