@@ -69,6 +69,61 @@ function Bar({ label, value, C }) {
   </div>
 }
 
+function PriceChart({ bars, symbol, C, loading }) {
+  const model=useMemo(()=>{
+    const clean=asArray(bars).map(bar=>({
+      date:bar.date,
+      close:Number(bar.close),
+    })).filter(point=>point.date&&Number.isFinite(point.close)&&point.close>0)
+    if(clean.length<2) return null
+    const width=900,height=300,pad={top:22,right:18,bottom:30,left:54}
+    const closes=clean.map(point=>point.close)
+    const min=Math.min(...closes),max=Math.max(...closes),span=Math.max(.01,max-min)
+    const x=index=>pad.left+(index/(clean.length-1))*(width-pad.left-pad.right)
+    const y=value=>pad.top+((max-value)/span)*(height-pad.top-pad.bottom)
+    const line=clean.map((point,index)=>`${index?'L':'M'}${x(index).toFixed(1)},${y(point.close).toFixed(1)}`).join(' ')
+    const averagePath=period=>{
+      const points=[]
+      let sum=0
+      clean.forEach((point,index)=>{
+        sum+=point.close
+        if(index>=period) sum-=clean[index-period].close
+        if(index>=period-1) points.push({index,value:sum/period})
+      })
+      return points.map((point,index)=>`${index?'L':'M'}${x(point.index).toFixed(1)},${y(point.value).toFixed(1)}`).join(' ')
+    }
+    const first=clean[0],last=clean[clean.length-1]
+    const changePct=(last.close/first.close-1)*100
+    const ticks=[max,max-span*.25,max-span*.5,max-span*.75,min]
+    const dateTicks=[0,Math.floor((clean.length-1)*.25),Math.floor((clean.length-1)*.5),Math.floor((clean.length-1)*.75),clean.length-1]
+    return {width,height,pad,clean,line,sma50:averagePath(50),sma200:averagePath(200),min,max,last,changePct,ticks,dateTicks,x,y}
+  },[bars])
+  if(!model) return <div className="stock-chart-empty" style={{height:260,display:'grid',placeItems:'center',color:C.dim,fontSize:11,border:`1px dashed ${C.border}`,borderRadius:9}}>{loading?'LOADING 2-YEAR DAILY HISTORY…':'DAILY HISTORY IS NOT AVAILABLE'}</div>
+  const positive=model.changePct>=0
+  return <div>
+    <div className="stock-chart-head" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:12,flexWrap:'wrap',marginBottom:12}}>
+      <div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{symbol} price history</strong><div style={{fontSize:9,color:C.dim,marginTop:4}}>1 DAY BARS · 2 YEAR DURATION · adjusted market history</div></div>
+      <div style={{textAlign:'right'}}><div style={{fontSize:20,fontWeight:800,color:positive?C.green:C.red}}>{positive?'+':''}{model.changePct.toFixed(1)}%</div><div style={{fontSize:9,color:C.dim}}>2-YEAR PRICE CHANGE</div></div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:7,marginBottom:10}}>
+      <Metric label="LATEST CLOSE" value={`$${model.last.close.toFixed(2)}`} C={C}/>
+      <Metric label="2Y HIGH" value={`$${model.max.toFixed(2)}`} color={C.green} C={C}/>
+      <Metric label="2Y LOW" value={`$${model.min.toFixed(2)}`} color={C.orange} C={C}/>
+    </div>
+    <div className="stock-chart-scroll" style={{width:'100%',overflow:'hidden',border:`1px solid ${C.border}`,borderRadius:9,background:`linear-gradient(180deg,${C.green}08,transparent)`}}>
+      <svg role="img" aria-label={`${symbol} daily closing price chart for the last two years`} viewBox={`0 0 ${model.width} ${model.height}`} style={{display:'block',width:'100%',height:'auto',minHeight:220}}>
+        {model.ticks.map((tick,index)=><g key={tick}><line x1={model.pad.left} x2={model.width-model.pad.right} y1={model.y(tick)} y2={model.y(tick)} stroke={C.border} strokeWidth="1"/><text x={model.pad.left-8} y={model.y(tick)+4} textAnchor="end" fontSize="10" fill={C.dim}>${tick.toFixed(0)}</text></g>)}
+        {model.dateTicks.map(index=><text key={index} x={model.x(index)} y={model.height-9} textAnchor={index===0?'start':index===model.clean.length-1?'end':'middle'} fontSize="10" fill={C.dim}>{new Date(`${model.clean[index].date}T12:00:00`).toLocaleDateString([], {month:'short',year:'2-digit'})}</text>)}
+        <path d={model.line} fill="none" stroke={positive?C.green:C.red} strokeWidth="2.5" vectorEffect="non-scaling-stroke"/>
+        {model.sma50&&<path d={model.sma50} fill="none" stroke={C.blue} strokeWidth="1.5" opacity=".9" vectorEffect="non-scaling-stroke"/>}
+        {model.sma200&&<path d={model.sma200} fill="none" stroke={C.orange} strokeWidth="1.5" opacity=".9" vectorEffect="non-scaling-stroke"/>}
+        <circle cx={model.x(model.clean.length-1)} cy={model.y(model.last.close)} r="4" fill={positive?C.green:C.red}/>
+      </svg>
+    </div>
+    <div style={{display:'flex',gap:14,flexWrap:'wrap',marginTop:9,fontSize:9,color:C.dim}}><span><b style={{color:positive?C.green:C.red}}>━</b> DAILY CLOSE</span><span><b style={{color:C.blue}}>━</b> 50-DAY AVG</span><span><b style={{color:C.orange}}>━</b> 200-DAY AVG</span></div>
+  </div>
+}
+
 export default function StockWorkspace({ C, getToken }) {
   const [selected, setSelected] = useState('AMZN')
   const [filter, setFilter] = useState('ALL')
@@ -78,6 +133,7 @@ export default function StockWorkspace({ C, getToken }) {
   const [capital, setCapital] = useState(10000)
   const [quotes, setQuotes] = useState({})
   const [technicals, setTechnicals] = useState({})
+  const [priceHistory, setPriceHistory] = useState({})
   const [fundamentals, setFundamentals] = useState({})
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -147,7 +203,7 @@ export default function StockWorkspace({ C, getToken }) {
       setDetailLoading(true)
       try {
         const headers=await authHeaders(getToken)
-        const end=new Date(), start=new Date(Date.now()-120*86400000)
+        const end=new Date(), start=new Date(Date.now()-730*86400000)
         const historyPath=`/markets/history?symbol=${selected}&interval=daily&start=${fmtDate(start)}&end=${fmtDate(end)}`
         const [historyRes,fundRes]=await Promise.all([
           fetch(`/api/tradier?path=${encodeURIComponent(historyPath)}`,{headers}),
@@ -157,7 +213,9 @@ export default function StockWorkspace({ C, getToken }) {
         const fund=await fundRes.json()
         if(!historyRes.ok) throw new Error(history.error||'Price history unavailable')
         if(!cancelled) {
-          setTechnicals(p=>({...p,[selected]:analyzeBars(asArray(history?.history?.day))}))
+          const dailyBars=asArray(history?.history?.day)
+          setPriceHistory(p=>({...p,[selected]:dailyBars}))
+          setTechnicals(p=>({...p,[selected]:analyzeBars(dailyBars)}))
           if(fundRes.ok&&fund?.available) setFundamentals(p=>({...p,[selected]:fund}))
         }
       } catch(e) { if(!cancelled) setDataError(e.message) }
@@ -242,7 +300,7 @@ export default function StockWorkspace({ C, getToken }) {
   return <div className="si stock-workspace">
     <style>{`
       .stock-hero{display:grid;grid-template-columns:1.5fr .8fr;gap:16px}.stock-body{display:grid;grid-template-columns:minmax(310px,.8fr) minmax(0,1.7fr);gap:16px;align-items:start}.stock-detail-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.stock-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.stock-workspace{margin:0 -12px}}
+      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.stock-workspace{margin:0 -12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}}
     `}</style>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:14,marginBottom:18,flexWrap:'wrap'}}>
       <div><div style={{fontSize:10,color:C.green,letterSpacing:2,marginBottom:8}}>STOCK INTELLIGENCE</div><h1 style={{fontFamily:"'Inter',sans-serif",fontSize:'clamp(26px,3vw,38px)',lineHeight:1.05,margin:0,color:C.text}}>Find quality. Wait for price.</h1><p style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,lineHeight:1.6,margin:'9px 0 0',maxWidth:680}}>Research strong companies, understand the setup, then rehearse a rules-based entry and exit with paper money.</p></div>
@@ -279,6 +337,9 @@ export default function StockWorkspace({ C, getToken }) {
           <div style={{display:'flex',justifyContent:'space-between',gap:14,flexWrap:'wrap',alignItems:'flex-start'}}><div><div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}><h2 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0}}>{stock.symbol}</h2><span style={{color:C.subtext,fontSize:12}}>{stock.name}</span><span style={{fontSize:9,color:stageColor(stock.stage,C),border:`1px solid ${stageColor(stock.stage,C)}55`,padding:'3px 7px',borderRadius:12}}>{detailLoading?'ANALYZING…':stock.stage==='READY'?'ENTRY ZONE ACTIVE':'WAIT FOR TRIGGER'}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,marginTop:7}}>${stock.price.toFixed(2)} <span style={{fontSize:12,color:stock.change>=0?C.green:C.red}}>{stock.change>=0?'+':''}{stock.change.toFixed(2)}% today</span></div></div><div style={{display:'flex',gap:7}}><button onClick={()=>toggleWatch(stock.symbol)} style={{background:'transparent',border:`1px solid ${C.border}`,color:watchlist.includes(stock.symbol)?C.orange:C.subtext,borderRadius:7,padding:'9px 11px',fontSize:10,cursor:'pointer'}}>{watchlist.includes(stock.symbol)?'★ WATCHING':'☆ WATCHLIST'}</button><button onClick={togglePaper} disabled={loading||detailLoading} style={{background:tracked?`${C.red}18`:C.green,border:`1px solid ${tracked?C.red:C.green}`,color:tracked?C.red:'#1c1916',borderRadius:7,padding:'9px 13px',fontSize:10,fontWeight:800,cursor:'pointer',opacity:(loading||detailLoading)?.6:1}}>{tracked?'STOP PAPER TRADE':'START PAPER TRADE'}</button></div></div>
           {tradeMessage&&<div style={{marginTop:12,padding:'9px 11px',borderRadius:6,border:`1px solid ${tradeMessage.includes('saved')?C.green:C.border}`,color:tradeMessage.includes('saved')?C.green:C.subtext,fontSize:10}}>{tradeMessage}</div>}
           <div className="stock-metrics" style={{marginTop:16}}><Metric label="EDGE SCORE" value={`${stock.score} / 100`} color={C.green} C={C}/><Metric label="SETUP" value={stock.setup} color={C.blue} C={C}/><Metric label="TREND" value={stock.trend} C={C}/><Metric label="REWARD / RISK" value={stock.rr} color={C.green} C={C}/></div>
+        </div>
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:'clamp(12px,2vw,18px)',boxShadow:C.shadow,marginBottom:14}}>
+          <PriceChart bars={priceHistory[selected]} symbol={stock.symbol} C={C} loading={detailLoading}/>
         </div>
         <div className="stock-detail-grid">
           <div>
