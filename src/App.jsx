@@ -3030,6 +3030,23 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .alert-card-mobile{display:none}
         }
 
+        /* Audited desktop table geometry. Fixed-label columns may not shrink
+           below their text width; between phone and full desktop sizes the
+           self-labeled card is clearer than forcing eight columns to fit. */
+        .alert-table-header{overflow-x:auto;scrollbar-width:thin}
+        .alert-table-header>[data-layout-cell]{white-space:nowrap;flex-shrink:0}
+        .alert-table-header .alert-header-symbol{width:76px!important}
+        .alert-table-header .alert-header-contract{flex:1 1 180px!important;min-width:180px}
+        .alert-table-header .alert-header-timeframe{width:112px!important}
+        .alert-table-header .alert-header-dte{width:42px!important}
+        .alert-table-header .alert-header-conviction{width:120px!important}
+        .alert-table-header .alert-header-grade{width:66px!important}
+        .alert-table-header .alert-header-mid{width:54px!important}
+        @media(min-width:640px) and (max-width:899px){
+          .alert-table-header,.alert-row-mobile-only{display:none!important}
+          .alert-card-mobile{display:block!important}
+        }
+
         /* Shared customer-page design system, piloted on Stocks. */
         .oe-main-content{width:100%;max-width:min(96vw,1680px)!important;padding:24px clamp(16px,2vw,32px)!important}
         .oe-page{font-family:'Inter',sans-serif;min-width:0}
@@ -4024,14 +4041,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   {/* Table header — hidden on mobile, where rows become
                       self-labeled cards instead of table columns (no header
                       row needed when each value already has visual context). */}
-                  <div className="alert-table-header" style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:78,textAlign:'center'}}>TIMEFRAME</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28}}>DTE</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:90}}>CONVICTION</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28,textAlign:'center'}}>GRADE</span>
-                    <span style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
+                  <div className="alert-table-header" data-layout-audit="quality-shortlist-header" style={{display:'flex',alignItems:'center',gap:8,padding:'4px 10px',marginBottom:3}}>
+                    <span className="alert-header-symbol" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:52}}>SYMBOL</span>
+                    <span className="alert-header-contract" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,flex:1}}>CONTRACT</span>
+                    <span className="alert-header-timeframe" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:78,textAlign:'center'}}>TIMEFRAME</span>
+                    <span className="alert-header-dte" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28}}>DTE</span>
+                    <span className="alert-header-conviction" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:90}}>CONVICTION</span>
+                    <span className="alert-header-grade" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:28,textAlign:'center'}}>GRADE</span>
+                    <span className="alert-header-mid" data-layout-cell style={{fontSize:11,color:C.dim,letterSpacing:1.5,fontWeight:700,width:40,textAlign:'right'}}>MID</span>
                     <span style={{width:14}}/>
                   </div>
                   {/* stalenessOf — turns a row's real scannedAtMs into a
