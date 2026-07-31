@@ -464,7 +464,7 @@ export default function TradeLog(props) {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{
+    <div className="oe-page trade-log-page" style={{
       background:C.bg, minHeight:'100vh',
       fontFamily:"'Inter', 'IBM Plex Mono', sans-serif",
       color:C.text, paddingBottom:80,
@@ -484,6 +484,10 @@ export default function TradeLog(props) {
         .tl-row:hover{background:${C.cardAlt}!important;transition:background .1s}
         .tl-btn:hover{opacity:.8;transition:opacity .15s}
         .tl-btn{cursor:pointer;transition:all .15s}
+        .trade-log-page [style*="font-size: 11px"],.trade-log-page [style*="fontSize:11"]{font-size:12px!important}
+        .trade-log-page [style*="font-size: 12px"],.trade-log-page [style*="fontSize:12"]{font-size:13px!important}
+        .trade-log-page button,.trade-log-page input,.trade-log-page select,.trade-log-page textarea{min-height:38px}
+        .trade-log-shell{width:100%;max-width:min(96vw,1680px)!important;padding:28px clamp(16px,2vw,32px)!important}
         @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
         /* ── Stat tile mobile layout — real phone screenshot (2026-06-29)
             showed these as tall, mostly-empty cards: a single number sitting
@@ -513,7 +517,7 @@ export default function TradeLog(props) {
         setTab={(id) => navigate(`/app?tab=${id}`)}
       />
 
-      <div style={{maxWidth:'min(92vw,1440px)', margin:'0 auto', padding:'28px 24px'}}>
+      <div className="trade-log-shell" style={{maxWidth:'min(96vw,1680px)', margin:'0 auto', padding:'28px 24px'}}>
 
         {/* ── Page header ── */}
         <div style={{marginBottom:28}}>
@@ -521,7 +525,7 @@ export default function TradeLog(props) {
             fontFamily:"'Fraunces',serif",
             fontSize:36, letterSpacing:0.3, color:C.green,
             margin:0, lineHeight:1,
-          }}>TRADE LOG</h1>
+          }}>PAPER TRADE JOURNAL</h1>
           <p style={{
             fontSize:13, color:C.dim, marginTop:6,
             fontFamily:"'Inter', sans-serif",
@@ -833,7 +837,11 @@ export default function TradeLog(props) {
                   {filter==='open' ? 'No open positions' : filter==='closed' ? 'No closed trades yet' : 'No trades logged yet'}
                 </div>
                 <div style={{fontSize:13, color:C.dim, fontFamily:"'Inter',sans-serif"}}>
-                  {filter==='open' && 'Click + LOG TRADE above to add your first position'}
+                  {filter==='open'
+                    ? 'Start a paper trade from Stocks or Scanner, or log one manually.'
+                    : filter==='closed'
+                      ? 'Closed positions will appear here with their realized result.'
+                      : 'Use + LOG TRADE to create your first practice position.'}
                 </div>
               </div>
             )}

@@ -3029,6 +3029,25 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         @media(min-width:640px){
           .alert-card-mobile{display:none}
         }
+
+        /* Shared customer-page design system, piloted on Stocks. */
+        .oe-main-content{width:100%;max-width:min(96vw,1680px)!important;padding:24px clamp(16px,2vw,32px)!important}
+        .oe-page{font-family:'Inter',sans-serif;min-width:0}
+        .oe-page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin:2px 0 24px;flex-wrap:wrap}
+        .oe-page-eyebrow{font-size:11px;font-weight:700;letter-spacing:1.4px;color:${C.green};text-transform:uppercase;margin-bottom:7px}
+        .oe-page-title{font-family:'Inter',sans-serif;font-size:clamp(27px,3vw,38px);line-height:1.1;color:${C.text};margin:0;font-weight:750;letter-spacing:-.5px}
+        .oe-page-subtitle{font-size:14px;line-height:1.6;color:${C.subtext};margin:8px 0 0;max-width:720px}
+        .oe-page [style*="font-size: 8px"],.oe-page [style*="font-size:8px"]{font-size:11px!important}
+        .oe-page [style*="font-size: 9px"],.oe-page [style*="font-size:9px"]{font-size:11px!important;line-height:1.45}
+        .oe-page [style*="font-size: 10px"],.oe-page [style*="font-size:10px"]{font-size:12px!important;line-height:1.5}
+        .oe-page [style*="font-size: 11px"],.oe-page [style*="font-size:11px"]{font-size:13px!important;line-height:1.55}
+        .oe-page [style*="font-size: 12px"],.oe-page [style*="font-size:12px"]{font-size:14px!important;line-height:1.55}
+        .oe-page button,.oe-page input,.oe-page select,.oe-page textarea{min-height:38px}
+        .oe-page button:focus-visible,.oe-page input:focus-visible,.oe-page select:focus-visible,.oe-page textarea:focus-visible{outline:2px solid ${C.blue}!important;outline-offset:2px}
+        .scan-page .alert-table-header{position:sticky;top:0;z-index:2;background:${C.bgDeep}}
+        .tools-page>div{max-width:1180px;margin:0 auto;width:100%}
+        @media(max-width:900px){.oe-main-content{max-width:100%!important}.oe-page-head{align-items:flex-start}.oe-page-title{font-size:28px}}
+        @media(max-width:639px){.oe-page-head{padding:0 2px;margin-bottom:18px}.oe-page-subtitle{font-size:13px}.oe-page [style*="letter-spacing: 1.5px"]{letter-spacing:.7px!important}}
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn}/>
@@ -3079,7 +3098,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
         {/* ── DASHBOARD TAB ──────────────────────────────────────────────── */}
         {tab==='dash' && (
-          <div className="si">
+          <div className="si oe-page dash-page">
+          <div className="oe-page-head">
+            <div><div className="oe-page-eyebrow">Decision dashboard</div><h1 className="oe-page-title">What deserves attention now?</h1><p className="oe-page-subtitle">Start with actionable setups, then use market conditions and measured outcomes as supporting context.</p></div>
+          </div>
           {(()=>{
             // Case mismatch fix: briefData.bias is Title Case ("Bullish") per
             // the Claude prompt in api/brief.js; marketConviction.direction is
@@ -3352,7 +3374,10 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
         {/* ── SCAN TAB ────────────────────────────────────────────────────── */}
         {tab==='scan' && (
-          <div className="si">
+          <div className="si oe-page scan-page">
+            <div className="oe-page-head">
+              <div><div className="oe-page-eyebrow">Options scanner</div><h1 className="oe-page-title">Find the strongest setups first.</h1><p className="oe-page-subtitle">Quality Shortlist results pass every selection rule. Expand a setup only when you need contract, liquidity, and risk details.</p></div>
+            </div>
             {usageLimitHit && (
               <div style={{background:C.bgDeep,border:`1px solid ${C.orange}50`,borderRadius:6,padding:'10px 13px',marginBottom:11,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
                 <div>
@@ -4795,10 +4820,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           shows TOOLS as the active tab, same as Dash/Scan/Admin never
           duplicate their own name as an in-page header. */}
       {tab==='tools'&&(
-        <div style={{padding:'20px 24px',maxWidth:'min(92vw,1440px)',margin:'0 auto'}}>
+        <div className="oe-page tools-page" style={{padding:'0',maxWidth:'none',margin:'0 auto'}}>
           <div style={{
             display:'flex',flexDirection:'column',
           }}>
+
+            <div className="oe-page-head">
+              <div><div className="oe-page-eyebrow">Settings</div><h1 className="oe-page-title">Make Options Edge work your way.</h1><p className="oe-page-subtitle">Manage alerts, risk preferences, watch symbols, display options, and your account.</p></div>
+            </div>
 
             {/* Sub-tabs */}
             {/* Collapsed from 5 to 3 — Checklist/Strategy/Exit Rules merged into
@@ -5414,7 +5443,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
         {/* ── ADMIN TAB ────────────────────────────────────────────────── */}
         {tab==='admin' && isAdmin && (
-          <div className="si" style={{maxWidth:'min(92vw,1440px)',margin:'0 auto',padding:'0 16px'}}>
+          <div className="si oe-page admin-page" style={{maxWidth:'min(96vw,1560px)',margin:'0 auto',padding:'0'}}>
 
             {/* Full admin dashboard — KPIs, signups, feature usage, health.
                 Manages its own data fetch/loading/error state internally. */}
