@@ -285,7 +285,13 @@ async function getFundamentals(ticker) {
 
   // 1. Redis (fastest — sub-ms)
   const cached = await redisGet(redisKey)
-  if (cached) return cached
+  if (cached) {
+    if (cached.health_metrics_updated_at) return cached
+    const metrics=await fetchFinancialMetricsFromFinnhub(ticker)
+    const combined={...cached,...metrics,market_cap:metrics.market_cap??cached.market_cap,pe_ratio:metrics.pe_ratio??cached.pe_ratio}
+    await redisSet(redisKey,combined,REDIS_TTL_SECS)
+    return combined
+  }
 
   // 2. Supabase (fast — ~50ms, persisted across deployments)
   const stored = await supabaseGet(ticker)
