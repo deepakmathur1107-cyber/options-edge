@@ -47,6 +47,14 @@
     {
       "path": "/api/cron/resolve-trade-outcomes",
       "schedule": "30 23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/resolve-stock-ratings",
+      "schedule": "40 23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/capture-stock-ratings",
+      "schedule": "10 23 * * 1-5"
     }
   ],
   "functions": {

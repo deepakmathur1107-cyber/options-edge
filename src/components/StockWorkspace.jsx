@@ -128,6 +128,7 @@ export default function StockWorkspace({ C, getToken }) {
   const [topStocks, setTopStocks] = useState(()=>DEFAULT_TOP_10.map(symbol=>makeSeed(symbol)))
   const [topSource, setTopSource] = useState({kind:'fallback',label:'Curated fallback · live scanner results unavailable'})
   const [batchLoading, setBatchLoading] = useState(false)
+  const [ratingStats, setRatingStats] = useState(null)
   const [manualStocks, setManualStocks] = useState([])
   const [tickerInput, setTickerInput] = useState('')
   const [tickerError, setTickerError] = useState('')
@@ -302,6 +303,17 @@ export default function StockWorkspace({ C, getToken }) {
     if(spy<0&&qqq<0) return {label:'RISK OFF',score,color:C.red,detail:`SPY ${spy.toFixed(2)}% · QQQ ${qqq.toFixed(2)}%`}
     return {label:'MIXED',score,color:C.orange,detail:`SPY ${spy>=0?'+':''}${spy.toFixed(2)}% · QQQ ${qqq>=0?'+':''}${qqq.toFixed(2)}%`}
   },[quotes,C])
+  const loadRatingStats=useCallback(async()=>{
+    try {
+      const headers=await authHeaders(getToken)
+      const response=await fetch('/api/stock-ratings',{headers})
+      const data=await response.json()
+      if(response.ok) setRatingStats(data)
+    } catch {}
+  },[getToken])
+
+  useEffect(()=>{ loadRatingStats() },[loadRatingStats])
+
   const fund=fundamentals[selected]
   const riskPerShare = stock.plan?Math.max(.01,stock.plan.entryLow-stock.plan.stop):null
   const shares = riskPerShare?Math.max(1,Math.floor((Number(capital)||0)*.01/riskPerShare)):0
@@ -358,8 +370,8 @@ export default function StockWorkspace({ C, getToken }) {
 
   return <div className="si stock-workspace">
     <style>{`
-      .stock-hero{display:grid;grid-template-columns:1.5fr .8fr;gap:16px}.stock-body{display:grid;grid-template-columns:minmax(310px,.8fr) minmax(0,1.7fr);gap:16px;align-items:start}.stock-detail-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.stock-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.stock-workspace{margin:0 -12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}}
+      .stock-hero{display:grid;grid-template-columns:1.5fr .8fr;gap:16px}.stock-body{display:grid;grid-template-columns:minmax(310px,.8fr) minmax(0,1.7fr);gap:16px;align-items:start}.stock-detail-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.stock-metrics,.stock-track-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.stock-workspace{margin:0 -12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}}
     `}</style>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:14,marginBottom:18,flexWrap:'wrap'}}>
       <div><div style={{fontSize:10,color:C.green,letterSpacing:2,marginBottom:8}}>STOCK INTELLIGENCE</div><h1 style={{fontFamily:"'Inter',sans-serif",fontSize:'clamp(26px,3vw,38px)',lineHeight:1.05,margin:0,color:C.text}}>Find quality. Wait for price.</h1><p style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,lineHeight:1.6,margin:'9px 0 0',maxWidth:680}}>Research strong companies, understand the setup, then rehearse a rules-based entry and exit with paper money.</p></div>
@@ -375,6 +387,11 @@ export default function StockWorkspace({ C, getToken }) {
         <button onClick={()=>rows[0]&&setSelected(rows[0].symbol)} style={{marginTop:17,border:'none',background:C.green,color:'#1c1916',padding:'10px 16px',borderRadius:7,fontWeight:800,fontSize:11,cursor:'pointer'}}>OPEN LIVE TRADE PLAN →</button>
       </div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow}}><div style={{fontSize:10,color:C.dim,letterSpacing:1.3,marginBottom:13}}>MARKET CONDITIONS · LIVE INDEX PROXY</div><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}><div><div style={{fontSize:18,fontWeight:800,color:marketState.color}}>{marketState.label}</div><div style={{fontSize:10,color:C.dim,marginTop:3}}>{marketState.detail}</div></div><div style={{width:44,height:44,borderRadius:'50%',display:'grid',placeItems:'center',border:`4px solid ${marketState.color}`,fontWeight:800,color:C.text}}>{marketState.score??'—'}</div></div><div style={{fontSize:11,color:C.subtext,lineHeight:1.55}}>Regime is derived from current SPY and QQQ percentage changes. It is context, not an entry signal.</div></div>
+    </div>
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:16,boxShadow:C.shadow,marginBottom:16}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'center'}}><div><div style={{fontSize:10,color:C.green,letterSpacing:1.3}}>STOCK RATING TRACK RECORD</div><div style={{fontSize:11,color:C.subtext,marginTop:5}}>Forward tracking started with the current rating model. No historical results are reconstructed.</div></div><div style={{fontSize:9,color:C.dim}}>{ratingStats?.totalRatings||0} RATINGS · {ratingStats?.buySetups||0} BUY SETUPS</div></div>
+      <div className="stock-track-grid" style={{marginTop:13}}>{[5,10,20,60].map(days=>{const metric=ratingStats?.horizons?.[days];return <Metric key={days} label={`${days}-SESSION RESULT`} value={metric?.sampleSize?`${metric.winRate}% wins · ${metric.averageReturn>=0?'+':''}${metric.averageReturn}%`:'Collecting data'} color={metric?.sampleSize?C.blue:C.dim} C={C}/>})}</div>
+      <div style={{fontSize:9,color:C.dim,lineHeight:1.5,marginTop:10}}>One immutable rating per ticker/day/model · measured at daily closes · compared with SPY · sample size shown before any performance claim · excludes fees · educational, not investment advice.</div>
     </div>
     <div className="stock-body">
       <section style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden',boxShadow:C.shadow}}>

@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../src/lib/stockAnalysis.js'
+
+const require=createRequire(import.meta.url)
+const serverRatingAnalysis=require('../api/_lib/stockRatingAnalysis.js')
 
 const barsFor=(closes,{lastVolume=1000}={})=>closes.map((close,index)=>({date:`2026-01-${String(index+1).padStart(2,'0')}`,close,high:close*1.01,low:close*.99,volume:index===closes.length-1?lastVolume:1000}))
 
@@ -49,6 +53,13 @@ test('fundamental health gate blocks near-term earnings',()=>{
     debt_to_equity_annual:.4,current_ratio_annual:1.8,earnings_date:'2026-08-04',
   },now)
   assert.equal(result.status,'EVENT_RISK')
+})
+
+test('server stock-rating capture matches client technical and health decisions',()=>{
+  const bars=Array.from({length:80},(_,index)=>({close:100+index*.45,high:101+index*.45,low:99+index*.45,volume:1_000_000}))
+  const fund={sector:'Technology',market_cap:100_000_000_000,pe_ratio:24,net_profit_margin_ttm:18,revenue_growth_ttm_yoy:12,eps_growth_ttm_yoy:10,debt_to_equity_annual:.4,current_ratio_annual:1.8,roe_ttm:22,free_cash_flow_ttm:5}
+  assert.equal(serverRatingAnalysis.analyzeStockBars(bars).status,analyzeStockBars(bars).status)
+  assert.equal(serverRatingAnalysis.analyzeFundamentalHealth(fund).status,analyzeFundamentalHealth(fund).status)
 })
 
 test('trade plans never return an inverted entry range',()=>{
