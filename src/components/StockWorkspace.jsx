@@ -40,7 +40,7 @@ const authHeaders = async getToken => {
 }
 
 function Metric({ label, value, color, C }) {
-  return <div style={{padding:'11px 12px',background:C.cardAlt,border:`1px solid ${C.border}`,borderRadius:8}}>
+  return <div className="stock-metric" style={{padding:'11px 12px',background:C.cardAlt,border:`1px solid ${C.border}`,borderRadius:8}}>
     <div style={{fontSize:9,color:C.dim,letterSpacing:1.2,marginBottom:5}}>{label}</div>
     <div style={{fontFamily:"'Inter',sans-serif",fontSize:15,fontWeight:700,color:color||C.text}}>{value}</div>
   </div>
@@ -370,10 +370,16 @@ export default function StockWorkspace({ C, getToken }) {
 
   return <div className="si stock-workspace">
     <style>{`
-      .stock-hero{display:grid;grid-template-columns:1.5fr .8fr;gap:16px}.stock-body{display:grid;grid-template-columns:minmax(310px,.8fr) minmax(0,1.7fr);gap:16px;align-items:start}.stock-detail-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.stock-metrics,.stock-track-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.stock-workspace{margin:0 -12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}}
+      .stock-workspace{width:min(1680px,calc(100vw - 48px));margin-left:50%;transform:translateX(-50%);font-family:'Inter',sans-serif}
+      .stock-page-head{padding:6px 2px 2px}.stock-hero{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:20px}.stock-body{display:grid;grid-template-columns:minmax(350px,380px) minmax(0,1fr);gap:20px;align-items:start}.stock-candidate-rail{position:sticky;top:78px}.stock-detail-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(330px,.85fr);gap:18px}.stock-metrics,.stock-track-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+      .stock-workspace [style*="font-size: 9px"]{font-size:11px!important;line-height:1.45}.stock-workspace [style*="font-size: 10px"]{font-size:12px!important;line-height:1.5}.stock-workspace [style*="font-size: 11px"]{font-size:13px!important;line-height:1.55}.stock-workspace [style*="font-size: 12px"]{font-size:14px!important;line-height:1.55}
+      .stock-workspace .stock-metric{padding:14px 15px!important;border-radius:10px!important;min-height:66px}.stock-workspace .stock-metric>div:first-child{font-size:11px!important;letter-spacing:.75px!important}.stock-workspace .stock-metric>div:last-child{font-size:16px!important;line-height:1.3!important}
+      .stock-workspace section{border-radius:14px!important}.stock-workspace button,.stock-workspace input{min-height:38px}.stock-workspace button{transition:background-color .18s ease,border-color .18s ease,transform .18s ease}.stock-workspace button:hover:not(:disabled){filter:brightness(1.08)}.stock-workspace button:focus-visible,.stock-workspace input:focus-visible{outline:2px solid ${C.blue};outline-offset:2px}
+      @media(max-width:1180px){.stock-workspace{width:calc(100vw - 32px)}.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
+      @media(max-width:900px){.stock-workspace{width:100%;margin-left:0;transform:none}.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:560px){.stock-workspace{margin:0 -12px;width:auto}.stock-page-head{padding-left:12px;padding-right:12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}.stock-metrics,.stock-track-grid{grid-template-columns:1fr 1fr}.stock-workspace .stock-metric{min-height:60px;padding:12px!important}}
     `}</style>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:14,marginBottom:18,flexWrap:'wrap'}}>
+    <div className="stock-page-head" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:14,marginBottom:22,flexWrap:'wrap'}}>
       <div><div style={{fontSize:10,color:C.green,letterSpacing:2,marginBottom:8}}>STOCK INTELLIGENCE</div><h1 style={{fontFamily:"'Inter',sans-serif",fontSize:'clamp(26px,3vw,38px)',lineHeight:1.05,margin:0,color:C.text}}>Find quality. Wait for price.</h1><p style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,lineHeight:1.6,margin:'9px 0 0',maxWidth:680}}>Research strong companies, understand the setup, then rehearse a rules-based entry and exit with paper money.</p></div>
       <div style={{padding:'10px 13px',border:`1px solid ${dataError?C.red:C.green}45`,background:`${dataError?C.red:C.green}0d`,borderRadius:8,maxWidth:330,fontSize:10,color:C.dim,lineHeight:1.55}}>
         <div style={{display:'flex',alignItems:'center',gap:7}}><span style={{width:6,height:6,borderRadius:'50%',background:dataError?C.red:C.green,boxShadow:dataError?'none':`0 0 7px ${C.green}`}} />{loading?'CONNECTING TO MARKET DATA':dataError?'MARKET DATA DEGRADED':'LIVE MARKET DATA'}</div>
@@ -394,7 +400,7 @@ export default function StockWorkspace({ C, getToken }) {
       <div style={{fontSize:9,color:C.dim,lineHeight:1.5,marginTop:10}}>One immutable rating per ticker/day/model · measured at daily closes · compared with SPY · sample size shown before any performance claim · excludes fees · educational, not investment advice.</div>
     </div>
     <div className="stock-body">
-      <section style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden',boxShadow:C.shadow}}>
+      <section className="stock-candidate-rail" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden',boxShadow:C.shadow}}>
         <div style={{padding:14,borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontSize:9,color:C.green,letterSpacing:1.3,marginBottom:6}}>ANALYZE ANY STOCK</div>
           <form onSubmit={analyzeTicker} style={{display:'grid',gridTemplateColumns:'1fr auto',gap:7}}>
