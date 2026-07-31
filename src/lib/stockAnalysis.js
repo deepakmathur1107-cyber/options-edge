@@ -91,3 +91,58 @@ export function buildStockTradePlan({price,analysis}) {
 export function isBullishScannerRow(row) {
   return /call/i.test(String(row?.trade_type||row?.option_type||''))
 }
+
+const metric = (fund, ...keys) => {
+  for (const key of keys) {
+    const raw=fund?.[key]
+    if (raw===null||raw===undefined||raw==='') continue
+    const value=Number(raw)
+    if (Number.isFinite(value)) return value
+  }
+  return null
+}
+
+export function analyzeFundamentalHealth(fund, now=new Date()) {
+  if (!fund) return {status:'DATA_INCOMPLETE',score:null,label:'DATA INCOMPLETE',reasons:['Fundamental data is unavailable.'],warnings:[],coverage:0}
+
+  const sector=String(fund.sector||'')
+  const specialized=/financial|bank|insurance|real estate|reit/i.test(sector)
+  const marketCap=metric(fund,'market_cap','market_capitalization')
+  const pe=metric(fund,'pe_ratio','pe_ttm')
+  const profitMargin=metric(fund,'net_profit_margin_ttm')
+  const revenueGrowth=metric(fund,'revenue_growth_ttm_yoy')
+  const epsGrowth=metric(fund,'eps_growth_ttm_yoy')
+  const debtToEquity=metric(fund,'debt_to_equity_annual')
+  const currentRatio=metric(fund,'current_ratio_annual')
+  const roe=metric(fund,'roe_ttm')
+  const freeCashFlow=metric(fund,'free_cash_flow_ttm')
+  const required=specialized?[marketCap,pe,profitMargin,revenueGrowth,roe]:[marketCap,pe,profitMargin,revenueGrowth,debtToEquity,currentRatio]
+  const coverage=Math.round(required.filter(value=>value!=null).length/required.length*100)
+  const reasons=[],warnings=[]
+  let score=50
+
+  if (marketCap!=null) marketCap>=2_000_000_000?(score+=8):(reasons.push('Market capitalization is below $2B.'),score-=18)
+  if (pe!=null) {
+    if (pe<=0) { reasons.push('Trailing earnings are not positive.'); score-=25 }
+    else if (pe<=35) score+=8
+    else if (pe<=50) warnings.push(`P/E ${pe.toFixed(1)} is elevated; compare with its sector.`)
+    else { warnings.push(`P/E ${pe.toFixed(1)} indicates a large valuation premium.`); score-=10 }
+  }
+  if (profitMargin!=null) profitMargin>0?(score+=12):(reasons.push('Net profit margin is not positive.'),score-=25)
+  if (revenueGrowth!=null) revenueGrowth>0?(score+=8):(reasons.push('Trailing revenue growth is not positive.'),score-=12)
+  if (epsGrowth!=null) epsGrowth>=0?(score+=5):(warnings.push('Trailing EPS growth is negative.'),score-=8)
+  if (roe!=null) roe>=10?(score+=6):warnings.push('Return on equity is below 10%.')
+  if (!specialized&&debtToEquity!=null) debtToEquity<=2?(score+=6):(reasons.push(`Debt-to-equity ${debtToEquity.toFixed(2)} exceeds 2.0.`),score-=18)
+  if (!specialized&&currentRatio!=null) currentRatio>=1?(score+=5):(reasons.push(`Current ratio ${currentRatio.toFixed(2)} is below 1.0.`),score-=12)
+  if (freeCashFlow!=null) freeCashFlow>0?(score+=7):(reasons.push('Free cash flow is not positive.'),score-=15)
+
+  const earningsDate=fund.earnings_date?new Date(`${String(fund.earnings_date).slice(0,10)}T12:00:00Z`):null
+  const earningsDays=earningsDate&&Number.isFinite(earningsDate.getTime())?Math.ceil((earningsDate-now)/(864e5)):null
+  if (earningsDays!=null&&earningsDays>=0&&earningsDays<=7) {
+    return {status:'EVENT_RISK',score:Math.max(0,Math.min(100,Math.round(score))),label:'EVENT RISK',reasons:[`Earnings are scheduled in ${earningsDays} day${earningsDays===1?'':'s'}.`],warnings,coverage,metrics:{marketCap,pe,profitMargin,revenueGrowth,epsGrowth,debtToEquity,currentRatio,roe,freeCashFlow}}
+  }
+  score=Math.max(0,Math.min(100,Math.round(score)))
+  if (coverage<75) return {status:'DATA_INCOMPLETE',score,label:'DATA INCOMPLETE',reasons:[`Only ${coverage}% of required health metrics are available.`],warnings,coverage,metrics:{marketCap,pe,profitMargin,revenueGrowth,epsGrowth,debtToEquity,currentRatio,roe,freeCashFlow}}
+  if (reasons.length||score<65) return {status:'FUNDAMENTAL_RISK',score,label:'FUNDAMENTAL RISK',reasons:reasons.length?reasons:['Fundamental health score is below 65.'],warnings,coverage,metrics:{marketCap,pe,profitMargin,revenueGrowth,epsGrowth,debtToEquity,currentRatio,roe,freeCashFlow}}
+  return {status:score>=80?'HEALTHY':'ACCEPTABLE',score,label:score>=80?'HEALTHY':'ACCEPTABLE',reasons:['Profitability, growth, balance-sheet and valuation checks passed.'],warnings,coverage,metrics:{marketCap,pe,profitMargin,revenueGrowth,epsGrowth,debtToEquity,currentRatio,roe,freeCashFlow}}
+}

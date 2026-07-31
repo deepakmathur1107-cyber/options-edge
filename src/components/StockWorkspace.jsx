@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../lib/stockAnalysis'
+import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../lib/stockAnalysis'
 
 const STOCKS = [
   { symbol:'NVDA', name:'NVIDIA', sector:'Semiconductors', price:176.26, change:1.84, score:92, setup:'Breakout watch', stage:'WAIT', entry:'177.50–179.00', stop:169.80, target1:188, target2:198, rr:'2.4×', trend:'Strong', rsi:62, volume:'1.4×', support:169.80, resistance:178.20, thesis:'AI infrastructure demand and accelerating data-center revenue keep relative strength near the top of the large-cap universe.', catalyst:'Earnings in 24 days', risk:'Extended valuation; a loss of the 20-day average weakens the setup.', quality:94, growth:98, value:61, momentum:96 },
@@ -24,7 +24,7 @@ const makeSeed = (symbol, scan={}) => {
   }
 }
 
-const stageColor = (stage, C) => stage === 'READY' ? C.green : stage === 'WAIT' ? C.orange : C.dim
+const stageColor = (stage, C) => /QUALITY \+ READY|HEALTHY|ACCEPTABLE/.test(stage) ? C.green : /RISK/.test(stage) ? C.red : /WAIT/.test(stage) ? C.orange : C.dim
 
 const asArray = value => !value ? [] : Array.isArray(value) ? value : [value]
 const fmtDate = date => date.toISOString().slice(0, 10)
@@ -182,6 +182,28 @@ export default function StockWorkspace({ C, getToken }) {
     return()=>{cancelled=true}
   },[topStocks,getToken])
 
+  useEffect(()=>{
+    let cancelled=false
+    const loadBatchFundamentals=async()=>{
+      const headers=await authHeaders(getToken)
+      const next={}
+      for(let index=0;index<topStocks.length;index+=3) {
+        const group=topStocks.slice(index,index+3)
+        await Promise.all(group.map(async item=>{
+          try {
+            const res=await fetch(`/api/tradier?fundamentals=${encodeURIComponent(item.symbol)}`,{headers})
+            const data=await res.json()
+            if(res.ok&&data?.available) next[item.symbol]=data
+          } catch {}
+        }))
+        if(cancelled) return
+      }
+      if(!cancelled) setFundamentals(previous=>({...previous,...next}))
+    }
+    if(topStocks.length) loadBatchFundamentals()
+    return()=>{cancelled=true}
+  },[topStocks,getToken])
+
   const fetchQuotes = useCallback(async()=>{
     setDataError('')
     try {
@@ -246,17 +268,25 @@ export default function StockWorkspace({ C, getToken }) {
     const momentum=Number.isFinite(t?.rsi)?Math.min(99,Math.max(35,Math.round(50+(t.rsi-50)*1.4))):null
     const technicalScore=t?.technicalScore??null
     const score=technicalScore==null?null:topSource.kind==='live'&&seed.scannerScore?Math.round((technicalScore+seed.scannerScore)/2):technicalScore
-    const stage=!t?'ANALYZING':t.status==='INSUFFICIENT_DATA'?'INSUFFICIENT DATA':t.status
-    const plan=buildStockTradePlan({price,analysis:t})
-    return {...seed,price,change,support,resistance,trend,momentum,technicalScore,score,stage,analysisReason:t?.reason||'Technical history is still loading.',plan,
+    const health=analyzeFundamentalHealth(fundamentals[seed.symbol])
+    const technicalStage=!t?'ANALYZING':t.status==='INSUFFICIENT_DATA'?'INSUFFICIENT DATA':t.status
+    const healthPassed=health.status==='HEALTHY'||health.status==='ACCEPTABLE'
+    const stage=technicalStage==='ANALYZING'||technicalStage==='INSUFFICIENT DATA'?technicalStage
+      :!healthPassed?health.label
+      :technicalStage==='READY'?'QUALITY + READY':'QUALITY + WAIT'
+    const plan=technicalStage==='READY'&&healthPassed?buildStockTradePlan({price,analysis:t}):null
+    return {...seed,price,change,support,resistance,trend,momentum,technicalScore,score,stage,technicalStage,health,analysisReason:t?.reason||'Technical history is still loading.',plan,
       setup:analyzed?t.setup:seed.setup,stop:plan?.stop??null,
       rsi:t?.rsi??seed.rsi,volume:t?.volumeRatio?`${t.volumeRatio.toFixed(1)}×`:seed.volume,
       entry:plan?`${plan.entryLow.toFixed(2)}–${plan.entryHigh.toFixed(2)}`:'—',
       target1:plan?.target1??null,target2:plan?.target2??null,
       rr:plan?.rr||'—',live:!!q}
-  }),[universe,quotes,technicals,topSource.kind])
+  }),[universe,quotes,technicals,fundamentals,topSource.kind])
   const stock = enriched.find(s=>s.symbol===selected) || enriched[0]
-  const rows = useMemo(()=>enriched.filter(s=>(filter==='ALL'||s.stage===filter)&&(`${s.symbol} ${s.name}`.toLowerCase().includes(query.toLowerCase()))).sort((a,b)=>b.score-a.score),[enriched,filter,query])
+  const rows = useMemo(()=>enriched.filter(s=>{
+    const filterMatch=filter==='ALL'||s.stage===filter||(filter==='BLOCKED'&&['FUNDAMENTAL RISK','EVENT RISK','DATA INCOMPLETE'].includes(s.stage))
+    return filterMatch&&(`${s.symbol} ${s.name}`.toLowerCase().includes(query.toLowerCase()))
+  }).sort((a,b)=>Number(b.stage==='QUALITY + READY')-Number(a.stage==='QUALITY + READY')||(b.score??0)-(a.score??0)),[enriched,filter,query])
   const marketState=useMemo(()=>{
     const spy=Number(quotes.SPY?.change_percentage),qqq=Number(quotes.QQQ?.change_percentage)
     if(!Number.isFinite(spy)||!Number.isFinite(qqq)) return {label:'UNAVAILABLE',score:null,color:C.dim,detail:'SPY and QQQ regime data is unavailable.'}
@@ -276,8 +306,8 @@ export default function StockWorkspace({ C, getToken }) {
       setTradeMessage('Paper tracking stopped. Existing journal entry was preserved.')
       return
     }
-    if(stock.stage!=='READY'||!stock.plan) {
-      setTradeMessage(stock.analysisReason||'A validated READY setup is required before starting a paper trade.')
+    if(stock.stage!=='QUALITY + READY'||!stock.plan) {
+      setTradeMessage(stock.health?.reasons?.[0]||stock.analysisReason||'Business health and a validated technical setup are required before starting a paper trade.')
       return
     }
     setTradeMessage('Saving paper trade…')
@@ -351,13 +381,13 @@ export default function StockWorkspace({ C, getToken }) {
           {tickerError&&<div style={{fontSize:9,color:C.red,marginTop:6,lineHeight:1.4}}>{tickerError}</div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'18px 0 10px'}}><div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Options Edge Top 10</strong><div style={{fontSize:9,color:topSource.kind==='live'?C.green:C.orange,marginTop:3}}>{topSource.label}{batchLoading?' · analyzing all charts…':''}</div></div><span style={{fontSize:9,color:C.dim}}>{topStocks.length} STOCKS</span></div>
           <input aria-label="Filter top stocks" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter this list…" style={{width:'100%',background:C.inputBg,border:`1px solid ${C.border}`,color:C.text,padding:'9px 10px',borderRadius:7,fontSize:11}} />
-          <div style={{display:'flex',gap:6,marginTop:9}}>{['ALL','READY','WAIT'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f}</button>)}</div>
+          <div style={{display:'flex',gap:6,marginTop:9,flexWrap:'wrap'}}>{['ALL','QUALITY + READY','QUALITY + WAIT','BLOCKED'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f}</button>)}</div>
         </div>
         <div style={{maxHeight:650,overflowY:'auto'}}>{rows.map(s=><button key={s.symbol} onClick={()=>setSelected(s.symbol)} style={{width:'100%',display:'grid',gridTemplateColumns:'1fr auto',gap:10,textAlign:'left',padding:'14px',border:'none',borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${selected===s.symbol?C.green:'transparent'}`,background:selected===s.symbol?`${C.green}0d`:'transparent',cursor:'pointer',color:C.text}}><div><div style={{display:'flex',alignItems:'center',gap:7}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{s.symbol}</strong><span style={{fontSize:9,color:stageColor(s.stage,C)}}>{s.stage}</span>{watchlist.includes(s.symbol)&&<span style={{color:C.orange,fontSize:10}}>★</span>}</div><div style={{fontSize:10,color:C.dim,margin:'3px 0 7px'}}>{s.name} · {s.sector}</div><div style={{fontSize:10,color:C.subtext}}>{s.setup}</div></div><div style={{textAlign:'right'}}><div style={{fontFamily:"'Inter',sans-serif",fontWeight:800}}>${s.price.toFixed(2)}</div><div style={{fontSize:10,color:s.change>=0?C.green:C.red,marginTop:3}}>{s.change>=0?'+':''}{s.change}%</div><div style={{fontSize:10,color:C.green,marginTop:8}}>{s.score} EDGE</div></div></button>)}</div>
       </section>
       <section>
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow,marginBottom:14}}>
-          <div style={{display:'flex',justifyContent:'space-between',gap:14,flexWrap:'wrap',alignItems:'flex-start'}}><div><div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}><h2 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0}}>{stock.symbol}</h2><span style={{color:C.subtext,fontSize:12}}>{stock.name}</span><span style={{fontSize:9,color:stageColor(stock.stage,C),border:`1px solid ${stageColor(stock.stage,C)}55`,padding:'3px 7px',borderRadius:12}}>{detailLoading?'ANALYZING…':stock.stage}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,marginTop:7}}>${stock.price.toFixed(2)} <span style={{fontSize:12,color:stock.change>=0?C.green:C.red}}>{stock.change>=0?'+':''}{stock.change.toFixed(2)}% today</span></div><div style={{fontSize:10,color:C.subtext,lineHeight:1.5,marginTop:7,maxWidth:650}}>{stock.analysisReason}</div></div><div style={{display:'flex',gap:7}}><button onClick={()=>toggleWatch(stock.symbol)} style={{background:'transparent',border:`1px solid ${C.border}`,color:watchlist.includes(stock.symbol)?C.orange:C.subtext,borderRadius:7,padding:'9px 11px',fontSize:10,cursor:'pointer'}}>{watchlist.includes(stock.symbol)?'★ WATCHING':'☆ WATCHLIST'}</button><button onClick={togglePaper} disabled={loading||detailLoading||stock.stage!=='READY'} style={{background:tracked?`${C.red}18`:C.green,border:`1px solid ${tracked?C.red:C.green}`,color:tracked?C.red:'#1c1916',borderRadius:7,padding:'9px 13px',fontSize:10,fontWeight:800,cursor:'pointer',opacity:(loading||detailLoading||stock.stage!=='READY')?.45:1}}>{tracked?'STOP PAPER TRADE':'START PAPER TRADE'}</button></div></div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:14,flexWrap:'wrap',alignItems:'flex-start'}}><div><div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}><h2 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0}}>{stock.symbol}</h2><span style={{color:C.subtext,fontSize:12}}>{stock.name}</span><span style={{fontSize:9,color:stageColor(stock.stage,C),border:`1px solid ${stageColor(stock.stage,C)}55`,padding:'3px 7px',borderRadius:12}}>{detailLoading?'ANALYZING…':stock.stage}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,marginTop:7}}>${stock.price.toFixed(2)} <span style={{fontSize:12,color:stock.change>=0?C.green:C.red}}>{stock.change>=0?'+':''}{stock.change.toFixed(2)}% today</span></div><div style={{fontSize:10,color:C.subtext,lineHeight:1.5,marginTop:7,maxWidth:650}}><strong>Technical:</strong> {stock.analysisReason}<br/><strong>Health gate:</strong> {stock.health?.reasons?.[0]}</div></div><div style={{display:'flex',gap:7}}><button onClick={()=>toggleWatch(stock.symbol)} style={{background:'transparent',border:`1px solid ${C.border}`,color:watchlist.includes(stock.symbol)?C.orange:C.subtext,borderRadius:7,padding:'9px 11px',fontSize:10,cursor:'pointer'}}>{watchlist.includes(stock.symbol)?'★ WATCHING':'☆ WATCHLIST'}</button><button onClick={togglePaper} disabled={loading||detailLoading||stock.stage!=='QUALITY + READY'} style={{background:tracked?`${C.red}18`:C.green,border:`1px solid ${tracked?C.red:C.green}`,color:tracked?C.red:'#1c1916',borderRadius:7,padding:'9px 13px',fontSize:10,fontWeight:800,cursor:'pointer',opacity:(loading||detailLoading||stock.stage!=='QUALITY + READY')?.45:1}}>{tracked?'STOP PAPER TRADE':'START PAPER TRADE'}</button></div></div>
           {tradeMessage&&<div style={{marginTop:12,padding:'9px 11px',borderRadius:6,border:`1px solid ${tradeMessage.includes('saved')?C.green:C.border}`,color:tradeMessage.includes('saved')?C.green:C.subtext,fontSize:10}}>{tradeMessage}</div>}
           <div className="stock-metrics" style={{marginTop:16}}><Metric label="EDGE SCORE" value={`${stock.score} / 100`} color={C.green} C={C}/><Metric label="SETUP" value={stock.setup} color={C.blue} C={C}/><Metric label="TREND" value={stock.trend} C={C}/><Metric label="REWARD / RISK" value={stock.rr} color={C.green} C={C}/></div>
         </div>
@@ -371,7 +401,7 @@ export default function StockWorkspace({ C, getToken }) {
           </div>
           <div>
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow,marginBottom:14}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Technical snapshot</strong><div style={{height:130,margin:'17px 0 12px',position:'relative',borderBottom:`1px solid ${C.border}`,background:`linear-gradient(180deg,${C.green}08,transparent)`}}>{stock.resistance!=null&&<div style={{position:'absolute',left:0,right:0,top:'24%',borderTop:`1px dashed ${C.red}80`}}><span style={{float:'right',fontSize:8,color:C.red,background:C.card}}>R {stock.resistance.toFixed(2)}</span></div>}{stock.support!=null&&<div style={{position:'absolute',left:0,right:0,top:'75%',borderTop:`1px dashed ${C.green}80`}}><span style={{float:'right',fontSize:8,color:C.green,background:C.card}}>S {stock.support.toFixed(2)}</span></div>}<div style={{position:'absolute',left:'3%',right:'3%',bottom:'22%',height:55,borderTop:`3px solid ${C.blue}`,borderRadius:'50%',transform:'rotate(-7deg)'}} />{[18,30,43,57,70,82].map((x,i)=><div key={x} style={{position:'absolute',left:`${x}%`,bottom:`${24+i*7}%`,width:5,height:18+i*2,background:i%2?C.red:C.green,borderRadius:2}} />)}</div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7}}><Metric label="RSI (14)" value={stock.rsi??'—'} color={stock.rsi>68?C.orange:C.text} C={C}/><Metric label="VOLUME" value={stock.volume} C={C}/><Metric label="SUPPORT" value={stock.support!=null?`$${stock.support.toFixed(2)}`:'—'} color={C.green} C={C}/><Metric label="RESISTANCE" value={stock.resistance!=null?`$${stock.resistance.toFixed(2)}`:'—'} color={C.red} C={C}/></div></div>
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Evidence scorecard</strong><div style={{marginTop:16}}>{stock.technicalScore!=null?<Bar label="Live technical structure" value={stock.technicalScore} C={C}/>:<div style={{fontSize:11,color:C.dim,marginBottom:12}}>Technical score pending.</div>}{stock.momentum!=null&&<Bar label="Live price momentum" value={stock.momentum} C={C}/>}<div style={{display:'grid',gap:7,margin:'14px 0'}}><Metric label="SCANNER EVIDENCE" value={topSource.kind==='live'&&stock.scannerScore?`${stock.scannerScore} / 100`:'Not a live scanner candidate'} color={topSource.kind==='live'?C.blue:C.dim} C={C}/><Metric label="FUNDAMENTAL COVERAGE" value={fund?'Sector · industry · earnings':'Limited / unavailable'} color={fund?C.blue:C.dim} C={C}/></div></div><div style={{fontSize:9,color:C.dim,lineHeight:1.5,borderTop:`1px solid ${C.border}`,paddingTop:10}}>The Edge Score uses live technical evidence and, when available, the bullish scanner score. Placeholder quality, growth, and valuation numbers are no longer included.</div></div>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Evidence scorecard</strong><div style={{marginTop:16}}>{stock.technicalScore!=null?<Bar label="Live technical structure" value={stock.technicalScore} C={C}/>:<div style={{fontSize:11,color:C.dim,marginBottom:12}}>Technical score pending.</div>}{stock.health?.score!=null&&<Bar label="Fundamental health" value={stock.health.score} C={C}/>}<div style={{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:7,margin:'14px 0'}}><Metric label="HEALTH GATE" value={stock.health?.label||'DATA INCOMPLETE'} color={stageColor(stock.health?.label||'',C)} C={C}/><Metric label="DATA COVERAGE" value={`${stock.health?.coverage||0}%`} color={(stock.health?.coverage||0)>=75?C.blue:C.orange} C={C}/><Metric label="P/E (TTM)" value={stock.health?.metrics?.pe!=null?stock.health.metrics.pe.toFixed(1):'Unavailable'} C={C}/><Metric label="MARKET CAP" value={stock.health?.metrics?.marketCap!=null?`$${(stock.health.metrics.marketCap/1e9).toFixed(1)}B`:'Unavailable'} C={C}/><Metric label="NET MARGIN" value={stock.health?.metrics?.profitMargin!=null?`${stock.health.metrics.profitMargin.toFixed(1)}%`:'Unavailable'} C={C}/><Metric label="REVENUE GROWTH" value={stock.health?.metrics?.revenueGrowth!=null?`${stock.health.metrics.revenueGrowth.toFixed(1)}%`:'Unavailable'} C={C}/><Metric label="DEBT / EQUITY" value={stock.health?.metrics?.debtToEquity!=null?stock.health.metrics.debtToEquity.toFixed(2):'Sector-adjusted / unavailable'} C={C}/><Metric label="CURRENT RATIO" value={stock.health?.metrics?.currentRatio!=null?stock.health.metrics.currentRatio.toFixed(2):'Sector-adjusted / unavailable'} C={C}/></div>{stock.health?.warnings?.map(message=><div key={message} style={{fontSize:10,color:C.orange,lineHeight:1.5,marginTop:5}}>⚠ {message}</div>)}</div><div style={{fontSize:9,color:C.dim,lineHeight:1.5,borderTop:`1px solid ${C.border}`,paddingTop:10}}>A stock is labeled QUALITY + READY only when the business-health gate and technical-entry gate both pass. Missing critical fundamentals fail closed.</div></div>
           </div>
         </div>
       </section>

@@ -17,7 +17,7 @@ const REDIS_TOKEN   = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const SUPABASE_URL  = process.env.SUPABASE_URL              || ''
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
-const REDIS_TTL_SECS  = 60 * 60        // 1 hour in Redis
+const REDIS_TTL_SECS  = 6 * 60 * 60    // 6 hours; financial statements do not change intraday
 const SUPABASE_TTL_MS = 7 * 24 * 3600 * 1000  // 7 days in Supabase
 
 // ── Supabase client (lazy singleton) ─────────────────────────────────────────
@@ -133,6 +133,43 @@ async function fetchEarningsFromFinnhub(ticker) {
   } catch (e) {
     console.warn(`[fundamentals] Finnhub error for ${ticker}:`, e.message)
     return null
+  }
+}
+
+// Finnhub basic financials supplies the health metrics that the stock gate
+// needs. This is kept server-side and cached with the combined fundamentals
+// object, so the API key never reaches the browser.
+async function fetchFinancialMetricsFromFinnhub(ticker) {
+  if (!FINNHUB_KEY) return {}
+  try {
+    const url=`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(ticker)}&metric=all&token=${FINNHUB_KEY}`
+    const res=await fetch(url)
+    if (!res.ok) return {}
+    const metric=(await res.json())?.metric||{}
+    const number=(...keys)=>{
+      for (const key of keys) {
+        const value=metric[key]
+        if (value!==null&&value!==''&&Number.isFinite(Number(value))) return Number(value)
+      }
+      return null
+    }
+    const marketCapMillions=number('marketCapitalization')
+    return {
+      market_cap:marketCapMillions==null?null:marketCapMillions*1_000_000,
+      pe_ratio:number('peBasicExclExtraTTM','peTTM','peNormalizedAnnual'),
+      net_profit_margin_ttm:number('netProfitMarginTTM'),
+      revenue_growth_ttm_yoy:number('revenueGrowthTTMYoy'),
+      eps_growth_ttm_yoy:number('epsGrowthTTMYoy'),
+      debt_to_equity_annual:number('totalDebt/totalEquityAnnual','totalDebtToEquityAnnual'),
+      current_ratio_annual:number('currentRatioAnnual'),
+      roe_ttm:number('roeTTM','roeRfy'),
+      free_cash_flow_ttm:number('freeCashFlowPerShareTTM','freeCashFlowTTM'),
+      health_metrics_source:'Finnhub basic financials',
+      health_metrics_updated_at:new Date().toISOString(),
+    }
+  } catch (e) {
+    console.warn(`[fundamentals] Finnhub metrics error for ${ticker}:`,e.message)
+    return {}
   }
 }
 
@@ -253,19 +290,24 @@ async function getFundamentals(ticker) {
   // 2. Supabase (fast — ~50ms, persisted across deployments)
   const stored = await supabaseGet(ticker)
   if (stored) {
-    await redisSet(redisKey, stored, REDIS_TTL_SECS)  // warm Redis
-    return stored
+    const metrics=await fetchFinancialMetricsFromFinnhub(ticker)
+    const combined={...stored,...metrics,market_cap:metrics.market_cap??stored.market_cap,pe_ratio:metrics.pe_ratio??stored.pe_ratio}
+    await redisSet(redisKey, combined, REDIS_TTL_SECS)
+    return combined
   }
 
   // 3. api-ninjas (external call — counts against 3000/month limit)
   console.log(`[fundamentals] cache miss — calling api-ninjas for ${ticker}`)
   const fresh = await fetchFromNinjas(ticker)
   if (fresh) {
+    const metrics=await fetchFinancialMetricsFromFinnhub(ticker)
+    const combined={...fresh,...metrics,market_cap:metrics.market_cap??fresh.market_cap,pe_ratio:metrics.pe_ratio??fresh.pe_ratio}
     // Persist to both layers
     await supabaseSet(fresh)
-    await redisSet(redisKey, fresh, REDIS_TTL_SECS)
+    await redisSet(redisKey, combined, REDIS_TTL_SECS)
+    return combined
   }
-  return fresh  // may be null if ninjas returned nothing
+  return fresh  // may be null if providers returned nothing
 }
 
 // ── Bulk prefetch (call once for watchlist at scan start) ─────────────────────

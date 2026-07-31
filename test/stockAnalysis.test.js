@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../src/lib/stockAnalysis.js'
+import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../src/lib/stockAnalysis.js'
 
 const barsFor=(closes,{lastVolume=1000}={})=>closes.map((close,index)=>({date:`2026-01-${String(index+1).padStart(2,'0')}`,close,high:close*1.01,low:close*.99,volume:index===closes.length-1?lastVolume:1000}))
 
@@ -25,6 +25,30 @@ test('keeps a materially extended stock on wait',()=>{
 test('rejects bearish option scanner rows from bullish stock discovery',()=>{
   assert.equal(isBullishScannerRow({trade_type:'Long Put'}),false)
   assert.equal(isBullishScannerRow({trade_type:'Long Call'}),true)
+})
+
+test('fundamental health gate fails closed when critical data is missing',()=>{
+  const result=analyzeFundamentalHealth({sector:'Technology',market_cap:10_000_000_000})
+  assert.equal(result.status,'DATA_INCOMPLETE')
+})
+
+test('fundamental health gate accepts a profitable growing business',()=>{
+  const result=analyzeFundamentalHealth({
+    sector:'Technology',market_cap:100_000_000_000,pe_ratio:24,
+    net_profit_margin_ttm:18,revenue_growth_ttm_yoy:12,eps_growth_ttm_yoy:10,
+    debt_to_equity_annual:.4,current_ratio_annual:1.8,roe_ttm:22,free_cash_flow_ttm:5,
+  })
+  assert.equal(result.status,'HEALTHY')
+})
+
+test('fundamental health gate blocks near-term earnings',()=>{
+  const now=new Date('2026-07-31T12:00:00Z')
+  const result=analyzeFundamentalHealth({
+    sector:'Technology',market_cap:100_000_000_000,pe_ratio:24,
+    net_profit_margin_ttm:18,revenue_growth_ttm_yoy:12,
+    debt_to_equity_annual:.4,current_ratio_annual:1.8,earnings_date:'2026-08-04',
+  },now)
+  assert.equal(result.status,'EVENT_RISK')
 })
 
 test('trade plans never return an inverted entry range',()=>{
