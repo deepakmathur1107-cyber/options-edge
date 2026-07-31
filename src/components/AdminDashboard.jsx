@@ -115,6 +115,9 @@ function RecentUsers({ users, C }) {
           }}>{u.initials}</div>
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <div style={{ fontSize: 12, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</div>
+            {u.email && u.email !== u.name && (
+              <div style={{ fontSize: 10.5, color: C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{u.email}</div>
+            )}
           </div>
           <span style={{
             fontSize: 10, padding: '2px 8px', borderRadius: 20, fontWeight: 500, flexShrink: 0,

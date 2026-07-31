@@ -15,6 +15,29 @@ const GATE_LABELS = {
   sectorConcentration: 'Sector concentration',
 }
 
+const SHADOW_STRATEGY_COPY = {
+  regime_aligned_v2a: {
+    name: 'Trade with the long-term trend',
+    description: 'Tests calls in bullish trends and puts in bearish trends.',
+  },
+  entry_confirmation_v2b: {
+    name: 'Wait for price confirmation',
+    description: 'Tests entering only after the stock starts moving in the expected direction.',
+  },
+  liquidity_gate_v2c: {
+    name: 'Only use liquid options',
+    description: 'Requires a reasonable spread, trading volume, and open interest.',
+  },
+  combined_quality_v2d: {
+    name: 'Require every quality check',
+    description: 'Combines trend alignment, price confirmation, and option liquidity.',
+  },
+  defined_risk_spread_v2e: {
+    name: 'Use a defined-risk spread',
+    description: 'Compares a vertical spread with the current single-option trade.',
+  },
+}
+
 function gateTarget(gate, gates) {
   const targets = {
     sampleSize: `${gates.minimumResolved} resolved`,
@@ -128,17 +151,28 @@ export default function ForwardPerformancePanel({ getToken, theme: C }) {
             )
           })}
         </div>
-        <div style={{fontSize:10,color:C.dim,marginBottom:5}}>SHADOW STRATEGIES · DO NOT CHANGE LIVE RECOMMENDATIONS</div>
+        <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:3}}>Strategies being tested</div>
+        <div style={{fontSize:10.5,color:C.dim,marginBottom:8,lineHeight:1.5}}>
+          These ideas are measured in the background only. They do not change recommendations shown to users.
+        </div>
         {(data.shadowStrategies||[]).length === 0
-          ? <div style={{fontSize:11,color:C.dim}}>Waiting for live shadow assignments.</div>
-          : data.shadowStrategies.map(row => (
-            <div key={row.strategy} style={{display:'grid',gridTemplateColumns:'2fr repeat(3,1fr)',gap:8,fontSize:10.5,padding:'5px 0',borderBottom:`1px solid ${C.border}`}}>
-              <span style={{color:C.text}}>{row.strategy}</span>
-              <span style={{color:C.dim}}>{row.assigned} assigned</span>
-              <span style={{color:C.dim}}>{pct(row.winRate)} win</span>
-              <span style={{color:C.dim}}>{row.expectancyR==null?'—':`${num(row.expectancyR)}R`}</span>
+          ? <div style={{fontSize:11,color:C.dim}}>Waiting for enough new signals to begin testing.</div>
+          : data.shadowStrategies.map(row => {
+            const copy = SHADOW_STRATEGY_COPY[row.strategy] || {
+              name: 'Experimental strategy',
+              description: 'A background-only variation under evaluation.',
+            }
+            return (
+            <div key={row.strategy} style={{display:'grid',gridTemplateColumns:'minmax(220px,2fr) repeat(3,minmax(80px,1fr))',gap:10,fontSize:10.5,padding:'9px 0',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
+              <div>
+                <div style={{color:C.text,fontWeight:700}}>{copy.name}</div>
+                <div style={{color:C.dim,fontSize:9.5,marginTop:2,lineHeight:1.4}}>{copy.description}</div>
+              </div>
+              <span style={{color:C.dim}}>{row.assigned} signals tested</span>
+              <span style={{color:C.dim}}>{pct(row.winRate)} win rate</span>
+              <span style={{color:C.dim}}>{row.expectancyR==null?'No result yet':`${num(row.expectancyR)}R average`}</span>
             </div>
-          ))
+          )})
         }
         <div style={{fontSize:9.5,color:C.dim,marginTop:10,lineHeight:1.5}}>
           Verified forward results, modeled execution estimates, and shadow research remain visually and analytically separate. No strategy is promoted automatically.

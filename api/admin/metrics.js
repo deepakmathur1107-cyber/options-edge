@@ -130,6 +130,31 @@ async function checkSystemHealth() {
   };
 }
 
+async function getRecentClerkProfiles(clerkIds) {
+  const key = process.env.CLERK_SECRET_KEY;
+  if (!key || !clerkIds.length) return new Map();
+  const entries = await Promise.all(clerkIds.slice(0, 8).map(async clerkId => {
+    try {
+      const response = await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!response.ok) return [clerkId, null];
+      const user = await response.json();
+      const addresses = user.email_addresses || [];
+      const primary = addresses.find(address => address.id === user.primary_email_address_id) || addresses[0];
+      const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
+      return [clerkId, {
+        name: fullName || user.username || null,
+        email: primary?.email_address || null,
+      }];
+    } catch (error) {
+      console.error('[admin/metrics] Clerk profile lookup failed for recent user:', error.message);
+      return [clerkId, null];
+    }
+  }));
+  return new Map(entries);
+}
+
 module.exports = async (req, res) => {
   // FIX: was '*' — admin/revenue data must never be readable cross-origin.
   res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com');
@@ -196,15 +221,21 @@ module.exports = async (req, res) => {
     const emailMap = {};
     (prefs || []).forEach(p => { if (p.alert_email) emailMap[p.clerk_user_id] = p.alert_email; });
 
-    // Recent signups (last 8)
+    // Recent signups (last 8). Clerk is the identity source of truth; never
+    // expose a truncated internal Clerk ID as the user's display name.
+    const recentProfiles = await getRecentClerkProfiles(subs.slice(0, 8).map(s => s.clerk_id).filter(Boolean));
     const recentUsers = subs.slice(0, 8).map(s => {
       const email = emailMap[s.clerk_id] || s.clerk_id?.slice(0, 16) + '…';
+      const profile = recentProfiles.get(s.clerk_id);
+      const safeEmail = profile?.email || (email?.includes('@') ? email : null);
+      const displayName = profile?.name || (safeEmail ? safeEmail.split('@')[0] : 'New user');
       const daysLeft = s.current_period_end
         ? Math.max(0, Math.ceil((new Date(s.current_period_end) - now) / (1000 * 60 * 60 * 24)))
         : null;
       return {
-        initials: getInitials(email),
-        name:     email,
+        initials: getInitials(displayName),
+        name:     displayName,
+        email:    safeEmail,
         plan:     s.status === 'active' ? 'paid' : s.status === 'trialing' ? 'trial' : 'free',
         daysLeft,
       };

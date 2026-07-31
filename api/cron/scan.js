@@ -46,6 +46,51 @@ function sb() {
   return _sb
 }
 
+// A partial unique index in Supabase guarantees that two overlapping scan
+// invocations cannot both create an open primary lifecycle for the same
+// contract. If this invocation loses that race, preserve its observation by
+// attaching it to the winning lifecycle instead of dropping the row.
+async function insertHistoryRow(client, row) {
+  const { error } = await client.from('signal_history').insert(row)
+  if (!error) return { inserted: true, lifecycleId: row.signal_lifecycle_id }
+  if (error.code !== '23505') return { inserted: false, error }
+
+  const { data: canonical, error: lookupError } = await client
+    .from('signal_history')
+    .select('signal_lifecycle_id')
+    .eq('ticker', row.ticker)
+    .eq('option_type', row.option_type)
+    .eq('primary_strike', row.primary_strike)
+    .eq('expiry_raw', row.expiry_raw)
+    .eq('is_lifecycle_primary', true)
+    .is('outcome', null)
+    .is('resolved_at', null)
+    .order('scanned_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (lookupError || !canonical?.signal_lifecycle_id) {
+    return { inserted: false, error: lookupError || error }
+  }
+
+  const recovered = {
+    ...row,
+    signal_lifecycle_id: canonical.signal_lifecycle_id,
+    is_lifecycle_primary: false,
+  }
+  const { error: retryError } = await client.from('signal_history').insert(recovered)
+  if (retryError) return { inserted: false, error: retryError }
+
+  // scan_results was written before signal_history. Correct its join key when
+  // the database selected a different canonical lifecycle during a race.
+  await client.from('scan_results')
+    .update({ signal_lifecycle_id: canonical.signal_lifecycle_id })
+    .eq('ticker', row.ticker)
+    .eq('timeframe', row.timeframe)
+
+  return { inserted: true, lifecycleId: canonical.signal_lifecycle_id, recoveredConflict: true }
+}
+
 // ─── Tradier rate-limit health check ───────────────────────────────────────
 // Temporary diagnostic instrumentation (see README-health-check.md for the
 // plan this is part of). Tradier sends X-Ratelimit-* headers on every market-
@@ -610,8 +655,9 @@ module.exports = async function handler(req, res) {
     if (bulkErr) {
       console.error(`[cron/scan] bulk signal_history insert failed (${bufferedRows.length} rows), falling back to per-row insert:`, bulkErr.message)
       for (const row of bufferedRows) {
-        const { error: rowErr } = await client.from('signal_history').insert(row)
-        if (rowErr) console.error(`[cron/scan] signal_history insert failed for ${row.ticker} (non-fatal):`, rowErr.message)
+        const result = await insertHistoryRow(client, row)
+        if (result.error) console.error(`[cron/scan] signal_history insert failed for ${row.ticker} (non-fatal):`, result.error.message)
+        if (result.recoveredConflict) console.warn(`[cron/scan] attached concurrent ${row.ticker} observation to lifecycle ${result.lifecycleId}`)
       }
     }
   }
@@ -632,3 +678,5 @@ module.exports = async function handler(req, res) {
     },
   })
 }
+
+module.exports._test = { insertHistoryRow }
