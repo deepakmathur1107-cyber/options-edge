@@ -46,6 +46,11 @@ function buildQualityShortlistDecision(row = {}, rules = DEFAULT_RULES) {
   else if (spreadPct > rules.maximumSpreadPct) exclusions.push('SPREAD_ABOVE_8_PCT')
   if (volume < rules.minimumVolume) exclusions.push('VOLUME_BELOW_100')
   if (openInterest < rules.minimumOpenInterest) exclusions.push('OPEN_INTEREST_BELOW_500')
+  if (row.direction_stability && row.direction_stability.eligible === false) {
+    exclusions.push(row.direction_stability.status === 'BOTH_SIDES_FAILED'
+      ? 'BOTH_DIRECTIONS_FAILED'
+      : 'DIRECTION_CHANGED_RECENTLY')
+  }
 
   const warningText = warnings.join(' | ')
   for (const [reason, pattern] of WARNING_RULES) {

@@ -604,6 +604,7 @@ module.exports = async function handler(req, res) {
           shadow_vertical_spread: r.shadowSpread,
           timeframe: tf,
           profit_target_pct: r.profitTargetPct,
+          dmi_volume_confirmation: trendContext?.dmi_volume_confirmation,
         }),
       }
       bufferedRows.push(historyRow)

@@ -22,6 +22,8 @@
 //
 // CommonJS only — lives in _lib, does NOT count as a Vercel function.
 
+const { calculateDmiVolumeConfirmation } = require('./dmiVolumeConfirmation')
+
 const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const REDIS_TTL_SECS = 20 * 60 * 60   // 20h — trend is a daily-close concept,
@@ -120,7 +122,10 @@ async function getTrendContext(ticker, asOfDate, historyFetcher, rateTracker) {
     if (!bars || !bars.length) return { direction: 'unknown', sma50: null, sma200: null }
     const closes = bars.map(b => b.close).filter(c => typeof c === 'number' && !isNaN(c))
     const lastPrice = closes[closes.length - 1]
-    const result = classifyTrend(closes, lastPrice)
+    const result = {
+      ...classifyTrend(closes, lastPrice),
+      dmi_volume_confirmation: calculateDmiVolumeConfirmation(bars),
+    }
     if (!asOfDate) await redisSet(redisKey, result, REDIS_TTL_SECS)
     return result
   } catch (e) {

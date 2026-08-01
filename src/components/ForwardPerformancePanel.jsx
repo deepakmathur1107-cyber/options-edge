@@ -34,7 +34,11 @@ const SHADOW_STRATEGY_COPY = {
   },
   defined_risk_spread_v2e: {
     name: 'Use a defined-risk spread',
-    description: 'Compares a vertical spread with the current single-option trade.',
+    description: 'Measures the actual hold-to-expiry return of the modeled vertical spread; single-option results are not used as proof.',
+  },
+  dmi_volume_confirmation_v1: {
+    name: 'Confirm direction with DMI and volume',
+    description: 'Swing-only shadow test using rising ADX, DI direction, volume-weighted momentum, and VZO. It does not change live recommendations.',
   },
 }
 
@@ -155,6 +159,11 @@ export default function ForwardPerformancePanel({ getToken, theme: C }) {
         <div style={{fontSize:10.5,color:C.dim,marginBottom:8,lineHeight:1.5}}>
           These ideas are measured in the background only. They do not change recommendations shown to users.
         </div>
+        {data.shadowMeasurementCoverage && (
+          <div style={{fontSize:10.5,color:C.dim,marginBottom:8,lineHeight:1.5}}>
+            Actual alternative-policy measurements: {data.shadowMeasurementCoverage.spreadSettlements} spread settlements · {data.shadowMeasurementCoverage.shortenedHoldResults} shortened-hold results.
+          </div>
+        )}
         {(data.shadowStrategies||[]).length === 0
           ? <div style={{fontSize:11,color:C.dim}}>Waiting for enough new signals to begin testing.</div>
           : data.shadowStrategies.map(row => {
@@ -163,14 +172,18 @@ export default function ForwardPerformancePanel({ getToken, theme: C }) {
               description: 'A background-only variation under evaluation.',
             }
             return (
-            <div key={row.strategy} style={{display:'grid',gridTemplateColumns:'minmax(220px,2fr) repeat(3,minmax(80px,1fr))',gap:10,fontSize:10.5,padding:'9px 0',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
+            <div key={row.strategy} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:10,fontSize:10.5,padding:'10px 0',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
               <div>
                 <div style={{color:C.text,fontWeight:700}}>{copy.name}</div>
                 <div style={{color:C.dim,fontSize:9.5,marginTop:2,lineHeight:1.4}}>{copy.description}</div>
               </div>
               <span style={{color:C.dim}}>{row.assigned} signals tested</span>
-              <span style={{color:C.dim}}>{pct(row.winRate)} win rate</span>
-              <span style={{color:C.dim}}>{row.expectancyR==null?'No result yet':`${num(row.expectancyR)}R average`}</span>
+              <span style={{color:C.dim}}>{row.resolved} measured · {row.cohortDays} day cohort{row.cohortDays===1?'':'s'}</span>
+              <span style={{color:C.dim}}>{row.resolved ? `${pct(row.winRate)} win rate · PF ${num(row.profitFactor)}` : 'Waiting for actual outcomes'}</span>
+              <span style={{color:C.dim}}>{row.measurementBasis==='ACTUAL_SPREAD_SETTLEMENT'
+                ? (row.averageReturnPct==null?'No spread result yet':`${num(row.averageReturnPct)}% average spread return`)
+                : (row.expectancyR==null?'No result yet':`${num(row.expectancyR)}R average`)}</span>
+              <span style={{color:row.evidenceStatus==='RESEARCH_EVIDENCE_AVAILABLE'?C.green:C.orange,fontWeight:700}}>{row.evidenceStatus.replaceAll('_',' ')}</span>
             </div>
           )})
         }

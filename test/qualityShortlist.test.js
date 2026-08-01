@@ -62,3 +62,12 @@ test('does not alter Qualified V1 or any trading decision fields', () => {
   assert.equal(row.strategy_qualified, true)
   assert.equal(row.strategy_version, 'swing_call_v1')
 })
+
+test('rejects a recently changed direction even when all market gates pass', () => {
+  const result = buildQualityShortlistDecision({
+    ...clean,
+    direction_stability: { status: 'DIRECTION_CHANGED', eligible: false },
+  })
+  assert.equal(result.eligible, false)
+  assert.ok(result.exclusions.includes('DIRECTION_CHANGED_RECENTLY'))
+})

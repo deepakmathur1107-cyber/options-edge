@@ -15,6 +15,7 @@ const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
 const { buildSizingForScanRow } = require('./_lib/userPositionSizing')
 const { attachQualityShortlist } = require('./_lib/qualityShortlist')
+const { attachDirectionStability } = require('./_lib/directionStability')
 
 let _sb = null
 function sb() {
@@ -154,6 +155,7 @@ module.exports = async function handler(req, res) {
       if (!data)  return res.status(200).json({ cached: false })
       await attachLifecycleSummaries(client, [data])
       attachPositionSizing([data], sizingPrefs)
+      await attachDirectionStability(client, [data])
       attachQualityShortlist([data])
       return res.status(200).json({ cached: true, result: data })
     }
@@ -190,6 +192,7 @@ module.exports = async function handler(req, res) {
 
       await attachLifecycleSummaries(client, data || [])
       attachPositionSizing(data || [], sizingPrefs)
+      await attachDirectionStability(client, data || [])
       attachQualityShortlist(data || [])
       return res.status(200).json({ cached: true, results: data || [], clusters })
     }
@@ -234,6 +237,7 @@ module.exports = async function handler(req, res) {
 
     await attachLifecycleSummaries(client, data)
     attachPositionSizing(data, sizingPrefs)
+    await attachDirectionStability(client, data)
     attachQualityShortlist(data)
     return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {

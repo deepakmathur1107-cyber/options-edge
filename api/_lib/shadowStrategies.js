@@ -7,6 +7,12 @@ function buildShadowStrategies(signal) {
   const spread = Number(signal.entry_spread_pct)
   const volume = Number(signal.volume)
   const openInterest = Number(signal.open_interest)
+  const dmiVolume = signal.dmi_volume_confirmation || null
+  const swingTimeframe = String(signal.timeframe || '').startsWith('Swing')
+  const dmiVolumeAligned = swingTimeframe && dmiVolume?.status === 'MEASURED' && (
+    (optionType === 'call' && dmiVolume.bullish_confirmed) ||
+    (optionType === 'put' && dmiVolume.bearish_confirmed)
+  )
   const trendAligned = (optionType === 'call' && trend === 'bullish') ||
     (optionType === 'put' && trend === 'bearish')
   const directionConfirmed = Number.isFinite(chgPct) &&
@@ -23,6 +29,7 @@ function buildShadowStrategies(signal) {
       liquidity_gate_v2c: liquid,
       combined_quality_v2d: trendAligned && directionConfirmed && liquid,
       defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
+      dmi_volume_confirmation_v1: dmiVolumeAligned,
     },
     exit_policies: {
       time_stop_v2f: {
@@ -48,6 +55,9 @@ function buildShadowStrategies(signal) {
       volume: Number.isFinite(volume) ? volume : null,
       open_interest: Number.isFinite(openInterest) ? openInterest : null,
       timeframe: signal.timeframe || null,
+      dmi_volume_confirmation: swingTimeframe
+        ? (dmiVolume || { status: 'UNAVAILABLE' })
+        : { status: 'NOT_APPLICABLE', reason: 'Quick requires completed 15-minute candles; daily data is not substituted.' },
     },
     shadow_only: true,
   }
