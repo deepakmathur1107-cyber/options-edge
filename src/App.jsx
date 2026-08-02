@@ -2407,7 +2407,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         positionSizing: row.position_sizing || null,
         lifecycleSummary: row.lifecycle_summary || null,
         qualityShortlist: row.quality_shortlist || null,
-        directionStability: row.direction_stability || null,
         grade: row.grade,
       })))
       // alertHistory rows are being fully replaced by index — any cached per-row
@@ -4331,16 +4330,6 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                                   {al.qualityShortlist.exclusions.map(reason=>reason.replaceAll('_',' ').toLowerCase()).join(' · ')}
                                 </div>}
                                 <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>{al.qualityShortlist.disclaimer}</div>
-                              </div>
-                            )}
-                            {al.directionStability && al.directionStability.eligible === false && (
-                              <div style={{background:`${C.red}10`,border:`1px solid ${C.red}45`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
-                                <div style={{fontSize:10.5,fontWeight:800,color:C.red,letterSpacing:0.7}}>
-                                  {al.directionStability.status === 'BOTH_SIDES_FAILED' ? '⚠ BOTH DIRECTIONS FAILED' : '⚠ DIRECTION CHANGED — WAIT'}
-                                </div>
-                                <div style={{fontSize:10.5,color:C.subtext,marginTop:4,lineHeight:1.5}}>
-                                  {al.directionStability.message}
-                                </div>
                               </div>
                             )}
                             {al.positionSizing?.configured&&(

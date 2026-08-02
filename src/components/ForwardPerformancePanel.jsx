@@ -40,6 +40,10 @@ const SHADOW_STRATEGY_COPY = {
     name: 'Confirm direction with DMI and volume',
     description: 'Swing-only shadow test using rising ADX, DI direction, volume-weighted momentum, and VZO. It does not change live recommendations.',
   },
+  direction_stability_v1: {
+    name: 'Avoid recent direction reversals',
+    description: 'Compares stable signals with same-ticker signals that recently changed between calls and puts. Research only; no subscriber recommendation is blocked.',
+  },
 }
 
 function gateTarget(gate, gates) {
@@ -183,6 +187,12 @@ export default function ForwardPerformancePanel({ getToken, theme: C }) {
               <span style={{color:C.dim}}>{row.measurementBasis==='ACTUAL_SPREAD_SETTLEMENT'
                 ? (row.averageReturnPct==null?'No spread result yet':`${num(row.averageReturnPct)}% average spread return`)
                 : (row.expectancyR==null?'No result yet':`${num(row.expectancyR)}R average`)}</span>
+              {row.measurementBasis!=='ACTUAL_SPREAD_SETTLEMENT' && (
+                <span style={{color:C.dim}}>{row.rejectedResolved
+                  ? `Rejected group: ${row.rejectedResolved} measured · ${num(row.rejectedExpectancyR)}R · PF ${num(row.rejectedProfitFactor)}`
+                  : 'Rejected comparison group not measured yet'}</span>
+              )}
+              {row.expectancyLiftR!=null && <span style={{color:row.expectancyLiftR>0?C.green:C.red,fontWeight:700}}>Selection lift: {row.expectancyLiftR>0?'+':''}{num(row.expectancyLiftR)}R</span>}
               <span style={{color:row.evidenceStatus==='RESEARCH_EVIDENCE_AVAILABLE'?C.green:C.orange,fontWeight:700}}>{row.evidenceStatus.replaceAll('_',' ')}</span>
             </div>
           )})

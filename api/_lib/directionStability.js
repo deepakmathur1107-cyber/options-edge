@@ -1,4 +1,3 @@
-const LOOKBACK_HOURS = 8
 const RECENT_FLIP_MINUTES = 90
 
 function sideOf(row = {}) {
@@ -68,35 +67,4 @@ function buildDirectionStability(current, observations = [], options = {}) {
   }
 }
 
-async function attachDirectionStability(client, rows) {
-  if (!rows || !rows.length) return rows
-  const cutoff = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000).toISOString()
-  const groups = new Map()
-  for (const row of rows) {
-    if (!row.ticker || !row.timeframe) continue
-    if (!groups.has(row.timeframe)) groups.set(row.timeframe, new Set())
-    groups.get(row.timeframe).add(row.ticker)
-  }
-
-  const observations = []
-  await Promise.all([...groups.entries()].map(async ([timeframe, tickers]) => {
-    const { data, error } = await client
-      .from('signal_history')
-      .select('ticker,timeframe,option_type,trade_type,scanned_at,created_at,signal_lifecycle_id,outcome')
-      .eq('timeframe', timeframe)
-      .in('ticker', [...tickers])
-      .gte('scanned_at', cutoff)
-      .order('scanned_at', { ascending: false })
-      .limit(1000)
-    if (error) {
-      console.error('[directionStability] history fetch failed (non-fatal):', error.message)
-      return
-    }
-    observations.push(...(data || []))
-  }))
-
-  for (const row of rows) row.direction_stability = buildDirectionStability(row, observations)
-  return rows
-}
-
-module.exports = { LOOKBACK_HOURS, RECENT_FLIP_MINUTES, buildDirectionStability, attachDirectionStability }
+module.exports = { RECENT_FLIP_MINUTES, buildDirectionStability }

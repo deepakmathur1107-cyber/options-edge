@@ -23,6 +23,7 @@ const { getRecentNewsSignal } = require('../_lib/newsSignal')
 const { buildQualificationRecord } = require('../_lib/strategyClassification')
 const { classifyOptionMarketSession } = require('../_lib/marketCalendar')
 const { buildShadowStrategies } = require('../_lib/shadowStrategies')
+const { buildDirectionStability, RECENT_FLIP_MINUTES } = require('../_lib/directionStability')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -312,6 +313,28 @@ module.exports = async function handler(req, res) {
   } catch (e) { console.error('[cron/scan] batch quote fetch failed:', e.message) }
 
   const bufferedRows = []
+
+  // Forward-only research snapshot for the direction-stability hypothesis.
+  // This never changes scan_results, score, warnings, shortlist eligibility,
+  // or subscriber UI. It is stored inside shadow_strategy_assignments so the
+  // accepted (stable) and rejected (recently flipped) cohorts can be compared
+  // after the lifecycle-primary observations resolve.
+  let recentDirectionRows = []
+  try {
+    const cutoff = new Date(scanInstant.getTime() - (RECENT_FLIP_MINUTES + 15) * 60 * 1000).toISOString()
+    const { data, error } = await client
+      .from('signal_history')
+      .select('ticker,timeframe,option_type,trade_type,scanned_at,signal_lifecycle_id,outcome')
+      .eq('timeframe', tf)
+      .eq('is_lifecycle_primary', true)
+      .gte('scanned_at', cutoff)
+      .order('scanned_at', { ascending: false })
+      .limit(2000)
+    if (error) console.error('[cron/scan] direction-stability shadow lookup failed (non-fatal):', error.message)
+    else recentDirectionRows = data || []
+  } catch (e) {
+    console.error('[cron/scan] direction-stability shadow lookup threw (non-fatal):', e.message)
+  }
 
   // Incumbent-side lookup for hysteresis (pickBetterSide) — one query for
   // the whole run, not one per ticker. Confirmed live need: GOOGL Quick
@@ -606,6 +629,13 @@ module.exports = async function handler(req, res) {
           profit_target_pct: r.profitTargetPct,
           dmi_volume_confirmation: trendContext?.dmi_volume_confirmation,
         }),
+      }
+      const directionStability = buildDirectionStability(historyRow, recentDirectionRows)
+      historyRow.shadow_strategy_assignments.assignments.direction_stability_v1 = directionStability.eligible === true
+      historyRow.shadow_strategy_assignments.inputs.direction_stability = {
+        ...directionStability,
+        shadow_only: true,
+        lookback_minutes: RECENT_FLIP_MINUTES,
       }
       bufferedRows.push(historyRow)
 
