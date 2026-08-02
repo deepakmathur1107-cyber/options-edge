@@ -7,10 +7,38 @@ const BASE=(process.env.TRADIER_MODE||'production')==='sandbox'?'https://sandbox
 const HEADERS={Authorization:`Bearer ${process.env.TRADIER_TOKEN||''}`,Accept:'application/json'}
 const asArray=value=>!value?[]:Array.isArray(value)?value:[value]
 const nyDate=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
-async function tradier(path) {
-  const response=await fetch(`${BASE}${path}`,{headers:HEADERS})
-  if(!response.ok) throw new Error(`Tradier ${response.status}`)
-  return response.json()
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))
+const withTimeout=(promise,ms,label)=>Promise.race([
+  promise,
+  new Promise((_,reject)=>setTimeout(()=>reject(new Error(`${label} timed out after ${ms}ms`)),ms)),
+])
+async function tradier(path,maxAttempts=2) {
+  let lastError
+  for(let attempt=1;attempt<=maxAttempts;attempt++) {
+    try {
+      const response=await withTimeout(fetch(`${BASE}${path}`,{headers:HEADERS}),20000,'Tradier request')
+      if(!response.ok) throw new Error(`Tradier ${response.status}`)
+      return await response.json()
+    } catch(error) {
+      lastError=error
+      if(attempt<maxAttempts) await wait(400*attempt)
+    }
+  }
+  throw lastError
+}
+async function collectInBatches(candidates,worker,batchSize=3) {
+  const rows=[],failures=[]
+  for(let index=0;index<candidates.length;index+=batchSize) {
+    const settled=await Promise.all(candidates.slice(index,index+batchSize).map(async candidate=>{
+      try { return {row:await worker(candidate)} }
+      catch(error) { return {ticker:candidate.ticker,error:error.message||String(error)} }
+    }))
+    for(const result of settled) {
+      if(result.row) rows.push(result.row)
+      else if(result.error) failures.push({ticker:result.ticker,error:result.error})
+    }
+  }
+  return {rows,failures}
 }
 
 module.exports=async function handler(req,res) {
@@ -36,17 +64,16 @@ module.exports=async function handler(req,res) {
     const spy=quotes.get('SPY'),qqq=quotes.get('QQQ'),spyPrice=Number(spy?.last||spy?.close),qqqChange=Number(qqq?.change_percentage),spyChange=Number(spy?.change_percentage)
     const regime=spyChange>0&&qqqChange>0?'RISK ON':spyChange<0&&qqqChange<0?'RISK OFF':'MIXED'
     const start=new Date(Date.now()-240*864e5).toISOString().slice(0,10),end=new Date().toISOString().slice(0,10)
-    const rows=[]
-    for(let index=0;index<candidates.length;index+=3) {
-      const group=candidates.slice(index,index+3)
-      const results=await Promise.all(group.map(async candidate=>{
+    const {rows,failures}=await collectInBatches(candidates,async candidate=>{
         const quote=quotes.get(candidate.ticker),price=Number(quote?.last||quote?.close)
         if(!price) return null
         const [history,fund]=await Promise.all([
           tradier(`/markets/history?symbol=${candidate.ticker}&interval=daily&start=${start}&end=${end}`),
-          getFundamentals(candidate.ticker),
+          withTimeout(getFundamentals(candidate.ticker),12000,`Fundamentals ${candidate.ticker}`).catch(()=>null),
         ])
-        const technical=analyzeStockBars(asArray(history?.history?.day)),health=analyzeFundamentalHealth(fund),healthPassed=['HEALTHY','ACCEPTABLE'].includes(health.status)
+        const bars=asArray(history?.history?.day)
+        if(bars.length<30) throw new Error(`Insufficient price history (${bars.length} bars)`)
+        const technical=analyzeStockBars(bars),health=analyzeFundamentalHealth(fund),healthPassed=['HEALTHY','ACCEPTABLE'].includes(health.status)
         const rating=health.status==='FUNDAMENTAL_RISK'?'AVOID':health.status==='EVENT_RISK'?'HOLD_WAIT':!healthPassed?'NOT_RATED':technical.status==='READY'?'BUY_SETUP':'HOLD_WAIT'
         const plan=healthPassed?buildPlan(price,technical):null
         const technicalScore=technical.technicalScore,edgeScore=technicalScore==null?null:Math.round((technicalScore+Number(candidate.score))/2)
@@ -56,14 +83,15 @@ module.exports=async function handler(req,res) {
           edge_score:edgeScore,technical_score:technicalScore,fundamental_score:health.score,
           entry_low:plan?.entryLow||null,entry_high:plan?.entryHigh||null,stop_price:plan?.stop||null,target_price:plan?.target||null,
           inputs:{healthCoverage:health.coverage,scannerScore:Number(candidate.score)},updated_at:new Date().toISOString()}
-      }))
-      rows.push(...results.filter(Boolean))
-    }
+    })
+    if(!rows.length) return res.status(502).json({error:'No stock ratings could be captured.',candidates:candidates.length,failures})
     const {error:writeError}=await client.from('stock_rating_history').upsert(rows,{onConflict:'rating_date,ticker,algorithm_version',ignoreDuplicates:true})
     if(writeError) return res.status(500).json({error:writeError.message})
-    return res.status(200).json({captured:rows.length,tradierCalls:1+candidates.length,version:VERSION})
+    return res.status(200).json({captured:rows.length,candidates:candidates.length,failed:failures.length,failures,tradierCalls:1+candidates.length,version:VERSION})
   } catch(error) {
     console.error('[capture-stock-ratings]',error.message)
     return res.status(502).json({error:error.message})
   }
 }
+
+module.exports._test={withTimeout,collectInBatches}
