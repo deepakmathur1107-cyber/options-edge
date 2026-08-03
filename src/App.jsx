@@ -3081,6 +3081,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .oe-page-title{font-size:clamp(26px,7.2vw,34px)!important}
           .oe-page-subtitle{font-size:clamp(13px,3.45vw,15px)!important}
           .oe-page button,.oe-page input,.oe-page select,.oe-page textarea{min-height:44px}
+          .oe-price-bar{min-width:0;overflow:hidden}
+          .oe-price-tile{min-width:0!important;padding:6px clamp(5px,2vw,10px)!important;gap:clamp(4px,1.5vw,7px)!important;justify-content:center}
+          .oe-price-tile span{white-space:nowrap}
+          .oe-price-tile span:nth-child(1){font-size:12px!important}
+          .oe-price-tile span:nth-last-child(1){font-size:clamp(11px,3vw,13px)!important}
+          .oe-price-refresh{padding:0 8px!important;min-width:36px!important}
         }
         @media(max-width:374px){
           .oe-main-content{padding-left:12px!important;padding-right:12px!important}
@@ -3105,12 +3111,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           cards already show the same SPX/NDX data; still shown on every other
           tab since it's their only price reference. */}
       {tab!=='dash' && (
-      <div style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:C.bgAlt}}>
+      <div className="oe-price-bar" style={{display:'flex',alignItems:'stretch',borderTop:`1px solid ${C.border}`,background:C.bgAlt}}>
         {[
           {sym:esBar?.label||'SPX',data:esBar,color:esBar?.chgPct>=0?C.green:C.red},
           {sym:nqBar?.label||'NDX',data:nqBar,color:nqBar?.chgPct>=0?C.green:C.red},
         ].map(({sym,data,color},i)=>(
-          <div key={sym} style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
+          <div key={sym} className="oe-price-tile" style={{flex:1,padding:'6px 14px',display:'flex',alignItems:'center',gap:9,borderRight:i===0?`1px solid ${C.border}`:'none'}}>
             <span style={{fontFamily:"'Fraunces',serif",fontSize:14,letterSpacing:0.3,color:C.subtext}}>{sym}</span>
             {data?.session==='pre'   && <span style={{fontSize:8,fontWeight:700,color:C.orange,background:`${C.orange}20`,border:`1px solid ${C.orange}40`,borderRadius:2,padding:'1px 4px',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>PRE</span>}
             {data?.session==='after' && <span style={{fontSize:8,fontWeight:700,color:C.blue,background:`${C.blue}20`,border:`1px solid ${C.blue}40`,borderRadius:2,padding:'1px 4px',fontFamily:"'IBM Plex Mono',monospace",letterSpacing:.5}}>AH</span>}
@@ -3134,7 +3140,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             )}
           </div>
         ))}
-        <button className="hv" onClick={fetchPriceBar} disabled={barLoading} style={{padding:'0 12px',background:'transparent',border:'none',borderLeft:`1px solid ${C.border}`,color:barLoading?C.dim:C.blue,fontSize:13,cursor:'pointer',minWidth:36}} title="Refresh prices">
+        <button className="hv oe-price-refresh" onClick={fetchPriceBar} disabled={barLoading} style={{padding:'0 12px',background:'transparent',border:'none',borderLeft:`1px solid ${C.border}`,color:barLoading?C.dim:C.blue,fontSize:13,cursor:'pointer',minWidth:36}} title="Refresh prices">
           {barLoading?<span className="pulse">·</span>:'↺'}
         </button>
       </div>
