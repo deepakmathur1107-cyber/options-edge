@@ -377,7 +377,18 @@ export default function StockWorkspace({ C, getToken }) {
       .stock-workspace section{border-radius:14px!important}.stock-workspace button,.stock-workspace input{min-height:38px}.stock-workspace button{transition:background-color .18s ease,border-color .18s ease,transform .18s ease}.stock-workspace button:hover:not(:disabled){filter:brightness(1.08)}.stock-workspace button:focus-visible,.stock-workspace input:focus-visible{outline:2px solid ${C.blue};outline-offset:2px}
       @media(max-width:1180px){.stock-workspace{width:calc(100vw - 32px)}.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
       @media(max-width:900px){.stock-workspace{width:100%;margin-left:0;transform:none}.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-      @media(max-width:560px){.stock-workspace{margin:0 -12px;width:auto}.stock-page-head{padding-left:12px;padding-right:12px}.stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}.stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}.stock-chart-empty{height:210px!important}.stock-metrics,.stock-track-grid{grid-template-columns:1fr 1fr}.stock-workspace .stock-metric{min-height:60px;padding:12px!important}}
+      @media(max-width:560px){
+        .stock-workspace{margin:0 -12px;width:auto}
+        .stock-page-head{padding-left:12px;padding-right:12px}
+        .stock-workspace [style*="font-size: 9px"]{font-size:12px!important;line-height:1.5}
+        .stock-workspace [style*="font-size: 10px"]{font-size:12px!important;line-height:1.5}
+        .stock-workspace button,.stock-workspace input,.stock-workspace select{min-height:44px}
+        .stock-workspace button{padding-top:9px!important;padding-bottom:9px!important}
+        .stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}
+        .stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+        .stock-chart-empty{height:210px!important}.stock-metrics,.stock-track-grid{grid-template-columns:1fr 1fr}
+        .stock-workspace .stock-metric{min-height:66px;padding:12px!important}
+      }
     `}</style>
     <div className="stock-page-head" style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:14,marginBottom:22,flexWrap:'wrap'}}>
       <div><div style={{fontSize:10,color:C.green,letterSpacing:2,marginBottom:8}}>STOCK INTELLIGENCE</div><h1 style={{fontFamily:"'Inter',sans-serif",fontSize:'clamp(26px,3vw,38px)',lineHeight:1.05,margin:0,color:C.text}}>Find quality. Wait for price.</h1><p style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,lineHeight:1.6,margin:'9px 0 0',maxWidth:680}}>Research strong companies, understand the setup, then rehearse a rules-based entry and exit with paper money.</p></div>

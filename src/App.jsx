@@ -3064,7 +3064,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         .scan-page .alert-table-header{position:sticky;top:0;z-index:2;background:${C.bgDeep}}
         .tools-page>div{max-width:1180px;margin:0 auto;width:100%}
         @media(max-width:900px){.oe-main-content{max-width:100%!important}.oe-page-head{align-items:flex-start}.oe-page-title{font-size:28px}}
-        @media(max-width:639px){.oe-page-head{padding:0 2px;margin-bottom:18px}.oe-page-subtitle{font-size:13px}.oe-page [style*="letter-spacing: 1.5px"]{letter-spacing:.7px!important}}
+        @media(max-width:639px){
+          .oe-page-head{padding:0 2px;margin-bottom:18px}.oe-page-subtitle{font-size:13px}.oe-page [style*="letter-spacing: 1.5px"]{letter-spacing:.7px!important}
+          .oe-page button,.oe-page input,.oe-page select,.oe-page textarea{min-height:44px}
+          .scan-page button{padding-top:9px!important;padding-bottom:9px!important}
+          .tools-settings-panel{display:flex;flex-direction:column}
+          .tools-admin-integrations{order:99;margin-top:18px!important}
+          .tools-admin-integrations:before{content:'ADMIN TOOLS';display:block;font-size:11px;font-weight:700;letter-spacing:1.2px;color:${C.dim};margin-bottom:10px}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn}/>
@@ -4877,12 +4884,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
               {/* ── SETTINGS ── */}
               {toolsTab==='settings'&&(
-                <div className="si">
+                <div className="si tools-settings-panel">
 
                   {/* ═══════════════════════════════════════════════
                       ADMIN-ONLY SECTION
                   ═══════════════════════════════════════════════ */}
-                  {isAdmin&&(<div style={{border:`1px solid ${C.orange}35`,background:`${C.orange}08`,borderRadius:10,padding:12,marginBottom:16}}>
+                  {isAdmin&&(<div className="tools-admin-integrations" style={{border:`1px solid ${C.orange}35`,background:`${C.orange}08`,borderRadius:10,padding:12,marginBottom:16}}>
                     <div style={{fontSize:12,fontWeight:700,color:C.orange,letterSpacing:1,marginBottom:10}}>ADMIN INTEGRATIONS</div>
 
                     {/* Feedback Viewer */}

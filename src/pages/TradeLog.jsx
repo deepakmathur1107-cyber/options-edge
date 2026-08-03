@@ -488,6 +488,7 @@ export default function TradeLog(props) {
         .trade-log-page [style*="font-size: 12px"],.trade-log-page [style*="fontSize:12"]{font-size:13px!important}
         .trade-log-page button,.trade-log-page input,.trade-log-page select,.trade-log-page textarea{min-height:38px}
         .trade-log-shell{width:100%;max-width:min(96vw,1680px)!important;padding:28px clamp(16px,2vw,32px)!important}
+        .tl-scroll-hint{display:none}
         @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
         /* ── Stat tile mobile layout — real phone screenshot (2026-06-29)
             showed these as tall, mostly-empty cards: a single number sitting
@@ -502,10 +503,15 @@ export default function TradeLog(props) {
             information, far less wasted height, so the actual trade list
             below isn't pushed off the first screen by five tall stat cards. */
         @media(max-width:480px){
+          .trade-log-shell{padding-top:22px!important}
+          .trade-log-title{font-size:30px!important;line-height:1.05!important}
+          .trade-log-page button,.trade-log-page input,.trade-log-page select,.trade-log-page textarea{min-height:44px}
           .tl-stat-card{padding:10px 14px!important;display:flex!important;align-items:center!important;justify-content:space-between!important}
           .tl-stat-label{margin-bottom:0!important;font-size:11px!important}
           .tl-stat-value{font-size:20px!important}
           .tl-perf-grid{grid-template-columns:repeat(2,1fr)!important}
+          .tl-scroll-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;background:${C.bgAlt};border-bottom:1px solid ${C.border};font:600 12px/1.4 'Inter',sans-serif;color:${C.dim}}
+          .tl-table-scroll{scrollbar-width:thin;-webkit-overflow-scrolling:touch}
         }
         .slide-down{animation:slideDown .2s ease}
       `}</style>
@@ -521,7 +527,7 @@ export default function TradeLog(props) {
 
         {/* ── Page header ── */}
         <div style={{marginBottom:28}}>
-          <h1 style={{
+          <h1 className="trade-log-title" style={{
             fontFamily:"'Fraunces',serif",
             fontSize:36, letterSpacing:0.3, color:C.green,
             margin:0, lineHeight:1,
@@ -854,7 +860,8 @@ export default function TradeLog(props) {
               }}>
               {/* Horizontal scroll wrapper — table is 750px+ of fixed columns;
                   below that viewport width, scroll instead of clipping P&L/Exit. */}
-              <div style={{overflowX:'auto'}}>
+              <div className="tl-scroll-hint"><span>Trade details</span><span>Swipe to see P&amp;L and actions →</span></div>
+              <div className="tl-table-scroll" style={{overflowX:'auto'}}>
                 {/* Header */}
                 <div style={{
                   display:'grid',
