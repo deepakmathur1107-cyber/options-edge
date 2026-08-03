@@ -90,7 +90,7 @@ function PriceChart({ bars, symbol, C, loading }) {
       <div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{symbol} price history</strong><div style={{fontSize:9,color:C.dim,marginTop:4}}>1 DAY BARS · 2 YEAR DURATION · adjusted market history</div></div>
       <div style={{textAlign:'right'}}><div style={{fontSize:20,fontWeight:800,color:positive?C.green:C.red}}>{positive?'+':''}{model.changePct.toFixed(1)}%</div><div style={{fontSize:9,color:C.dim}}>2-YEAR PRICE CHANGE</div></div>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:7,marginBottom:10}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:7,marginBottom:10}}>
       <Metric label="LATEST CLOSE" value={`$${model.last.close.toFixed(2)}`} C={C}/>
       <Metric label="2Y HIGH" value={`$${model.max.toFixed(2)}`} color={C.green} C={C}/>
       <Metric label="2Y LOW" value={`$${model.min.toFixed(2)}`} color={C.orange} C={C}/>
