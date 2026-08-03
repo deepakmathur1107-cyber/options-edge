@@ -368,18 +368,18 @@ export default function StockWorkspace({ C, getToken }) {
     finally { setDetailLoading(false) }
   }
 
-  return <div className="si stock-workspace">
+  return <div className="stock-workspace">
     <style>{`
-      .stock-workspace{width:min(1680px,calc(100vw - 48px));margin-left:50%;transform:translateX(-50%);font-family:'Inter',sans-serif}
+      .stock-workspace{width:100%;max-width:100%;min-width:0;margin:0;font-family:'Inter',sans-serif}
       .stock-page-head{padding:6px 2px 2px}.stock-hero{display:grid;grid-template-columns:minmax(0,2fr) minmax(300px,1fr);gap:20px}.stock-body{display:grid;grid-template-columns:minmax(350px,380px) minmax(0,1fr);gap:20px;align-items:start}.stock-candidate-rail{position:sticky;top:78px}.stock-detail-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(330px,.85fr);gap:18px}.stock-metrics,.stock-track-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
       .stock-workspace [style*="font-size: 9px"]{font-size:11px!important;line-height:1.45}.stock-workspace [style*="font-size: 10px"]{font-size:12px!important;line-height:1.5}.stock-workspace [style*="font-size: 11px"]{font-size:13px!important;line-height:1.55}.stock-workspace [style*="font-size: 12px"]{font-size:14px!important;line-height:1.55}
       .stock-workspace .stock-metric{padding:14px 15px!important;border-radius:10px!important;min-height:66px}.stock-workspace .stock-metric>div:first-child{font-size:11px!important;letter-spacing:.75px!important}.stock-workspace .stock-metric>div:last-child{font-size:16px!important;line-height:1.3!important}
       .stock-workspace section{border-radius:14px!important}.stock-workspace button,.stock-workspace input{min-height:38px}.stock-workspace button{transition:background-color .18s ease,border-color .18s ease,transform .18s ease}.stock-workspace button:hover:not(:disabled){filter:brightness(1.08)}.stock-workspace button:focus-visible,.stock-workspace input:focus-visible{outline:2px solid ${C.blue};outline-offset:2px}
-      @media(max-width:1180px){.stock-workspace{width:calc(100vw - 32px)}.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
-      @media(max-width:900px){.stock-workspace{width:100%;margin-left:0;transform:none}.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:1180px){.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
+      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:560px){
-        .stock-workspace{margin:0 -12px;width:auto}
-        .stock-page-head{padding-left:12px;padding-right:12px}
+        .stock-workspace{margin:0;width:100%;max-width:100%;min-width:0}
+        .stock-page-head{padding-left:0;padding-right:0}
         .stock-workspace [style*="font-size: 9px"]{font-size:12px!important;line-height:1.5}
         .stock-workspace [style*="font-size: 10px"]{font-size:12px!important;line-height:1.5}
         .stock-workspace button,.stock-workspace input,.stock-workspace select{min-height:44px}
