@@ -204,7 +204,8 @@ export default function StockWorkspace({ C, getToken }) {
       if(!cancelled) setTechnicals(previous=>({...previous,...next}))
       if(!cancelled) setBatchLoading(false)
     }
-    if(topStocks.length&&topSource.kind!=='nightly') loadBatchTechnicals()
+    if(topSource.kind==='nightly') setBatchLoading(false)
+    else if(topStocks.length) loadBatchTechnicals()
     return()=>{cancelled=true}
   },[topStocks,getToken,topSource.kind])
 
@@ -293,8 +294,8 @@ export default function StockWorkspace({ C, getToken }) {
     const trend=analyzed?(t.trendUp?'20D > 50D uptrend':'Bullish alignment absent'):'Analysis pending'
     const momentum=Number.isFinite(t?.rsi)?Math.min(99,Math.max(35,Math.round(50+(t.rsi-50)*1.4))):null
     const technicalScore=t?.technicalScore??null
-    const score=technicalScore==null?null:topSource.kind==='live'&&seed.scannerScore?Math.round((technicalScore+seed.scannerScore)/2):technicalScore
     const health=fundamentals[seed.symbol]?analyzeFundamentalHealth(fundamentals[seed.symbol]):seed.nightly?.health||analyzeFundamentalHealth(null)
+    const score=technicalScore==null?null:topSource.kind==='nightly'&&health.score!=null?Math.round(technicalScore*.55+health.score*.45):topSource.kind==='live'&&seed.scannerScore?Math.round((technicalScore+seed.scannerScore)/2):technicalScore
     const technicalStage=!t?'ANALYZING':t.status==='INSUFFICIENT_DATA'?'INSUFFICIENT DATA':t.status
     const healthPassed=health.status==='HEALTHY'||health.status==='ACCEPTABLE'
     const stage=technicalStage==='ANALYZING'||technicalStage==='INSUFFICIENT DATA'?technicalStage
