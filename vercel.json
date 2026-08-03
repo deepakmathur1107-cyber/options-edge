@@ -55,6 +55,10 @@
     {
       "path": "/api/cron/capture-stock-ratings",
       "schedule": "10 23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/build-stock-universe",
+      "schedule": "*/10 23,0-4 * * 1-5"
     }
   ],
   "functions": {

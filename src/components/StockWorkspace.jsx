@@ -23,6 +23,14 @@ const makeSeed = (symbol, scan={}) => {
     quality:75,growth:75,value:65,momentum:70,
   }
 }
+const makeNightlySeed = row => ({
+  ...makeSeed(row.ticker,{score:row.edge_score,sector:row.sector}),
+  name:row.company_name||row.ticker,price:Number(row.price)||0,scannerScore:Number(row.edge_score)||65,
+  nightly:{
+    technical:{status:row.technical_state,setup:row.setup,technicalScore:Number(row.technical_score),support:Number(row.support),resistance:Number(row.resistance),sma20:Number(row.sma_20),sma50:Number(row.sma_50),volumeRatio:Number(row.volume_ratio),reason:row.analysis_reason||row.setup},
+    health:{status:row.fundamental_state,label:row.fundamental_state,score:Number(row.fundamental_score),coverage:Number(row.fundamental_coverage),reasons:[`Nightly fundamental gate: ${row.fundamental_state}.`],warnings:[],metrics:{pe:row.pe_ratio==null?null:Number(row.pe_ratio),marketCap:row.market_cap==null?null:Number(row.market_cap)},earnings_date:row.earnings_date},
+  },
+})
 
 const stageColor = (stage, C) => /QUALITY \+ READY|HEALTHY|ACCEPTABLE/.test(stage) ? C.green : /RISK/.test(stage) ? C.red : /WAIT/.test(stage) ? C.orange : C.dim
 const plainDecision = stage => stage==='QUALITY + READY'?'BUY SETUP'
@@ -142,6 +150,17 @@ export default function StockWorkspace({ C, getToken }) {
     const loadTopTen=async()=>{
       try {
         const headers=await authHeaders(getToken)
+        const universeRes=await fetch('/api/stock-universe?limit=50',{headers})
+        const universeData=await universeRes.json()
+        if(universeRes.ok&&Array.isArray(universeData.results)&&universeData.results.length) {
+          const nightly=universeData.results.map(makeNightlySeed)
+          if(!cancelled) {
+            setTopStocks(nightly)
+            setTopSource({kind:'nightly',label:`Quality universe · ${universeData.total} eligible · analyzed ${universeData.snapshotDate}`})
+            setSelected(current=>nightly.some(item=>item.symbol===current)?current:nightly[0].symbol)
+          }
+          return
+        }
         const res=await fetch('/api/scan-cache?minScore=60',{headers})
         const data=await res.json()
         if(!res.ok||!Array.isArray(data.results)) return
@@ -185,9 +204,9 @@ export default function StockWorkspace({ C, getToken }) {
       if(!cancelled) setTechnicals(previous=>({...previous,...next}))
       if(!cancelled) setBatchLoading(false)
     }
-    if(topStocks.length) loadBatchTechnicals()
+    if(topStocks.length&&topSource.kind!=='nightly') loadBatchTechnicals()
     return()=>{cancelled=true}
-  },[topStocks,getToken])
+  },[topStocks,getToken,topSource.kind])
 
   useEffect(()=>{
     let cancelled=false
@@ -207,9 +226,9 @@ export default function StockWorkspace({ C, getToken }) {
       }
       if(!cancelled) setFundamentals(previous=>({...previous,...next}))
     }
-    if(topStocks.length) loadBatchFundamentals()
+    if(topStocks.length&&topSource.kind!=='nightly') loadBatchFundamentals()
     return()=>{cancelled=true}
-  },[topStocks,getToken])
+  },[topStocks,getToken,topSource.kind])
 
   const fetchQuotes = useCallback(async()=>{
     setDataError('')
@@ -265,7 +284,7 @@ export default function StockWorkspace({ C, getToken }) {
 
   const enriched = useMemo(()=>universe.map(seed=>{
     const q=quotes[seed.symbol]
-    const t=technicals[seed.symbol]
+    const t=technicals[seed.symbol]||seed.nightly?.technical
     const price=Number(q?.last ?? seed.price)
     const change=Number(q?.change_percentage ?? seed.change)
     const analyzed=t&&t.status!=='INSUFFICIENT_DATA'
@@ -275,7 +294,7 @@ export default function StockWorkspace({ C, getToken }) {
     const momentum=Number.isFinite(t?.rsi)?Math.min(99,Math.max(35,Math.round(50+(t.rsi-50)*1.4))):null
     const technicalScore=t?.technicalScore??null
     const score=technicalScore==null?null:topSource.kind==='live'&&seed.scannerScore?Math.round((technicalScore+seed.scannerScore)/2):technicalScore
-    const health=analyzeFundamentalHealth(fundamentals[seed.symbol])
+    const health=fundamentals[seed.symbol]?analyzeFundamentalHealth(fundamentals[seed.symbol]):seed.nightly?.health||analyzeFundamentalHealth(null)
     const technicalStage=!t?'ANALYZING':t.status==='INSUFFICIENT_DATA'?'INSUFFICIENT DATA':t.status
     const healthPassed=health.status==='HEALTHY'||health.status==='ACCEPTABLE'
     const stage=technicalStage==='ANALYZING'||technicalStage==='INSUFFICIENT DATA'?technicalStage
@@ -425,7 +444,7 @@ export default function StockWorkspace({ C, getToken }) {
             <button type="submit" disabled={detailLoading||!tickerInput.trim()} style={{border:'none',background:C.green,color:'#1c1916',padding:'0 13px',borderRadius:7,fontSize:10,fontWeight:800,cursor:'pointer',opacity:(detailLoading||!tickerInput.trim())?.55:1}}>ANALYZE →</button>
           </form>
           {tickerError&&<div style={{fontSize:9,color:C.red,marginTop:6,lineHeight:1.4}}>{tickerError}</div>}
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'18px 0 10px'}}><div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>Options Edge Top 10</strong><div style={{fontSize:9,color:topSource.kind==='live'?C.green:C.orange,marginTop:3}}>{topSource.label}{batchLoading?' · analyzing all charts…':''}</div></div><span style={{fontSize:9,color:C.dim}}>{topStocks.length} STOCKS</span></div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'18px 0 10px'}}><div><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{topSource.kind==='nightly'?'Options Edge Quality Universe':'Options Edge Top 10'}</strong><div style={{fontSize:9,color:['live','nightly'].includes(topSource.kind)?C.green:C.orange,marginTop:3}}>{topSource.label}{batchLoading?' · analyzing all charts…':''}</div></div><span style={{fontSize:9,color:C.dim}}>{topStocks.length} STOCKS</span></div>
           <input aria-label="Filter top stocks" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter this list…" style={{width:'100%',background:C.inputBg,border:`1px solid ${C.border}`,color:C.text,padding:'9px 10px',borderRadius:7,fontSize:11}} />
           <div style={{display:'flex',gap:6,marginTop:9,flexWrap:'wrap'}}>{['ALL','QUALITY + READY','QUALITY + WAIT','BLOCKED'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f==='QUALITY + READY'?'BUY SETUPS':f==='QUALITY + WAIT'?'HOLD / WAIT':f}</button>)}</div>
           <div style={{marginTop:10,padding:'9px 10px',border:`1px solid ${C.border}`,borderRadius:7,background:C.cardAlt,fontSize:9,color:C.subtext,lineHeight:1.6}}><strong style={{color:C.green}}>BUY SETUP</strong> = healthy company and valid entry · <strong style={{color:C.orange}}>HOLD / WAIT</strong> = company may be healthy, but entry is weak or an event is near · <strong style={{color:C.red}}>AVOID</strong> = fundamental checks failed · <strong style={{color:C.dim}}>NOT RATED</strong> = insufficient data</div>
