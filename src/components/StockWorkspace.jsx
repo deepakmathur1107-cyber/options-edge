@@ -376,7 +376,7 @@ export default function StockWorkspace({ C, getToken }) {
       .stock-workspace .stock-metric{padding:14px 15px!important;border-radius:10px!important;min-height:66px}.stock-workspace .stock-metric>div:first-child{font-size:11px!important;letter-spacing:.75px!important}.stock-workspace .stock-metric>div:last-child{font-size:16px!important;line-height:1.3!important}
       .stock-workspace section{border-radius:14px!important}.stock-workspace button,.stock-workspace input{min-height:38px}.stock-workspace button{transition:background-color .18s ease,border-color .18s ease,transform .18s ease}.stock-workspace button:hover:not(:disabled){filter:brightness(1.08)}.stock-workspace button:focus-visible,.stock-workspace input:focus-visible{outline:2px solid ${C.blue};outline-offset:2px}
       @media(max-width:1180px){.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
-      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stock-candidate-rail>div:last-child{max-height:none!important;overflow-y:visible!important}}
       @media(max-width:560px){
         .stock-workspace{margin:0;width:100%;max-width:100%;min-width:0}
         .stock-page-head{padding-left:0;padding-right:0}
@@ -384,6 +384,12 @@ export default function StockWorkspace({ C, getToken }) {
         .stock-workspace [style*="font-size: 10px"]{font-size:12px!important;line-height:1.5}
         .stock-workspace button,.stock-workspace input,.stock-workspace select{min-height:44px}
         .stock-workspace button{padding-top:9px!important;padding-bottom:9px!important}
+        .stock-body{gap:14px}
+        .stock-candidate-rail>div:last-child{max-height:none!important;overflow:visible!important}
+        .stock-candidate-rail>div:last-child>button{padding:10px 12px!important;gap:8px!important;line-height:1.35!important}
+        .stock-candidate-rail>div:last-child>button [style*="font-size: 9px"]{font-size:10px!important;line-height:1.35!important}
+        .stock-candidate-rail>div:last-child>button [style*="font-size: 10px"]{font-size:11px!important;line-height:1.4!important}
+        .stock-candidate-rail>div:last-child>button>div:first-child>div:nth-child(2){margin-top:2px!important;margin-bottom:4px!important}
         .stock-chart-head{align-items:flex-start!important}.stock-chart-head>div:last-child{text-align:left!important}
         .stock-chart-scroll svg{min-width:560px}.stock-chart-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch}
         .stock-chart-empty{height:210px!important}.stock-metrics,.stock-track-grid{grid-template-columns:1fr 1fr}
