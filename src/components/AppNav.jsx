@@ -90,6 +90,19 @@ export default function AppNav({
         @keyframes navpulse{0%,100%{opacity:1}50%{opacity:.4}}
         @media(max-width:767px){.oe-top{display:none!important}}
         @media(min-width:768px){.oe-bot{display:none!important}}
+        @media(max-width:767px){
+          .oe-bot{padding-bottom:env(safe-area-inset-bottom,0px)}
+          .oe-mobile-tab{height:58px!important;min-width:0!important;padding:4px 2px 3px!important}
+          .oe-mobile-icon{font-size:clamp(18px,5vw,21px)!important}
+          .oe-mobile-label{font-size:clamp(9px,2.45vw,10px)!important;white-space:nowrap}
+        }
+        @media(max-width:374px){
+          .oe-mobile-tab{height:54px!important;gap:2px!important}
+          .oe-mobile-icon{font-size:18px!important}
+          .oe-mobile-label{font-size:9px!important;letter-spacing:.1px!important}
+        }
+        @media(min-width:431px) and (max-width:767px){.oe-mobile-tab{height:62px!important}}
+        @media(max-width:767px) and (max-height:500px) and (orientation:landscape){.oe-mobile-tab{height:50px!important}.oe-mobile-icon{font-size:17px!important}}
         .oe-navbtn{cursor:pointer}
         .oe-navbtn:hover{opacity:.82!important}
         .oe-toptab:hover{border:1px solid ${C.green}60!important;color:${C.text}!important}
@@ -270,21 +283,21 @@ export default function AppNav({
             const col    = active ? C.green : C.dim
 
             if (t.link) return (
-              <Link key={t.id} to={t.link} style={{
+              <Link key={t.id} to={t.link} className="oe-mobile-tab" style={{
                 ...mobileTab(active),
                 color: col, textDecoration: 'none',
               }}>
-                <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
-                <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
+                <span className="oe-mobile-icon" style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
+                <span className="oe-mobile-label" style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
               </Link>
             )
 
             return (
-              <button key={t.id}
+              <button key={t.id} className="oe-mobile-tab"
                 onClick={() => t.id==='more' ? setMoreOpen(open=>!open) : (setMoreOpen(false),setTab(t.id))}
                 style={mobileTab(active)}>
-                <span style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
-                <span style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
+                <span className="oe-mobile-icon" style={{ fontSize:20, color:col, lineHeight:1 }}>{t.icon}</span>
+                <span className="oe-mobile-label" style={{ fontSize:10, fontWeight:600, color:col, letterSpacing:.4 }}>{t.label}</span>
               </button>
             )
           })}

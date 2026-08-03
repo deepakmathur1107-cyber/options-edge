@@ -3072,6 +3072,31 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .tools-admin-integrations{order:99;margin-top:18px!important}
           .tools-admin-integrations:before{content:'ADMIN TOOLS';display:block;font-size:11px;font-weight:700;letter-spacing:1.2px;color:${C.dim};margin-bottom:10px}
         }
+
+        /* Phone-adaptive scale: iPhone and Samsung browsers expose CSS
+           viewport size + safe-area insets more reliably than physical mm. */
+        @media(max-width:767px){
+          .oe-app{min-height:100dvh!important;padding-bottom:calc(74px + env(safe-area-inset-bottom,0px))!important;font-size:clamp(13px,3.45vw,15px)!important}
+          .oe-main-content{width:100%!important;max-width:100%!important;padding:clamp(14px,3.8vw,24px) clamp(12px,4vw,24px)!important}
+          .oe-page-title{font-size:clamp(26px,7.2vw,34px)!important}
+          .oe-page-subtitle{font-size:clamp(13px,3.45vw,15px)!important}
+          .oe-page button,.oe-page input,.oe-page select,.oe-page textarea{min-height:44px}
+        }
+        @media(max-width:374px){
+          .oe-main-content{padding-left:12px!important;padding-right:12px!important}
+          .oe-page-title{font-size:25px!important}
+          .oe-page-head{margin-bottom:15px}
+          .oe-page-subtitle{font-size:13px!important;line-height:1.5}
+        }
+        @media(min-width:431px) and (max-width:767px){
+          .oe-main-content{padding-left:clamp(20px,4vw,28px)!important;padding-right:clamp(20px,4vw,28px)!important}
+          .oe-page-head{margin-bottom:22px}
+        }
+        @media(max-width:767px) and (max-height:500px) and (orientation:landscape){
+          .oe-main-content{padding-top:12px!important}
+          .oe-page-head{margin-bottom:14px}
+          .oe-page-subtitle{display:none}
+        }
       `}</style>
 
       <AppNav tab={tab} setTab={setTab} isDark={isDark} setIsDark={setIsDark} C={C} userInitial={userInitial} openPortal={openPortal} onSignOut={onSignOut} isAdmin={isAdmin} tradierMode={tradierMode} autoOn={autoOn}/>

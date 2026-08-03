@@ -377,7 +377,7 @@ export default function StockWorkspace({ C, getToken }) {
       .stock-workspace section{border-radius:14px!important}.stock-workspace button,.stock-workspace input{min-height:38px}.stock-workspace button{transition:background-color .18s ease,border-color .18s ease,transform .18s ease}.stock-workspace button:hover:not(:disabled){filter:brightness(1.08)}.stock-workspace button:focus-visible,.stock-workspace input:focus-visible{outline:2px solid ${C.blue};outline-offset:2px}
       @media(max-width:1180px){.stock-body{grid-template-columns:320px minmax(0,1fr)}.stock-detail-grid{grid-template-columns:1fr}.stock-candidate-rail{position:static}}
       @media(max-width:900px){.stock-hero,.stock-body,.stock-detail-grid{grid-template-columns:1fr}.stock-metrics,.stock-track-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stock-candidate-rail>div:last-child{max-height:none!important;overflow-y:visible!important}}
-      @media(max-width:560px){
+      @media(max-width:767px){
         .stock-workspace{margin:0;width:100%;max-width:100%;min-width:0}
         .stock-page-head{padding-left:0;padding-right:0}
         .stock-workspace [style*="font-size: 9px"]{font-size:12px!important;line-height:1.5}
