@@ -34,7 +34,8 @@ function calcPnl(trade) {
   const qty   = parseInt(trade.contracts ?? 1)
   const side  = (trade.action ?? trade.side ?? 'buy').toLowerCase()
   if (!exit || !entry) return null
-  return side === 'sell' ? (entry - exit)*qty*100 : (exit - entry)*qty*100
+  const multiplier=String(trade.option_type??trade.type??'').toLowerCase()==='stock'?1:100
+  return side === 'sell' ? (entry - exit)*qty*multiplier : (exit - entry)*qty*multiplier
 }
 
 function calcR(trade) {
@@ -42,7 +43,8 @@ function calcR(trade) {
   const entry=parseFloat(trade.entry_price??trade.entry)
   const stop=parseFloat(trade.stop_price??trade.stop)
   const qty=parseInt(trade.contracts??1)
-  const plannedRisk=Math.abs(entry-stop)*qty*100
+  const multiplier=String(trade.option_type??trade.type??'').toLowerCase()==='stock'?1:100
+  const plannedRisk=Math.abs(entry-stop)*qty*multiplier
   return pnl===null||!Number.isFinite(plannedRisk)||plannedRisk<=0?null:pnl/plannedRisk
 }
 
@@ -120,6 +122,7 @@ export default function TradeLog(props) {
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState(null)
   const [filter,     setFilter]     = useState('open')
+  const [assetFilter,setAssetFilter]= useState('all')
   const [section,    setSection]    = useState('log')
   const [showAdd,    setShowAdd]    = useState(false)
   const [form,       setForm]       = useState(EMPTY_FORM)
@@ -324,8 +327,12 @@ export default function TradeLog(props) {
   }
 
   // ── Derived data ───────────────────────────────────────────────────────────
-  const openTrades   = trades.filter(t => (t.status??'').toLowerCase()!=='closed' && !t.exit_price)
-  const closedTrades = trades.filter(t => (t.status??'').toLowerCase()==='closed'  || !!t.exit_price)
+  const assetTrades=trades.filter(t=>{
+    const stock=String(t.option_type??t.type??'').toLowerCase()==='stock'
+    return assetFilter==='all'||(assetFilter==='stocks'&&stock)||(assetFilter==='options'&&!stock)
+  })
+  const openTrades   = assetTrades.filter(t => (t.status??'').toLowerCase()!=='closed' && !t.exit_price)
+  const closedTrades = assetTrades.filter(t => (t.status??'').toLowerCase()==='closed'  || !!t.exit_price)
 
   // Stats below only consider trades where P&L is actually computable
   // (entry AND exit price present) — see hasValidExit's comment. A closed
@@ -678,7 +685,7 @@ export default function TradeLog(props) {
                 {[
                   { id:'open',   label:'OPEN',   count:openTrades.length   },
                   { id:'closed', label:'CLOSED', count:closedTrades.length },
-                  { id:'all',    label:'ALL',    count:trades.length       },
+                  { id:'all',    label:'ALL',    count:assetTrades.length  },
                 ].map(f => (
                   <button key={f.id}
                     style={pillBtn(filter===f.id)}
@@ -686,6 +693,11 @@ export default function TradeLog(props) {
                   >
                     {f.label} ({f.count})
                   </button>
+                ))}
+              </div>
+              <div style={{display:'flex',gap:6,marginLeft:8}}>
+                {[['all','ALL ASSETS'],['options','OPTIONS'],['stocks','STOCKS']].map(([id,label])=>(
+                  <button key={id} style={pillBtn(assetFilter===id)} onClick={()=>setAssetFilter(id)}>{label}</button>
                 ))}
               </div>
               <button className="tl-btn" onClick={()=>{setShowAdd(p=>!p);setFormError(null)}}
@@ -894,8 +906,8 @@ export default function TradeLog(props) {
                     <div key={trade.id}>
                       <div className="tl-row" style={{
                         display:'grid',
-                        gridTemplateColumns:'90px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
-                        minWidth:790,
+                        gridTemplateColumns:'125px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
+                        minWidth:825,
                         padding:'14px 20px',
                         borderLeft: leftBorder,
                         borderBottom:`1px solid ${C.border}30`,
@@ -927,6 +939,14 @@ export default function TradeLog(props) {
                               }}
                             />
                           )}
+                          {!isClosed&&trade.tracked_outcome?.outcome&&(
+                            <span title="An exit level was detected. Confirm the journal close." style={{
+                              fontSize:8,fontWeight:800,
+                              color:trade.tracked_outcome.outcome==='WIN'?C.green:C.red,
+                              border:'1px solid '+(trade.tracked_outcome.outcome==='WIN'?C.green:C.red),
+                              borderRadius:4,padding:'2px 4px',whiteSpace:'nowrap',
+                            }}>{trade.tracked_outcome.outcome==='WIN'?'TARGET HIT':'STOP HIT'}</span>
+                          )}
                         </span>
 
                         <span style={{
@@ -946,11 +966,11 @@ export default function TradeLog(props) {
                         </span>
 
                         <span style={{fontFamily:"'IBM Plex Mono',monospace", fontSize:12}}>
-                          ${fmt(trade.strike,0)}
+                          {String(trade.option_type).toLowerCase()==='stock'?'—':'$'+fmt(trade.strike,0)}
                         </span>
 
                         <span style={{color:C.dim, fontSize:11, fontFamily:"'Inter',sans-serif"}}>
-                          {fmtExpiry(trade.expiration??trade.expiry)}
+                          {String(trade.option_type).toLowerCase()==='stock'?'NO EXPIRY':fmtExpiry(trade.expiration??trade.expiry)}
                         </span>
 
                         <span style={{fontFamily:"'IBM Plex Mono',monospace", fontSize:12}}>
@@ -982,7 +1002,8 @@ export default function TradeLog(props) {
                           {!isClosed && (
                             <button className="tl-btn" onClick={()=>{
                               setClosingId(isClosing?null:trade.id)
-                              setCloseForm(EMPTY_CLOSE); setCloseError(null)
+                              const suggested=trade.tracked_outcome?.outcome==='WIN'?trade.target_price:trade.tracked_outcome?.outcome==='LOSS'?trade.stop_price:''
+                              setCloseForm({exit_price:suggested||''}); setCloseError(null)
                             }} style={{
                               background:`${C.orange}15`, color:C.orange,
                               border:`1px solid ${C.orange}40`, borderRadius:6,

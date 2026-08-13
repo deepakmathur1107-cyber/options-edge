@@ -121,7 +121,7 @@ export default function StockWorkspace({ C, getToken }) {
   const [selected, setSelected] = useState('AMZN')
   const [filter, setFilter] = useState('ALL')
   const [query, setQuery] = useState('')
-  const [paperTrades, setPaperTrades] = useState([])
+  const [paperTrades, setPaperTrades] = useState({})
   const [watchlist, setWatchlist] = useState(['NVDA','AMZN'])
   const [capital, setCapital] = useState(10000)
   const [quotes, setQuotes] = useState({})
@@ -334,14 +334,34 @@ export default function StockWorkspace({ C, getToken }) {
 
   useEffect(()=>{ loadRatingStats() },[loadRatingStats])
 
+  useEffect(()=>{
+    let cancelled=false
+    authHeaders(getToken).then(headers=>fetch('/api/user/trades',{headers})).then(response=>response.json()).then(data=>{
+      if(cancelled) return
+      const active={}
+      for(const trade of data.trades||[]) {
+        if(String(trade.option_type).toLowerCase()==='stock'&&String(trade.status).toLowerCase()==='open'&&!trade.exit_price) active[trade.ticker]=trade.id
+      }
+      setPaperTrades(active)
+    }).catch(()=>{})
+    return ()=>{cancelled=true}
+  },[getToken])
+
   const fund=fundamentals[selected]
   const riskPerShare = stock.plan?Math.max(.01,stock.plan.entryLow-stock.plan.stop):null
   const shares = riskPerShare?Math.max(1,Math.floor((Number(capital)||0)*.01/riskPerShare)):0
-  const tracked = paperTrades.includes(stock.symbol)
+  const tracked = Boolean(paperTrades[stock.symbol])
   const togglePaper = async() => {
     if(tracked) {
-      setPaperTrades(p=>p.filter(x=>x!==stock.symbol))
-      setTradeMessage('Paper tracking stopped. Existing journal entry was preserved.')
+      setTradeMessage('Closing paper trade…')
+      try {
+        const headers={...(await authHeaders(getToken)),'Content-Type':'application/json'}
+        const res=await fetch(`/api/user/trades?id=${paperTrades[stock.symbol]}`,{method:'PUT',headers,body:JSON.stringify({exit_price:stock.price,status:'Closed',closed_at:new Date().toISOString()})})
+        const data=await res.json()
+        if(!res.ok) throw new Error(data.error||'Could not close paper trade')
+        setPaperTrades(previous=>{const next={...previous};delete next[stock.symbol];return next})
+        setTradeMessage(`Paper trade closed at $${stock.price.toFixed(2)}. See the Trades tab for P&L.`)
+      } catch(e) { setTradeMessage(e.message) }
       return
     }
     if(stock.stage!=='QUALITY + READY'||!stock.plan) {
@@ -359,7 +379,7 @@ export default function StockWorkspace({ C, getToken }) {
       })})
       const data=await res.json()
       if(!res.ok) throw new Error(data.error||'Could not save paper trade')
-      setPaperTrades(p=>[...p,stock.symbol])
+      setPaperTrades(previous=>({...previous,[stock.symbol]:data.trade.id}))
       setTradeMessage(`Paper trade saved: ${shares} ${stock.symbol} shares at $${stock.price.toFixed(2)}.`)
     } catch(e) { setTradeMessage(e.message) }
   }

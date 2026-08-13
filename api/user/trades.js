@@ -115,7 +115,13 @@ module.exports = async function handler(req, res) {
       console.error('trades GET:', error.message)
       return res.status(500).json({ error: error.message })
     }
-    return res.status(200).json({ trades: data || [] })
+    const rows=data||[]
+    const {data:outcomes,error:outcomeError}=rows.length
+      ? await supabase.from('trade_outcomes').select('trade_id,outcome,hit_target_at,hit_stop_at,resolved_at,resolution_method').in('trade_id',rows.map(row=>row.id))
+      : {data:[],error:null}
+    if(outcomeError) console.error('trade outcomes GET:',outcomeError.message)
+    const byTrade=new Map((outcomes||[]).map(outcome=>[outcome.trade_id,outcome]))
+    return res.status(200).json({ trades:rows.map(row=>({...row,tracked_outcome:byTrade.get(row.id)||null})) })
   }
 
   // ── POST — insert new trade ────────────────────────────────────────────────

@@ -80,7 +80,31 @@ function findFirstThresholdHit(bars, targetPrice, stopPrice) {
 // trade_outcomes upsert payload, or a control-flow marker object
 // (_stillOpen / _noUsableData), same shape/meaning as resolve-outcomes.js's
 // resolveOne for consistency.
-async function resolveOne(trade, rateTracker) {
+const isStockTrade=trade=>String(trade?.option_type||trade?.type||'').toLowerCase()==='stock'
+
+async function resolveStockTrade(trade, rateTracker) {
+  const targetPrice=parseFloat(trade.target_price),stopPrice=parseFloat(trade.stop_price)
+  const start=new Date(trade.created_at)
+  start.setDate(start.getDate()+1)
+  const startDate=start.toISOString().slice(0,10)
+  const endDate=new Date().toISOString().slice(0,10)
+  const bars=await getOptionHistory(trade.ticker,startDate,endDate,rateTracker)
+  if(!bars.length) return {_stillOpen:true}
+  const hit=findFirstThresholdHit(
+    bars.map(bar=>({...bar,time:bar.time||`${bar.date}T21:00:00Z`})),
+    targetPrice,stopPrice
+  )
+  if(!hit) return {_stillOpen:true}
+  return {
+    outcome:hit.outcome,
+    hit_target_at:hit.outcome==='WIN'?hit.at:null,
+    hit_stop_at:hit.outcome==='LOSS'?hit.at:null,
+    resolved_at:new Date().toISOString(),
+    resolution_method:`stock_${hit.type}`,
+  }
+}
+
+async function resolveOptionTrade(trade, rateTracker) {
   const occSymbol = buildOccSymbol(trade.ticker, trade.option_type, trade.strike, trade.expiration)
   const entryMid = parseFloat(trade.entry_price)
   // DIFFERENCE FROM resolve-outcomes.js: these are read directly, not
@@ -150,6 +174,12 @@ async function resolveOne(trade, rateTracker) {
   }
 }
 
+async function resolveOne(trade,rateTracker) {
+  return isStockTrade(trade)
+    ? resolveStockTrade(trade,rateTracker)
+    : resolveOptionTrade(trade,rateTracker)
+}
+
 module.exports = async function handler(req, res) {
   const authHeader = req.headers['authorization'] || ''
   const isVercelCron = authHeader === `Bearer ${process.env.CRON_SECRET || '__never__'}`
@@ -182,12 +212,12 @@ module.exports = async function handler(req, res) {
   const BATCH_LIMIT = parseInt(req.query.limit, 10) || 50
   const { data: candidateTrades, error: fetchErr } = await client
     .from('trades')
-    .select('id, ticker, option_type, strike, expiration, entry_price, target_price, stop_price, created_at')
+    .select('id, ticker, type, option_type, strike, expiration, entry_price, target_price, stop_price, created_at')
     .eq('status', 'Open')
     .not('target_price', 'is', null)
     .not('stop_price', 'is', null)
     .order('created_at', { ascending: true })
-    .limit(BATCH_LIMIT)
+    .limit(BATCH_LIMIT*4)
 
   if (fetchErr) {
     console.error('[resolve-trade-outcomes] fetch failed:', fetchErr.message)
@@ -205,7 +235,7 @@ module.exports = async function handler(req, res) {
 
   const { data: alreadyResolved, error: resolvedFetchErr } = await client
     .from('trade_outcomes')
-    .select('trade_id')
+    .select('trade_id,outcome,resolved_at')
     .in('trade_id', candidateTrades.map(t => t.id))
 
   if (resolvedFetchErr) {
@@ -213,8 +243,8 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: resolvedFetchErr.message })
   }
 
-  const resolvedIds = new Set((alreadyResolved || []).map(r => r.trade_id))
-  const rows = (candidateTrades || []).filter(t => !resolvedIds.has(t.id))
+  const resolvedIds = new Set((alreadyResolved || []).filter(row=>row.outcome||row.resolved_at).map(r => r.trade_id))
+  const rows = (candidateTrades || []).filter(t => !resolvedIds.has(t.id)).slice(0,BATCH_LIMIT)
 
   let resolved = 0, stillOpen = 0, dataUnavailable = 0, errors = 0
   const results = []
@@ -298,3 +328,5 @@ module.exports = async function handler(req, res) {
     results,
   })
 }
+
+module.exports._test={findFirstThresholdHit,isStockTrade,resolveOne,resolveStockTrade,resolveOptionTrade}
