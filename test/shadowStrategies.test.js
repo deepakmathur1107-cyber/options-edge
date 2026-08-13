@@ -15,8 +15,20 @@ test('assigns shadow candidates deterministically without changing the live stra
   assert.equal(result.assignments.entry_confirmation_v2b, true)
   assert.equal(result.assignments.liquidity_gate_v2c, true)
   assert.equal(result.assignments.combined_quality_v2d, true)
+  assert.equal(result.assignments.swing_call_liquidity_entry_v3, true)
   assert.equal(result.assignments.defined_risk_spread_v2e, true)
   assert.equal(result.assignments.dmi_volume_confirmation_v1, true)
   assert.equal(result.exit_policies.partial_profit_v2g.partial_size_pct, 0.50)
   assert.equal(result.exit_policies.tighter_stop_v2h.stop_loss_pct, 0.35)
+})
+
+test('swing call liquidity-entry candidate excludes puts and Quick calls', () => {
+  const base = {
+    long_term_trend: 'bullish', chg_pct: 0.8,
+    entry_spread_pct: 12, volume: 100, open_interest: 1000,
+  }
+  assert.equal(buildShadowStrategies({ ...base, option_type: 'put', timeframe: 'Swing (21–45 DTE)' })
+    .assignments.swing_call_liquidity_entry_v3, false)
+  assert.equal(buildShadowStrategies({ ...base, option_type: 'call', timeframe: 'Quick (5–14 DTE)' })
+    .assignments.swing_call_liquidity_entry_v3, false)
 })

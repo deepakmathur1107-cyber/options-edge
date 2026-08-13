@@ -28,6 +28,10 @@ function buildShadowStrategies(signal) {
       entry_confirmation_v2b: directionConfirmed,
       liquidity_gate_v2c: liquid,
       combined_quality_v2d: trendAligned && directionConfirmed && liquid,
+      // Positive but immature forward candidate identified 2026-08-13.
+      // Keep separate from combined_quality: adding trend alignment diluted
+      // the observed edge. This remains shadow-only until promotion gates.
+      swing_call_liquidity_entry_v3: swingTimeframe && optionType === 'call' && liquid && directionConfirmed,
       defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
       dmi_volume_confirmation_v1: dmiVolumeAligned,
     },

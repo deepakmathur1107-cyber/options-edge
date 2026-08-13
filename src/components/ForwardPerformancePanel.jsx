@@ -32,6 +32,10 @@ const SHADOW_STRATEGY_COPY = {
     name: 'Require every quality check',
     description: 'Combines trend alignment, price confirmation, and option liquidity.',
   },
+  swing_call_liquidity_entry_v3: {
+    name: 'Liquid Swing calls with price confirmation',
+    description: 'Tests only Swing calls that have executable option liquidity and whose stock is already moving upward. Early evidence is positive, but the sample is not large enough for live use.',
+  },
   defined_risk_spread_v2e: {
     name: 'Use a defined-risk spread',
     description: 'Measures the actual hold-to-expiry return of the modeled vertical spread; single-option results are not used as proof.',
