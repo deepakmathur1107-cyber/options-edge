@@ -181,6 +181,27 @@ test('resume cursor starts after the last confirmed-clean day', async () => {
   assert.equal(result._stillOpen, true)
 })
 
+test('expired row already walked through expiry still fetches settlement close', async () => {
+  const requestedDays = []
+  const result = await resolver.resolveOne(row({
+    expiry_raw: '2026-07-24',
+    last_walked_through: '2026-07-24',
+  }), {}, {
+    now: '2026-07-27T19:00:00.000Z',
+    getOptionHistory: async (_symbol, start, end) => {
+      requestedDays.push([start, end])
+      return [{ high: 1.2, low: 0.8, close: 1.1 }]
+    },
+    getOptionHistoryDetailed: async () => {
+      throw new Error('incremental walk must remain empty')
+    },
+  })
+
+  assert.deepEqual(requestedDays, [['2026-07-24', '2026-07-24']])
+  assert.equal(result.outcome, 'EXPIRED_PARTIAL')
+  assert.equal(result.resolution_method, 'expired_partial')
+})
+
 // ── Audit Finding 4: real API failures must not silently corrupt the walk cursor ──
 
 test('mid-walk API failure stops the walk and caps the cursor before the failed day, not walkEnd', async () => {

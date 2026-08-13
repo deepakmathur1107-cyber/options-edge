@@ -62,3 +62,12 @@ test('does not alter Qualified V1 or any trading decision fields', () => {
   assert.equal(row.strategy_qualified, true)
   assert.equal(row.strategy_version, 'swing_call_v1')
 })
+
+test('puts remain visible for research but cannot receive a TAKE shortlist label', () => {
+  const result = buildQualityShortlistDecision({
+    ...clean,
+    option_type: 'put',
+  })
+  assert.equal(result.eligible, false)
+  assert.ok(result.exclusions.includes('PUT_STRATEGY_RESEARCH_ONLY'))
+})

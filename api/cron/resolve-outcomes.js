@@ -521,7 +521,15 @@ async function resolveOne(row, rateTracker, dependencies = {}) {
   // ever ran), there's no day to pull a close from — that's the
   // data_unavailable path below, not a bug to paper over with a recomputed
   // range that would also come back empty for the same reason.
-  const lastTradingDay = days[days.length - 1] || null
+  // `days` is only the INCREMENTAL walk since last_walked_through. Once a
+  // row has already been walked through expiry that range is intentionally
+  // empty, but we still need the expiry-session close to settle it. Derive
+  // settlement independently from the cursor so a caught-up expired row
+  // does not loop through _noUsableData forever without making an API call.
+  const settlementLookback = new Date(expiryDate)
+  settlementLookback.setDate(settlementLookback.getDate() - 7)
+  const settlementDays = tradingDaysBetween(settlementLookback, expiryDate)
+  const lastTradingDay = settlementDays[settlementDays.length - 1] || null
   const closeBars = lastTradingDay ? await getHistory(occSymbol, lastTradingDay, lastTradingDay, rateTracker) : []
   const exitMid = closeBars[0]?.close ?? null
   recordBars(closeBars)

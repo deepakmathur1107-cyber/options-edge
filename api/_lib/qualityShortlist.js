@@ -34,6 +34,7 @@ function buildQualityShortlistDecision(row = {}, rules = DEFAULT_RULES) {
   const mid = parseDisplayNumber(row.mid ?? row.entry_mid)
   const volume = Number(row.volume || 0)
   const openInterest = Number(row.oi ?? row.open_interest ?? 0)
+  const optionType = String(row.option_type || row.trade_type || '').toLowerCase()
   const hardBlocks = Array.isArray(row.hard_blocks) ? row.hard_blocks : []
   const warnings = Array.isArray(row.warnings) ? row.warnings.map(String) : []
   const spreadPct = mid > 0 && bid != null && ask != null
@@ -41,6 +42,10 @@ function buildQualityShortlistDecision(row = {}, rules = DEFAULT_RULES) {
     : null
 
   if (!Number.isFinite(score) || score < rules.minimumScore) exclusions.push('SCORE_BELOW_80')
+  // Forward evidence through 2026-08-13 keeps puts research-only. Continue
+  // measuring them, but do not label them TAKE until a separately validated
+  // put strategy clears the documented promotion gates.
+  if (optionType === 'put') exclusions.push('PUT_STRATEGY_RESEARCH_ONLY')
   if (hardBlocks.length) exclusions.push('HARD_BLOCK')
   if (spreadPct == null) exclusions.push('SPREAD_UNAVAILABLE')
   else if (spreadPct > rules.maximumSpreadPct) exclusions.push('SPREAD_ABOVE_8_PCT')
