@@ -38,8 +38,13 @@ function calcPnl(trade) {
   return side === 'sell' ? (entry - exit)*qty*multiplier : (exit - entry)*qty*multiplier
 }
 
+function calcUnrealizedPnl(trade) {
+  if(String(trade.option_type??trade.type??'').toLowerCase()!=='stock'||!trade.current_price) return null
+  return calcPnl({...trade,exit_price:trade.current_price})
+}
+
 function calcR(trade) {
-  const pnl=calcPnl(trade)
+  const pnl=calcPnl(trade)??calcUnrealizedPnl(trade)
   const entry=parseFloat(trade.entry_price??trade.entry)
   const stop=parseFloat(trade.stop_price??trade.stop)
   const qty=parseInt(trade.contracts??1)
@@ -116,6 +121,7 @@ function EquityCurve({ trades, C }) {
 export default function TradeLog(props) {
   const { getToken, isDark, setIsDark, C } = props
   const navigate = useNavigate()
+  const tradeGrid='minmax(125px,1.4fr) 62px 58px 72px 100px 48px 82px 82px 76px 92px 112px'
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [trades,     setTrades]     = useState([])
@@ -496,6 +502,7 @@ export default function TradeLog(props) {
         .trade-log-page button,.trade-log-page input,.trade-log-page select,.trade-log-page textarea{min-height:38px}
         .trade-log-shell{width:100%;max-width:min(96vw,1680px)!important;padding:28px clamp(16px,2vw,32px)!important}
         .tl-scroll-hint{display:none}
+        .tl-toolbar-filters{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
         @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
         /* ── Stat tile mobile layout — real phone screenshot (2026-06-29)
             showed these as tall, mostly-empty cards: a single number sitting
@@ -519,6 +526,7 @@ export default function TradeLog(props) {
           .tl-perf-grid{grid-template-columns:repeat(2,1fr)!important}
           .tl-scroll-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;background:${C.bgAlt};border-bottom:1px solid ${C.border};font:600 12px/1.4 'Inter',sans-serif;color:${C.dim}}
           .tl-table-scroll{scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+          .tl-toolbar-filters{width:100%;gap:8px}
         }
         .slide-down{animation:slideDown .2s ease}
       `}</style>
@@ -681,7 +689,8 @@ export default function TradeLog(props) {
               justifyContent:'space-between',
               marginBottom:16, flexWrap:'wrap', gap:10,
             }}>
-              <div style={{display:'flex', gap:6}}>
+              <div className="tl-toolbar-filters">
+              <div style={{display:'flex', gap:6,flexWrap:'wrap'}}>
                 {[
                   { id:'open',   label:'OPEN',   count:openTrades.length   },
                   { id:'closed', label:'CLOSED', count:closedTrades.length },
@@ -695,10 +704,11 @@ export default function TradeLog(props) {
                   </button>
                 ))}
               </div>
-              <div style={{display:'flex',gap:6,marginLeft:8}}>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                 {[['all','ALL ASSETS'],['options','OPTIONS'],['stocks','STOCKS']].map(([id,label])=>(
                   <button key={id} style={pillBtn(assetFilter===id)} onClick={()=>setAssetFilter(id)}>{label}</button>
                 ))}
+              </div>
               </div>
               <button className="tl-btn" onClick={()=>{setShowAdd(p=>!p);setFormError(null)}}
                 style={{
@@ -877,8 +887,8 @@ export default function TradeLog(props) {
                 {/* Header */}
                 <div style={{
                   display:'grid',
-                  gridTemplateColumns:'90px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
-                  minWidth:790,
+                  gridTemplateColumns:tradeGrid,
+                  minWidth:1030,
                   padding:'12px 20px',
                   background:C.bgAlt,
                   borderBottom:`1px solid ${C.border}`,
@@ -886,8 +896,8 @@ export default function TradeLog(props) {
                   fontFamily:"'Inter', sans-serif",
                   letterSpacing:0.5, textTransform:'uppercase',
                 }}>
-                  {['Symbol','Type','Side','Strike','Exp','Qty','Entry','Exit','P&L',''].map((h,i)=>(
-                    <span key={i} style={{textAlign:i===9?'right':'left'}}>{h}</span>
+                  {['Symbol','Type','Side','Strike','Exp','Qty','Entry','Current','Exit','P&L','Actions'].map((h,i)=>(
+                    <span key={i} style={{textAlign:i===10?'right':'left'}}>{h}</span>
                   ))}
                 </div>
 
@@ -895,7 +905,7 @@ export default function TradeLog(props) {
                 {displayed.map((trade, i) => {
                   const isClosed  = (trade.status??'').toLowerCase()==='closed' || !!trade.exit_price
                   const isClosing = closingId===trade.id
-                  const pnl       = calcPnl(trade)
+                  const pnl       = isClosed?calcPnl(trade):calcUnrealizedPnl(trade)
                   const rMultiple = calcR(trade)
                   const pnlColor  = pnl===null ? C.dim : pnl>=0 ? C.green : C.red
                   const leftBorder= isClosed
@@ -906,8 +916,8 @@ export default function TradeLog(props) {
                     <div key={trade.id}>
                       <div className="tl-row" style={{
                         display:'grid',
-                        gridTemplateColumns:'125px 55px 50px 70px 100px 45px 75px 75px 80px 110px',
-                        minWidth:825,
+                        gridTemplateColumns:tradeGrid,
+                        minWidth:1030,
                         padding:'14px 20px',
                         borderLeft: leftBorder,
                         borderBottom:`1px solid ${C.border}30`,
@@ -979,6 +989,13 @@ export default function TradeLog(props) {
 
                         <span style={{fontFamily:"'IBM Plex Mono',monospace", fontSize:12}}>
                           ${fmt(trade.entry_price??trade.entry)}
+                        </span>
+
+                        <span title={trade.current_price_at?'Updated '+new Date(trade.current_price_at).toLocaleString():undefined} style={{
+                          fontFamily:"'IBM Plex Mono',monospace",fontSize:12,
+                          color:trade.current_price?C.blue:C.dim,
+                        }}>
+                          {trade.current_price?'$'+fmt(trade.current_price):'—'}
                         </span>
 
                         <span style={{

@@ -14,6 +14,18 @@ const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 const { rateLimit } = require('../_lib/rateLimit')
 
+async function fetchStockPrices(symbols) {
+  if(!symbols.length||!process.env.TRADIER_TOKEN) return new Map()
+  const base=(process.env.TRADIER_MODE||'production')==='sandbox'?'https://sandbox.tradier.com/v1':'https://api.tradier.com/v1'
+  const response=await fetch(base+'/markets/quotes?symbols='+encodeURIComponent(symbols.join(','))+'&greeks=false',{
+    headers:{Authorization:'Bearer '+process.env.TRADIER_TOKEN,Accept:'application/json'},
+  })
+  if(!response.ok) throw new Error('Stock quote request failed ('+response.status+')')
+  const json=await response.json(),raw=json?.quotes?.quote
+  const quotes=!raw?[]:Array.isArray(raw)?raw:[raw]
+  return new Map(quotes.map(quote=>[quote.symbol,Number(quote.last||quote.close)]).filter(([,price])=>Number.isFinite(price)&&price>0))
+}
+
 async function hasActiveSub(clerkId, supabase) {
   if (ADMIN_IDS.includes(clerkId)) return true
   try {
@@ -121,7 +133,17 @@ module.exports = async function handler(req, res) {
       : {data:[],error:null}
     if(outcomeError) console.error('trade outcomes GET:',outcomeError.message)
     const byTrade=new Map((outcomes||[]).map(outcome=>[outcome.trade_id,outcome]))
-    return res.status(200).json({ trades:rows.map(row=>({...row,tracked_outcome:byTrade.get(row.id)||null})) })
+    const stockSymbols=[...new Set(rows.filter(row=>String(row.option_type).toLowerCase()==='stock'&&String(row.status).toLowerCase()==='open'&&!row.exit_price).map(row=>row.ticker))]
+    let stockPrices=new Map()
+    try { stockPrices=await fetchStockPrices(stockSymbols) }
+    catch(error) { console.error('stock prices GET:',error.message) }
+    const pricedAt=new Date().toISOString()
+    return res.status(200).json({ trades:rows.map(row=>({
+      ...row,
+      tracked_outcome:byTrade.get(row.id)||null,
+      current_price:String(row.option_type).toLowerCase()==='stock'?(stockPrices.get(row.ticker)||null):null,
+      current_price_at:String(row.option_type).toLowerCase()==='stock'&&stockPrices.has(row.ticker)?pricedAt:null,
+    })) })
   }
 
   // ── POST — insert new trade ────────────────────────────────────────────────
@@ -257,3 +279,5 @@ module.exports = async function handler(req, res) {
 
   return res.status(405).json({ error: 'Method not allowed' })
 }
+
+module.exports._test={fetchStockPrices}
