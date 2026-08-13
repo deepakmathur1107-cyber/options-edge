@@ -5,10 +5,11 @@ const {analyzeStockBars,analyzeFundamentalHealth,buildPlan}=require('../_lib/sto
 
 const VERSION='stock-universe-v1'
 const BATCH_SIZE=12
-const MIN_PRICE=5
-const MIN_AVERAGE_VOLUME=500000
-const MIN_FUNDAMENTAL_SCORE=65
-const MIN_FUNDAMENTAL_COVERAGE=75
+const MIN_PRICE=10
+const MIN_AVERAGE_VOLUME=1000000
+const MIN_MARKET_CAP=5000000000
+const MIN_FUNDAMENTAL_SCORE=70
+const MIN_FUNDAMENTAL_COVERAGE=80
 const ADRS=['PDD','BABA','JD','BIDU','NTES','TCOM','MELI','SE','NU']
 const UNIVERSE=[...new Set([...SP500,...ADRS])].filter(symbol=>/^[A-Z][A-Z.-]{0,5}$/.test(symbol))
 const BASE=(process.env.TRADIER_MODE||'production')==='sandbox'?'https://sandbox.tradier.com/v1':'https://api.tradier.com/v1'
@@ -29,15 +30,16 @@ async function batches(items,worker,size=3) {
   for(let i=0;i<items.length;i+=size) output.push(...await Promise.all(items.slice(i,i+size).map(worker)))
   return output
 }
-function exclusion({price,averageVolume,health}) {
-  if(!Number.isFinite(price)||price<MIN_PRICE) return `Price below $${MIN_PRICE} penny-stock floor`
+function exclusion({price,averageVolume,marketCap,health}) {
+  if(!Number.isFinite(price)||price<MIN_PRICE) return `Price below $${MIN_PRICE} quality floor`
   if(!Number.isFinite(averageVolume)||averageVolume<MIN_AVERAGE_VOLUME) return 'Insufficient average daily volume'
-  if(health.coverage<MIN_FUNDAMENTAL_COVERAGE) return 'Fundamental coverage below 75%'
+  if(!Number.isFinite(Number(marketCap))||Number(marketCap)<MIN_MARKET_CAP) return 'Market capitalization below $5B quality floor'
+  if(health.coverage<MIN_FUNDAMENTAL_COVERAGE) return 'Fundamental coverage below 80%'
   if(!['HEALTHY','ACCEPTABLE'].includes(health.status)||health.score<MIN_FUNDAMENTAL_SCORE) return 'Fundamental quality below medium'
   return null
 }
 function toRatingHistory(row,benchmarkPrice=null) {
-  if(!row?.eligible||!['BUY_SETUP','HOLD_WAIT'].includes(row.rating)) return null
+  if(!row?.eligible||row.rating!=='BUY_SETUP') return null
   return {
     rating_date:row.snapshot_date,ticker:row.ticker,algorithm_version:row.algorithm_version,
     rating:row.rating,technical_state:row.technical_state,fundamental_state:row.fundamental_state,
@@ -81,7 +83,7 @@ module.exports=async function handler(req,res) {
         const latest=bars.at(-1),price=Number(quote.last||quote.close||latest.close)
         const recentVolumes=bars.slice(-20).map(bar=>Number(bar.volume)).filter(Number.isFinite)
         const averageVolume=recentVolumes.length?Math.round(recentVolumes.reduce((a,b)=>a+b,0)/recentVolumes.length):0
-        const blocked=exclusion({price,averageVolume,health}),eligible=!blocked
+        const blocked=exclusion({price,averageVolume,marketCap:fund?.market_cap,health}),eligible=!blocked
         const plan=eligible?buildPlan(price,technical):null
         const edge=eligible&&technical.technicalScore!=null?Math.round(technical.technicalScore*.55+health.score*.45):null
         const snapshotDate=String(latest.date||runDate).slice(0,10)
@@ -99,7 +101,16 @@ module.exports=async function handler(req,res) {
       const {error}=await client.from('stock_universe_snapshots').upsert(rows,{onConflict:'snapshot_date,ticker,algorithm_version'})
       if(error) throw error
       const spy=quotes.get('SPY'),benchmarkPrice=Number(spy?.last||spy?.close)||null
-      const ratings=rows.map(row=>toRatingHistory(row,benchmarkPrice)).filter(Boolean)
+      const candidates=rows.map(row=>toRatingHistory(row,benchmarkPrice)).filter(Boolean)
+      let ratings=candidates
+      if(candidates.length) {
+        const cutoff=new Date(Date.now()-10*864e5).toISOString().slice(0,10)
+        const {data:recent,error:recentError}=await client.from('stock_rating_history')
+          .select('ticker,rating_date').in('ticker',candidates.map(row=>row.ticker)).gte('rating_date',cutoff)
+        if(recentError) throw recentError
+        const blockedTickers=new Set((recent||[]).map(row=>row.ticker))
+        ratings=candidates.filter(row=>!blockedTickers.has(row.ticker))
+      }
       if(ratings.length) {
         const {error:ratingError}=await client.from('stock_rating_history').upsert(ratings,{onConflict:'rating_date,ticker,algorithm_version',ignoreDuplicates:true})
         if(ratingError) throw ratingError
@@ -118,4 +129,4 @@ module.exports=async function handler(req,res) {
   }
 }
 
-module.exports._test={exclusion,toRatingHistory,nightlyRunDate,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME,MIN_FUNDAMENTAL_SCORE,MIN_FUNDAMENTAL_COVERAGE}
+module.exports._test={exclusion,toRatingHistory,nightlyRunDate,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME,MIN_MARKET_CAP,MIN_FUNDAMENTAL_SCORE,MIN_FUNDAMENTAL_COVERAGE}

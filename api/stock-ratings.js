@@ -76,7 +76,7 @@ module.exports=async function handler(req,res) {
     if(error) return res.status(500).json({error:error.message})
     const rows=data||[],buyRows=rows.filter(row=>row.rating==='BUY_SETUP')
     return res.status(200).json({
-      methodology:'Forward-observed nightly snapshots; one immutable rating per ticker/day/version. Results exclude fees and are not investment advice.',
+      methodology:'Forward-observed stock entries with a 10-day re-entry cooldown. Targets and stops use daily highs/lows; 5/10/20/60 sessions are review measurements, not expirations. Results exclude fees and are not investment advice.',
       version:VERSION,totalRatings:rows.length,buySetups:buyRows.length,
       horizons:{5:summarize(buyRows,5),10:summarize(buyRows,10),20:summarize(buyRows,20),60:summarize(buyRows,60)},
       recent:rows.slice(0,20),

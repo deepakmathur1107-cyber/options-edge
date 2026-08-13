@@ -25,7 +25,9 @@ function analyzeStockBars(input) {
   const avgVolume=average(recent20.map(bar=>bar.volume).filter(finite)),volumeRatio=avgVolume>0?latest.volume/avgVolume:null
   const support=Math.min(...recent10.map(bar=>bar.low)),resistance=Math.max(...prior20.map(bar=>bar.high))
   const trendUp=sma20>sma50&&latest.close>sma50,distance=(latest.close/sma20)-1,nearSupport=latest.close>=support&&latest.close<=support*1.035
-  const breakout=trendUp&&distance<=.07&&latest.close>=resistance*.995&&(volumeRatio==null||volumeRatio>=.9)
+  // A price-only breakout produced the weakest forward cohort. Require real
+  // participation and avoid chasing names already stretched from the 20-day.
+  const breakout=trendUp&&distance<=.05&&latest.close>=resistance*.995&&volumeRatio>=1.15
   const pullback=trendUp&&Math.abs(distance)<=.025&&rsi>=40&&rsi<=65
   const continuation=trendUp&&distance>0&&distance<=.055&&rsi>=50&&rsi<=72
   const supportBounce=trendUp&&nearSupport&&rsi>=38

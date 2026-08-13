@@ -37,7 +37,7 @@ export function analyzeStockBars(inputBars) {
   const trendUp=sma20>sma50&&latest.close>sma50
   const distanceFromSma20=(latest.close/sma20)-1
   const nearSupport=latest.close>=support&&latest.close<=support*1.035
-  const breakout=trendUp&&distanceFromSma20<=.07&&latest.close>=resistance*.995&&(volumeRatio==null||volumeRatio>=.9)
+  const breakout=trendUp&&distanceFromSma20<=.05&&latest.close>=resistance*.995&&volumeRatio>=1.15
   const pullback=trendUp&&Math.abs(distanceFromSma20)<=.025&&rsi>=40&&rsi<=65
   const continuation=trendUp&&distanceFromSma20>0&&distanceFromSma20<=.055&&rsi>=50&&rsi<=72
   const supportBounce=trendUp&&nearSupport&&rsi>=38

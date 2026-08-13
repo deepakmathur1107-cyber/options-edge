@@ -50,7 +50,7 @@
     },
     {
       "path": "/api/cron/resolve-stock-ratings",
-      "schedule": "40 23 * * 1-5"
+      "schedule": "10 5 * * 2-6"
     },
     {
       "path": "/api/cron/build-stock-universe",

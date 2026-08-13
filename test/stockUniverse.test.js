@@ -1,21 +1,22 @@
 const test=require('node:test')
 const assert=require('node:assert/strict')
-const {exclusion,toRatingHistory,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME}=require('../api/cron/build-stock-universe')._test
+const {exclusion,toRatingHistory,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME,MIN_MARKET_CAP}=require('../api/cron/build-stock-universe')._test
 
 const healthy={status:'ACCEPTABLE',score:70,coverage:80}
+const quality={averageVolume:MIN_AVERAGE_VOLUME,marketCap:MIN_MARKET_CAP,health:healthy}
 
 test('nightly universe excludes penny stocks',()=>{
-  assert.match(exclusion({price:MIN_PRICE-.01,averageVolume:MIN_AVERAGE_VOLUME,health:healthy}),/penny-stock/)
+  assert.match(exclusion({price:MIN_PRICE-.01,...quality}),/quality floor/)
 })
 
 test('nightly universe excludes low-liquidity stocks',()=>{
-  assert.match(exclusion({price:20,averageVolume:MIN_AVERAGE_VOLUME-1,health:healthy}),/volume/)
+  assert.match(exclusion({price:20,...quality,averageVolume:MIN_AVERAGE_VOLUME-1}),/volume/)
 })
 
 test('nightly universe requires medium-to-high fundamentals',()=>{
-  assert.match(exclusion({price:20,averageVolume:1000000,health:{status:'FUNDAMENTAL_RISK',score:64,coverage:100}}),/quality/)
-  assert.match(exclusion({price:20,averageVolume:1000000,health:{status:'HEALTHY',score:90,coverage:60}}),/coverage/)
-  assert.equal(exclusion({price:20,averageVolume:1000000,health:healthy}),null)
+  assert.match(exclusion({price:20,...quality,health:{status:'FUNDAMENTAL_RISK',score:64,coverage:100}}),/quality/)
+  assert.match(exclusion({price:20,...quality,health:{status:'HEALTHY',score:90,coverage:60}}),/coverage/)
+  assert.equal(exclusion({price:20,...quality}),null)
 })
 
 test('nightly universe is broader than the former ten-stock list and includes PDD',()=>{
@@ -33,4 +34,8 @@ test('eligible nightly snapshots enroll as immutable forward ratings',()=>{
 
 test('excluded nightly snapshots never enter the rating track record',()=>{
   assert.equal(toRatingHistory({eligible:false,rating:'EXCLUDED'}),null)
+})
+
+test('hold ratings do not create pretend trade entries',()=>{
+  assert.equal(toRatingHistory({eligible:true,rating:'HOLD_WAIT'}),null)
 })
