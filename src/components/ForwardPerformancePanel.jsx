@@ -36,6 +36,10 @@ const SHADOW_STRATEGY_COPY = {
     name: 'Liquid Swing calls with price confirmation',
     description: 'Tests only Swing calls that have executable option liquidity and whose stock is already moving upward. Early evidence is positive, but the sample is not large enough for live use.',
   },
+  bearish_regime_put_v1: {
+    name: 'Puts during a confirmed bearish market',
+    description: 'Separately measures liquid puts when both SPX and NDX are falling, volatility is rising, and the stock confirms downward movement. It remains research-only until enough genuinely bearish sessions occur.',
+  },
   defined_risk_spread_v2e: {
     name: 'Use a defined-risk spread',
     description: 'Measures the actual hold-to-expiry return of the modeled vertical spread; single-option results are not used as proof.',

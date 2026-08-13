@@ -628,6 +628,9 @@ module.exports = async function handler(req, res) {
           timeframe: tf,
           profit_target_pct: r.profitTargetPct,
           dmi_volume_confirmation: trendContext?.dmi_volume_confirmation,
+          regime_spx_chg_pct: spxChg,
+          regime_ndx_chg_pct: ndxChg,
+          vix_chg_pct: vix.chgPct,
         }),
       }
       const directionStability = buildDirectionStability(historyRow, recentDirectionRows)

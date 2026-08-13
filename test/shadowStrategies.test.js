@@ -32,3 +32,19 @@ test('swing call liquidity-entry candidate excludes puts and Quick calls', () =>
   assert.equal(buildShadowStrategies({ ...base, option_type: 'call', timeframe: 'Quick (5–14 DTE)' })
     .assignments.swing_call_liquidity_entry_v3, false)
 })
+
+test('bearish put candidate requires market, volatility, stock direction, and liquidity confirmation', () => {
+  const candidate = buildShadowStrategies({
+    option_type: 'put', timeframe: 'Quick (5–14 DTE)', chg_pct: -1.2,
+    entry_spread_pct: 8, volume: 200, open_interest: 2000,
+    regime_spx_chg_pct: -0.8, regime_ndx_chg_pct: -1.1, vix_chg_pct: 6,
+  })
+  assert.equal(candidate.assignments.bearish_regime_put_v1, true)
+
+  const bullishMarket = buildShadowStrategies({
+    option_type: 'put', timeframe: 'Quick (5–14 DTE)', chg_pct: -1.2,
+    entry_spread_pct: 8, volume: 200, open_interest: 2000,
+    regime_spx_chg_pct: 0.4, regime_ndx_chg_pct: 0.6, vix_chg_pct: -2,
+  })
+  assert.equal(bullishMarket.assignments.bearish_regime_put_v1, false)
+})

@@ -7,6 +7,9 @@ function buildShadowStrategies(signal) {
   const spread = Number(signal.entry_spread_pct)
   const volume = Number(signal.volume)
   const openInterest = Number(signal.open_interest)
+  const spxChange = Number(signal.regime_spx_chg_pct)
+  const ndxChange = Number(signal.regime_ndx_chg_pct)
+  const vixChange = Number(signal.vix_chg_pct)
   const dmiVolume = signal.dmi_volume_confirmation || null
   const swingTimeframe = String(signal.timeframe || '').startsWith('Swing')
   const dmiVolumeAligned = swingTimeframe && dmiVolume?.status === 'MEASURED' && (
@@ -20,6 +23,9 @@ function buildShadowStrategies(signal) {
   const liquid = Number.isFinite(spread) && spread <= 20 &&
     Number.isFinite(volume) && volume >= 50 &&
     Number.isFinite(openInterest) && openInterest >= 500
+  const confirmedBearishMarket = Number.isFinite(spxChange) && spxChange <= -0.5 &&
+    Number.isFinite(ndxChange) && ndxChange <= -0.5 &&
+    Number.isFinite(vixChange) && vixChange >= 3
 
   return {
     version: SHADOW_STRATEGY_VERSION,
@@ -32,6 +38,10 @@ function buildShadowStrategies(signal) {
       // Keep separate from combined_quality: adding trend alignment diluted
       // the observed edge. This remains shadow-only until promotion gates.
       swing_call_liquidity_entry_v3: swingTimeframe && optionType === 'call' && liquid && directionConfirmed,
+      // Puts must be judged separately in a real risk-off tape. This uses
+      // already-captured scan-time context (no extra provider calls) and is
+      // intentionally shadow-only until bearish-market observations exist.
+      bearish_regime_put_v1: optionType === 'put' && confirmedBearishMarket && directionConfirmed && liquid,
       defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
       dmi_volume_confirmation_v1: dmiVolumeAligned,
     },
@@ -59,6 +69,9 @@ function buildShadowStrategies(signal) {
       volume: Number.isFinite(volume) ? volume : null,
       open_interest: Number.isFinite(openInterest) ? openInterest : null,
       timeframe: signal.timeframe || null,
+      regime_spx_chg_pct: Number.isFinite(spxChange) ? spxChange : null,
+      regime_ndx_chg_pct: Number.isFinite(ndxChange) ? ndxChange : null,
+      vix_chg_pct: Number.isFinite(vixChange) ? vixChange : null,
       dmi_volume_confirmation: swingTimeframe
         ? (dmiVolume || { status: 'UNAVAILABLE' })
         : { status: 'NOT_APPLICABLE', reason: 'Quick requires completed 15-minute candles; daily data is not substituted.' },
