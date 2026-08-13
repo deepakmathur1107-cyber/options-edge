@@ -15,6 +15,7 @@ const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
 const { buildSizingForScanRow } = require('./_lib/userPositionSizing')
 const { attachQualityShortlist } = require('./_lib/qualityShortlist')
+const { CLUSTER_MIN_COUNT } = require('./_lib/clusterConfig')
 
 let _sb = null
 function sb() {
@@ -69,8 +70,6 @@ function attachPositionSizing(rows, prefs) {
 // two -- it just tells the user the structural fact (count, sector,
 // direction) so they don't mistake batch breadth for independent
 // diversification.
-const CLUSTER_MIN_COUNT = 4
-
 // computeClusters: groups by (sector, direction) and returns only groups at
 // or above CLUSTER_MIN_COUNT. Deliberately takes a separate, UNCAPPED query
 // result -- never the same rows already truncated by PER_TF_LIMIT/.limit(50)
