@@ -14,6 +14,7 @@ import StockWorkspace from './components/StockWorkspace'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
+import { classifyScanDecision, executionQuality, marketAlignment, rejectionSummary, strategyEvidence } from './lib/scanDecision'
 
 // ─── Safe localStorage helper ─────────────────────────────────────────────────
 const ls = (key, fallback='') => {
@@ -1217,10 +1218,11 @@ export default function App(props={}) {
   const [lastAlert,   setLastAlert]   = useState(null)
   const [alertHistory, setAlertHistory] = useState([])   // last 10 full alert objects
   const [shortlistOnly, setShortlistOnly] = useState(true)
+  const [scanDecisionFilter, setScanDecisionFilter] = useState('shortlisted')
   // Sector/direction concentration clusters for the current scan batch — see
   // loadOrRefreshAlerts and api/scan-cache.js. Each entry: { sector, direction, tickers: [...] }.
   const [scanClusters, setScanClusters] = useState([])
-  const [showAllClusters, setShowAllClusters] = useState(false)   // expands the "Today's skew" detail list
+  const [showAllClusters, setShowAllClusters] = useState(false)   // expands Signal Crowding & Exposure details
   const [selectedAlert, setSelectedAlert] = useState(null) // expanded detail
   const [alertSR, setAlertSR] = useState({}) // { [alertIndex]: {loading, data} } — S/R for expanded auto-scan hits
   const [alertCopied, setAlertCopied] = useState(false)
@@ -3025,6 +3027,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           .alert-table-header{display:none!important}
           .alert-card-mobile{display:block}
           .alert-row-mobile-only{display:none!important}
+          .scan-decision-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+          .scan-decision-chip{min-height:58px!important}
         }
         @media(min-width:640px){
           .alert-card-mobile{display:none}
@@ -4000,6 +4004,41 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   scan-cache.js) — counts can exceed what's visible in the
                   list below if the full cluster didn't all make the
                   capped/sorted results. ── */}
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap',padding:'9px 12px',marginBottom:10,border:`1px solid ${C.border}`,borderRadius:7,background:C.bgDeep}}>
+                <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+                  <span style={{fontSize:10.5,color:C.dim,fontWeight:700,letterSpacing:.7}}>DASHBOARD CONTEXT</span>
+                  <span style={{fontSize:12,color:marketConviction?.color||C.dim,fontWeight:700}}>{marketConviction?.direction||'MIXED'}</span>
+                  {marketConviction&&<span style={{fontSize:10.5,color:C.dim}}>{marketConviction.score}% price conviction</span>}
+                </div>
+                <button className="hv" onClick={()=>setTab('dash')} style={{background:'none',border:'none',color:C.blue,fontSize:11,cursor:'pointer',padding:0}}>View Dashboard →</button>
+              </div>
+
+              {alertHistory.length>0&&(()=>{
+                const decisions = alertHistory.map(signal=>classifyScanDecision(signal))
+                const decisionMeta = [
+                  ['shortlisted','SHORTLISTED',C.green],
+                  ['watch','WATCH',C.orange],
+                  ['research','RESEARCH ONLY',C.blue],
+                  ['avoid','AVOID',C.red],
+                ]
+                const topRejections = rejectionSummary(alertHistory).slice(0,4)
+                return <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'11px 12px',marginBottom:10}}>
+                  <div className="scan-decision-grid" style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:6}}>
+                    {decisionMeta.map(([key,label,color])=>{
+                      const active=scanDecisionFilter===key
+                      const count=decisions.filter(value=>value===key).length
+                      return <button key={key} className="hv scan-decision-chip" onClick={()=>{setScanDecisionFilter(key);setShortlistOnly(key==='shortlisted')}} style={{background:active?`${color}18`:C.bgDeep,border:`1px solid ${active?color:C.border}`,borderRadius:6,padding:'7px 6px',cursor:'pointer',color:active?color:C.dim,textAlign:'left'}}>
+                        <div style={{fontSize:17,fontWeight:700,fontFamily:"'Fraunces',serif"}}>{count}</div>
+                        <div style={{fontSize:9.5,fontWeight:700,letterSpacing:.5,whiteSpace:'nowrap'}}>{label}</div>
+                      </button>
+                    })}
+                  </div>
+                  {topRejections.length>0&&<div style={{fontSize:10.5,color:C.dim,lineHeight:1.6,marginTop:8}}>
+                    Common exclusions: {topRejections.map(([reason,count])=>`${count} ${reason.replaceAll('_',' ').toLowerCase()}`).join(' · ')}
+                  </div>}
+                </div>
+              })()}
+
               {scanClusters.length>0&&(()=>{
                 const top = scanClusters.slice(0,3)
                 const rest = scanClusters.slice(3)
@@ -4026,7 +4065,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   }}>
                     <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
                       <span style={{fontSize:11,color:C.blue,fontWeight:700,textTransform:'uppercase',letterSpacing:0.6,whiteSpace:'nowrap'}}>
-                        Today's skew
+                        Signal Crowding &amp; Exposure
                       </span>
                       <span style={{fontSize:13,color:C.dim,flex:1}}>{leadSentence}</span>
                       {rest.length>0&&(
@@ -4061,17 +4100,17 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                 <div style={{marginBottom:10}}>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:8,flexWrap:'wrap'}}>
                     <div>
-                      <div style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:0.7}}>QUALITY SHORTLIST</div>
+                      <div style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:0.7}}>CONTRACT DECISIONS</div>
                       <div style={{fontSize:10,color:C.dim,marginTop:2}}>
                         {alertHistory.filter(row=>row.qualityShortlist?.eligible).length} of {alertHistory.length} fresh signals pass every selection rule.
                       </div>
                     </div>
                     <div style={{display:'flex',gap:5}}>
-                      <button className="hv" onClick={()=>setShortlistOnly(true)} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${shortlistOnly?C.green:C.border}`,background:shortlistOnly?`${C.green}16`:C.bgDeep,color:shortlistOnly?C.green:C.dim}}>★ SHORTLIST</button>
-                      <button className="hv" onClick={()=>setShortlistOnly(false)} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${!shortlistOnly?C.blue:C.border}`,background:!shortlistOnly?`${C.blue}16`:C.bgDeep,color:!shortlistOnly?C.blue:C.dim}}>ALL SIGNALS</button>
+                      <button className="hv" onClick={()=>{setShortlistOnly(true);setScanDecisionFilter('shortlisted')}} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${scanDecisionFilter==='shortlisted'?C.green:C.border}`,background:scanDecisionFilter==='shortlisted'?`${C.green}16`:C.bgDeep,color:scanDecisionFilter==='shortlisted'?C.green:C.dim}}>★ SHORTLIST</button>
+                      <button className="hv" onClick={()=>{setShortlistOnly(false);setScanDecisionFilter('all')}} style={{fontSize:10,padding:'5px 9px',borderRadius:4,border:`1px solid ${scanDecisionFilter==='all'?C.blue:C.border}`,background:scanDecisionFilter==='all'?`${C.blue}16`:C.bgDeep,color:scanDecisionFilter==='all'?C.blue:C.dim}}>ALL SIGNALS</button>
                     </div>
                   </div>
-                  {shortlistOnly && !alertHistory.some(row=>row.qualityShortlist?.eligible) && (
+                  {scanDecisionFilter==='shortlisted' && !alertHistory.some(row=>row.qualityShortlist?.eligible) && (
                     <div style={{background:`${C.orange}0D`,border:`1px solid ${C.orange}35`,borderRadius:6,padding:'11px 13px',fontSize:11,color:C.subtext,lineHeight:1.55,marginBottom:8}}>
                       No setup passes every Quality Shortlist rule right now. This is a valid wait signal—not a reason to lower the safety filters. Switch to All Signals to review exclusions.
                     </div>
@@ -4115,13 +4154,25 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       return { label: `${diffDay}d ago`, tier: 'stale' }
                     }
                   return alertHistory.map((al,i)=>({al,i}))
-                    .filter(({al})=>(!shortlistOnly || al.qualityShortlist?.eligible) && (!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)))
+                    .filter(({al})=>(scanDecisionFilter==='all' || classifyScanDecision(al)===scanDecisionFilter) && (!tickerFilter || al.ticker?.toUpperCase().includes(tickerFilter)))
                     .map(({al,i})=>{
                     const staleness = stalenessOf(al.scannedAtMs)
                     const staleCol = staleness?.tier==='fresh' ? C.green : staleness?.tier==='aging' ? C.orange : C.dim
                     const isSelected = selectedAlert===i
                     const scoreCol = al.score>=80?C.green:al.score>=65?C.orange:C.blue
                     const grade = al.score>=80?'A':al.score>=65?'B':'C'
+                    const scanDecision = classifyScanDecision(al)
+                    const execution = executionQuality(al)
+                    const alignment = marketAlignment(al, marketConviction?.direction)
+                    const evidence = strategyEvidence(al)
+                    const decisionPresentation = {
+                      shortlisted:{label:'SHORTLISTED',color:C.green},
+                      watch:{label:'WATCH',color:C.orange},
+                      research:{label:'RESEARCH ONLY',color:C.blue},
+                      avoid:{label:'AVOID',color:C.red},
+                    }[scanDecision]
+                    const executionColor = execution.level==='Excellent'?C.green:execution.level==='Acceptable'?C.orange:execution.level==='Poor'?C.red:C.dim
+                    const alignmentColor = alignment.tone==='positive'?C.green:alignment.tone==='negative'?C.red:alignment.tone==='caution'?C.orange:C.dim
                     const lifecycleStatus = al.lifecycleSummary?.lifecycle_status || 'TRACKING'
                     const lifecycleMeta = {
                       LIVE: { label:'LIVE · FORWARD', color:C.green, title:'Counts toward forward validation after resolution' },
@@ -4230,6 +4281,11 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
 
                           {/* Row 2 — the contract, full width, never clipped */}
                           <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:13.5,color:C.text,marginBottom:8}}>{al.tradeType} {al.strikeStr}</div>
+                          <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:8}}>
+                            <span style={{fontSize:9.5,fontWeight:700,color:decisionPresentation.color,border:`1px solid ${decisionPresentation.color}55`,background:`${decisionPresentation.color}12`,padding:'2px 6px',borderRadius:3}}>{decisionPresentation.label}</span>
+                            <span style={{fontSize:9.5,fontWeight:700,color:alignmentColor,border:`1px solid ${alignmentColor}55`,padding:'2px 6px',borderRadius:3}}>{alignment.label}</span>
+                            <span style={{fontSize:9.5,fontWeight:700,color:executionColor,border:`1px solid ${executionColor}55`,padding:'2px 6px',borderRadius:3}}>LIQUIDITY {execution.level.toUpperCase()}</span>
+                          </div>
 
                           {/* Row 3 — conviction bar, now WITH a label so the
                               number means something at a glance instead of
@@ -4319,6 +4375,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                           <span title={lifecycleMeta.title} style={{fontSize:8.5,color:lifecycleMeta.color,border:`1px solid ${lifecycleMeta.color}55`,background:`${lifecycleMeta.color}12`,padding:'2px 5px',borderRadius:3,fontWeight:700,whiteSpace:'nowrap'}}>
                             {lifecycleMeta.label}
                           </span>
+                          <span style={{fontSize:8.5,color:decisionPresentation.color,border:`1px solid ${decisionPresentation.color}55`,background:`${decisionPresentation.color}12`,padding:'2px 5px',borderRadius:3,fontWeight:700,whiteSpace:'nowrap'}}>{decisionPresentation.label}</span>
                           <span className="alert-row-contract" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:C.text,flex:1}}>{al.tradeType} {al.strikeStr}</span>
                           {moneyness&&<span className="alert-row-moneyness" title={`Stock was $${al.underlyingPrice.toFixed(2)} at scan time`} style={{fontSize:10.5,color:moneyness.itm?C.orange:C.dim,border:`1px solid ${moneyness.itm?C.orange:C.border}50`,padding:'1px 6px',borderRadius:2,flexShrink:0,whiteSpace:'nowrap',fontFamily:"'IBM Plex Mono',monospace"}}>
                             ${al.underlyingPrice.toFixed(2)} · {moneyness.itm?'ITM':'OTM'} {Math.abs(moneyness.pct).toFixed(1)}%
@@ -4359,6 +4416,15 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                               ))}
                             </div>
                             {al.tfLabel&&<div style={{fontSize:11,color:C.dim,marginBottom:10,fontFamily:"'IBM Plex Mono',monospace"}}>{al.tfLabel} · {al.alertedAt}</div>}
+                            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
+                              <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:6}}>
+                                <span style={{fontSize:9.5,fontWeight:700,color:decisionPresentation.color}}>{decisionPresentation.label}</span>
+                                <span style={{fontSize:9.5,color:alignmentColor}}>· {alignment.label}</span>
+                                <span style={{fontSize:9.5,color:executionColor}}>· {execution.level} liquidity{execution.spreadPct!=null?` (${execution.spreadPct.toFixed(1)}% spread)`:''}</span>
+                              </div>
+                              <div style={{fontSize:10.5,color:C.subtext,lineHeight:1.5}}>{evidence}</div>
+                              <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>Market context comes from Dashboard; execution and evidence shown here apply to this contract.</div>
+                            </div>
                             {al.qualityShortlist && (
                               <div style={{background:al.qualityShortlist.eligible?`${C.green}10`:`${C.orange}0D`,border:`1px solid ${al.qualityShortlist.eligible?C.green:C.orange}35`,borderRadius:6,padding:'9px 11px',marginBottom:10}}>
                                 <div style={{fontSize:10.5,fontWeight:700,color:al.qualityShortlist.eligible?C.green:C.orange,letterSpacing:0.7}}>
