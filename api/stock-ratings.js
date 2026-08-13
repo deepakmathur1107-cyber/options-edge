@@ -2,7 +2,7 @@ const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('./_lib/auth')
 const { rateLimit } = require('./_lib/rateLimit')
 
-const VERSION='stock-health-v1'
+const VERSION='stock-universe-v1'
 const RATINGS=new Set(['BUY_SETUP','HOLD_WAIT','AVOID','NOT_RATED'])
 const num=value=>{
   if(value===null||value===undefined||value==='') return null
@@ -76,7 +76,7 @@ module.exports=async function handler(req,res) {
     if(error) return res.status(500).json({error:error.message})
     const rows=data||[],buyRows=rows.filter(row=>row.rating==='BUY_SETUP')
     return res.status(200).json({
-      methodology:'Forward-observed daily closing prices; one immutable rating per ticker/day/version. Results exclude fees and are not investment advice.',
+      methodology:'Forward-observed nightly snapshots; one immutable rating per ticker/day/version. Results exclude fees and are not investment advice.',
       version:VERSION,totalRatings:rows.length,buySetups:buyRows.length,
       horizons:{5:summarize(buyRows,5),10:summarize(buyRows,10),20:summarize(buyRows,20),60:summarize(buyRows,60)},
       recent:rows.slice(0,20),

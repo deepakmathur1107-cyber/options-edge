@@ -3,7 +3,7 @@ const { createClient } = require('@supabase/supabase-js')
 const TRADIER_MODE=process.env.TRADIER_MODE||'production'
 const TRADIER_BASE=TRADIER_MODE==='sandbox'?'https://sandbox.tradier.com/v1':'https://api.tradier.com/v1'
 const TRADIER_TOKEN=process.env.TRADIER_TOKEN||''
-const MAX_ROWS=1000
+const MAX_ROWS=5000
 
 const asArray=value=>!value?[]:Array.isArray(value)?value:[value]
 const nyDate=date=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)
@@ -42,7 +42,7 @@ module.exports=async function handler(req,res) {
 
   const client=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY)
   const {data,error}=await client.from('stock_rating_history').select('*')
-    .lt('sessions_observed',60).lt('rating_date',today)
+    .eq('rating','BUY_SETUP').lt('sessions_observed',60).lt('rating_date',today)
     .order('rating_date',{ascending:true}).limit(MAX_ROWS)
   if(error) return res.status(500).json({error:error.message})
   const rows=(data||[]).filter(row=>row.last_observed_date!==today)

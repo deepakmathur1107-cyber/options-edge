@@ -14,7 +14,10 @@ const UNIVERSE=[...new Set([...SP500,...ADRS])].filter(symbol=>/^[A-Z][A-Z.-]{0,
 const BASE=(process.env.TRADIER_MODE||'production')==='sandbox'?'https://sandbox.tradier.com/v1':'https://api.tradier.com/v1'
 const HEADERS={Authorization:`Bearer ${process.env.TRADIER_TOKEN||''}`,Accept:'application/json'}
 const asArray=value=>!value?[]:Array.isArray(value)?value:[value]
-const nyDate=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+const nyDate=(date=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)
+// The batch window crosses midnight ET. Shift the operational date so every
+// batch from the same post-close run shares one cursor/checkpoint record.
+const nightlyRunDate=()=>nyDate(new Date(Date.now()-6*60*60*1000))
 const timeout=(promise,ms,label)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error(`${label} timed out`)),ms))])
 async function tradier(path) {
   const response=await timeout(fetch(`${BASE}${path}`,{headers:HEADERS}),20000,'Market data')
@@ -33,13 +36,27 @@ function exclusion({price,averageVolume,health}) {
   if(!['HEALTHY','ACCEPTABLE'].includes(health.status)||health.score<MIN_FUNDAMENTAL_SCORE) return 'Fundamental quality below medium'
   return null
 }
+function toRatingHistory(row,benchmarkPrice=null) {
+  if(!row?.eligible||!['BUY_SETUP','HOLD_WAIT'].includes(row.rating)) return null
+  return {
+    rating_date:row.snapshot_date,ticker:row.ticker,algorithm_version:row.algorithm_version,
+    rating:row.rating,technical_state:row.technical_state,fundamental_state:row.fundamental_state,
+    setup:row.setup||null,market_regime:'NIGHTLY CLOSE',entry_price:row.price,
+    benchmark_price:Number(benchmarkPrice)||null,edge_score:row.edge_score,
+    technical_score:row.technical_score,fundamental_score:row.fundamental_score,
+    entry_low:row.entry_low,entry_high:row.entry_high,stop_price:row.stop_price,
+    target_price:row.target_price,
+    inputs:{source:'stock_universe_snapshots',fundamentalCoverage:row.fundamental_coverage},
+    updated_at:new Date().toISOString(),
+  }
+}
 
 module.exports=async function handler(req,res) {
   const auth=req.headers.authorization||''
   const allowed=auth===`Bearer ${process.env.CRON_SECRET||'__never__'}`||req.headers['x-vercel-cron']==='1'||req.query.secret===process.env.CRON_SECRET
   if(!allowed) return res.status(401).json({error:'Unauthorized'})
   const client=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY)
-  const runDate=nyDate()
+  const runDate=nightlyRunDate()
   const {data:existing,error:runError}=await client.from('stock_universe_runs').select('*').eq('run_date',runDate).maybeSingle()
   if(runError) return res.status(500).json({error:runError.message})
   if(existing?.status==='COMPLETE') return res.status(200).json({complete:true,runDate,processed:existing.processed_count,eligible:existing.eligible_count})
@@ -49,7 +66,8 @@ module.exports=async function handler(req,res) {
   const start=new Date(Date.now()-260*864e5).toISOString().slice(0,10),end=new Date().toISOString().slice(0,10)
   const errors=[]
   try {
-    const quoteData=await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbols.join(','))}&greeks=false`)
+    const quoteSymbols=[...new Set([...symbols,'SPY'])]
+    const quoteData=await tradier(`/markets/quotes?symbols=${encodeURIComponent(quoteSymbols.join(','))}&greeks=false`)
     const quotes=new Map(asArray(quoteData?.quotes?.quote).map(q=>[q.symbol,q]))
     const results=await batches(symbols,async ticker=>{
       try {
@@ -66,7 +84,8 @@ module.exports=async function handler(req,res) {
         const blocked=exclusion({price,averageVolume,health}),eligible=!blocked
         const plan=eligible?buildPlan(price,technical):null
         const edge=eligible&&technical.technicalScore!=null?Math.round(technical.technicalScore*.55+health.score*.45):null
-        return {snapshot_date:runDate,ticker,algorithm_version:VERSION,company_name:quote.description||fund?.name||ticker,sector:fund?.sector||null,industry:fund?.industry||fund?.sub_industry||null,
+        const snapshotDate=String(latest.date||runDate).slice(0,10)
+        return {snapshot_date:snapshotDate,ticker,algorithm_version:VERSION,company_name:quote.description||fund?.name||ticker,sector:fund?.sector||null,industry:fund?.industry||fund?.sub_industry||null,
           price,average_volume:averageVolume,market_cap:fund?.market_cap||null,pe_ratio:fund?.pe_ratio||null,earnings_date:fund?.earnings_date||null,
           fundamental_state:health.status,fundamental_score:health.score,fundamental_coverage:health.coverage,technical_state:technical.status,technical_score:technical.technicalScore,
           edge_score:edge,rating:!eligible?'EXCLUDED':technical.status==='READY'?'BUY_SETUP':'HOLD_WAIT',setup:technical.setup||null,rsi:null,
@@ -79,6 +98,12 @@ module.exports=async function handler(req,res) {
     if(rows.length) {
       const {error}=await client.from('stock_universe_snapshots').upsert(rows,{onConflict:'snapshot_date,ticker,algorithm_version'})
       if(error) throw error
+      const spy=quotes.get('SPY'),benchmarkPrice=Number(spy?.last||spy?.close)||null
+      const ratings=rows.map(row=>toRatingHistory(row,benchmarkPrice)).filter(Boolean)
+      if(ratings.length) {
+        const {error:ratingError}=await client.from('stock_rating_history').upsert(ratings,{onConflict:'rating_date,ticker,algorithm_version',ignoreDuplicates:true})
+        if(ratingError) throw ratingError
+      }
     }
     const nextCursor=cursor+symbols.length,complete=nextCursor>=UNIVERSE.length
     const run={run_date:runDate,algorithm_version:VERSION,cursor_position:nextCursor,universe_size:UNIVERSE.length,
@@ -93,4 +118,4 @@ module.exports=async function handler(req,res) {
   }
 }
 
-module.exports._test={exclusion,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME,MIN_FUNDAMENTAL_SCORE,MIN_FUNDAMENTAL_COVERAGE}
+module.exports._test={exclusion,toRatingHistory,nightlyRunDate,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME,MIN_FUNDAMENTAL_SCORE,MIN_FUNDAMENTAL_COVERAGE}

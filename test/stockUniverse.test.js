@@ -1,6 +1,6 @@
 const test=require('node:test')
 const assert=require('node:assert/strict')
-const {exclusion,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME}=require('../api/cron/build-stock-universe')._test
+const {exclusion,toRatingHistory,UNIVERSE,MIN_PRICE,MIN_AVERAGE_VOLUME}=require('../api/cron/build-stock-universe')._test
 
 const healthy={status:'ACCEPTABLE',score:70,coverage:80}
 
@@ -21,4 +21,16 @@ test('nightly universe requires medium-to-high fundamentals',()=>{
 test('nightly universe is broader than the former ten-stock list and includes PDD',()=>{
   assert.ok(UNIVERSE.length>300)
   assert.ok(UNIVERSE.includes('PDD'))
+})
+
+test('eligible nightly snapshots enroll as immutable forward ratings',()=>{
+  const rating=toRatingHistory({snapshot_date:'2026-08-12',ticker:'MSFT',algorithm_version:'stock-universe-v1',eligible:true,rating:'BUY_SETUP',price:500,technical_state:'READY',fundamental_state:'HEALTHY',fundamental_coverage:100,edge_score:88,technical_score:80,fundamental_score:98},700)
+  assert.equal(rating.rating_date,'2026-08-12')
+  assert.equal(rating.entry_price,500)
+  assert.equal(rating.benchmark_price,700)
+  assert.equal(rating.inputs.source,'stock_universe_snapshots')
+})
+
+test('excluded nightly snapshots never enter the rating track record',()=>{
+  assert.equal(toRatingHistory({eligible:false,rating:'EXCLUDED'}),null)
 })
