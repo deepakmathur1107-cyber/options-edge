@@ -1,5 +1,26 @@
 const finite = value => Number.isFinite(Number(value))
 const average = values => values.length ? values.reduce((sum,value)=>sum+value,0)/values.length : null
+const marketDate = date => new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(date)
+
+export function mergeLiveQuoteIntoDailyBars(inputBars,quote,now=new Date()) {
+  const bars=(Array.isArray(inputBars)?inputBars:[]).map(bar=>({...bar}))
+  const price=Number(quote?.last),high=Number(quote?.high),low=Number(quote?.low),volume=Number(quote?.volume)
+  const rawTime=Number(quote?.trade_date??quote?.trade_time)
+  const quoteTime=Number.isFinite(rawTime)?new Date(rawTime>1e12?rawTime:rawTime*1000):null
+  const fresh=quoteTime&&Number.isFinite(quoteTime.getTime())&&now-quoteTime<=5*60*1000&&now-quoteTime>=-60*1000
+  if(!fresh||!Number.isFinite(price)||price<=0) return {bars,provisional:false,reason:'Live quote is stale or unavailable.'}
+  const date=marketDate(quoteTime),last=bars.at(-1),sameDay=String(last?.date||'').slice(0,10)===date
+  const live={
+    ...(sameDay?last:{}),date,close:price,
+    high:Number.isFinite(high)&&high>0?Math.max(high,price):price,
+    low:Number.isFinite(low)&&low>0?Math.min(low,price):price,
+    volume:Number.isFinite(volume)&&volume>=0?volume:0,
+    provisional:true,
+  }
+  if(sameDay) bars[bars.length-1]=live
+  else bars.push(live)
+  return {bars,provisional:true,quoteTime:quoteTime.toISOString()}
+}
 
 export function rsi14(closes) {
   if (closes.length < 15) return null
@@ -37,14 +58,18 @@ export function analyzeStockBars(inputBars) {
   const trendUp=sma20>sma50&&latest.close>sma50
   const distanceFromSma20=(latest.close/sma20)-1
   const nearSupport=latest.close>=support&&latest.close<=support*1.035
-  const breakout=trendUp&&distanceFromSma20<=.05&&latest.close>=resistance*.995&&volumeRatio>=1.15
+  const confirmedBreakout=trendUp&&distanceFromSma20<=.05&&latest.close>=resistance*.995&&volumeRatio>=1.15
+  const earlyBreakout=latest.provisional&&latest.close>sma50&&latest.close>=resistance&&latest.close<=resistance*1.02&&volumeRatio>=1.15
+  const breakout=confirmedBreakout||earlyBreakout
   const pullback=trendUp&&Math.abs(distanceFromSma20)<=.025&&rsi>=40&&rsi<=65
   const continuation=trendUp&&distanceFromSma20>0&&distanceFromSma20<=.055&&rsi>=50&&rsi<=72
   const supportBounce=trendUp&&nearSupport&&rsi>=38
 
   let setup='NO VALID SETUP', status='WAIT', reason='Price is not at a defined pullback, breakout, continuation, or support-bounce trigger.'
   if (breakout) {
-    setup='BREAKOUT'; status='READY'; reason='Price is clearing 20-day resistance while the 20-day average remains above the 50-day average.'
+    setup='BREAKOUT'; status='READY'; reason=latest.provisional
+      ? 'Provisional intraday breakout: live price is clearing resistance with confirming volume; confirmation is required at the close.'
+      : 'Price is clearing 20-day resistance while the 20-day average remains above the 50-day average.'
   } else if (pullback) {
     setup='PULLBACK'; status='READY'; reason='Price has returned to the rising 20-day average with neutral momentum.'
   } else if (supportBounce) {
@@ -61,7 +86,7 @@ export function analyzeStockBars(inputBars) {
     50+(trendUp?18:-12)+(status==='READY'?12:0)+(volumeRatio>=1?5:0)+(rsi>=45&&rsi<=68?7:0)-(distanceFromSma20>.055?12:0)
   )))
 
-  return {status,setup,reason,bars:bars.length,price:latest.close,rsi,support,resistance,sma20,sma50,volumeRatio,trendUp,distanceFromSma20,technicalScore}
+  return {status,setup,reason,bars:bars.length,price:latest.close,rsi,support,resistance,sma20,sma50,volumeRatio,trendUp,distanceFromSma20,technicalScore,provisional:Boolean(latest.provisional)}
 }
 
 export function buildStockTradePlan({price,analysis}) {

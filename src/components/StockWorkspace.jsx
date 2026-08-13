@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../lib/stockAnalysis'
+import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow, mergeLiveQuoteIntoDailyBars } from '../lib/stockAnalysis'
 
 const STOCKS = [
   { symbol:'NVDA', name:'NVIDIA', sector:'Semiconductors', price:176.26, change:1.84, score:92, setup:'Breakout watch', stage:'WAIT', entry:'177.50–179.00', stop:169.80, target1:188, target2:198, rr:'2.4×', trend:'Strong', rsi:62, volume:'1.4×', support:169.80, resistance:178.20, thesis:'AI infrastructure demand and accelerating data-center revenue keep relative strength near the top of the large-cap universe.', catalyst:'Earnings in 24 days', risk:'Extended valuation; a loss of the 20-day average weakens the setup.', quality:94, growth:98, value:61, momentum:96 },
@@ -37,6 +37,7 @@ const plainDecision = stage => stage==='QUALITY + READY'?'BUY SETUP'
   :stage==='QUALITY + WAIT'||stage==='EVENT RISK'?'HOLD / WAIT'
   :stage==='FUNDAMENTAL RISK'?'AVOID'
   :stage==='ANALYZING'?'ANALYZING':'NOT RATED'
+const decisionLabel=item=>item?.provisional&&item.stage==='QUALITY + READY'?'PROVISIONAL BUY':plainDecision(item?.stage)
 const technicalLabel = stage => stage==='READY'?'STRONG SETUP':stage==='WAIT'?'WEAK / WAIT':stage==='ANALYZING'?'ANALYZING':'NOT RATED'
 const fundamentalLabel = health => health?.status==='HEALTHY'?'HEALTHY':health?.status==='ACCEPTABLE'?'ACCEPTABLE':health?.status==='FUNDAMENTAL_RISK'?'WEAK':health?.status==='EVENT_RISK'?'EVENT RISK':'NOT RATED'
 
@@ -46,7 +47,6 @@ const authHeaders = async getToken => {
   const token = await getToken?.()
   return token ? { Authorization:`Bearer ${token}` } : {}
 }
-
 function Metric({ label, value, color, C }) {
   return <div className="stock-metric" style={{padding:'11px 12px',background:C.cardAlt,border:`1px solid ${C.border}`,borderRadius:8}}>
     <div style={{fontSize:9,color:C.dim,letterSpacing:1.2,marginBottom:5}}>{label}</div>
@@ -54,6 +54,7 @@ function Metric({ label, value, color, C }) {
   </div>
 }
 
+export { decisionLabel }
 function Bar({ label, value, C }) {
   const color=value>=85?C.green:value>=70?C.blue:C.orange
   return <div style={{marginBottom:12}}>
@@ -283,6 +284,13 @@ export default function StockWorkspace({ C, getToken }) {
     return()=>{cancelled=true}
   },[selected,getToken])
 
+  useEffect(()=>{
+    const bars=priceHistory[selected],quote=quotes[selected]
+    if(!bars?.length||!quote) return
+    const merged=mergeLiveQuoteIntoDailyBars(bars,quote)
+    setTechnicals(previous=>({...previous,[selected]:analyzeStockBars(merged.bars)}))
+  },[selected,priceHistory,quotes])
+
   const enriched = useMemo(()=>universe.map(seed=>{
     const q=quotes[seed.symbol]
     const t=technicals[seed.symbol]||seed.nightly?.technical
@@ -302,7 +310,7 @@ export default function StockWorkspace({ C, getToken }) {
       :!healthPassed?health.label
       :technicalStage==='READY'?'QUALITY + READY':'QUALITY + WAIT'
     const plan=technicalStage==='READY'&&healthPassed?buildStockTradePlan({price,analysis:t}):null
-    return {...seed,price,change,support,resistance,trend,momentum,technicalScore,score,stage,technicalStage,health,analysisReason:t?.reason||'Technical history is still loading.',plan,
+    return {...seed,price,change,support,resistance,trend,momentum,technicalScore,score,stage,technicalStage,health,analysisReason:t?.reason||'Technical history is still loading.',plan,provisional:Boolean(t?.provisional),
       setup:analyzed?t.setup:seed.setup,stop:plan?.stop??null,
       rsi:t?.rsi??seed.rsi,volume:t?.volumeRatio?`${t.volumeRatio.toFixed(1)}×`:seed.volume,
       entry:plan?`${plan.entryLow.toFixed(2)}–${plan.entryHigh.toFixed(2)}`:'—',
@@ -446,7 +454,7 @@ export default function StockWorkspace({ C, getToken }) {
     </div>
     <div className="stock-hero" style={{marginBottom:16}}>
       <div style={{background:`linear-gradient(120deg,${C.card},${C.bgDeep})`,border:`1px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:C.shadow}}>
-        <div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:9,color:C.dim,letterSpacing:1.4,marginBottom:7}}>HIGHEST-RANKED STOCK SETUP</div><div style={{display:'flex',alignItems:'baseline',gap:10}}><span style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,color:C.text}}>{rows[0]?.symbol||'—'}</span><span style={{fontSize:12,color:C.subtext}}>{rows[0]?.name||'Loading market data'}</span><span style={{fontSize:10,fontWeight:800,color:stageColor(rows[0]?.stage,C),border:`1px solid ${stageColor(rows[0]?.stage,C)}50`,background:`${stageColor(rows[0]?.stage,C)}12`,padding:'3px 7px',borderRadius:20}}>{rows[0]?plainDecision(rows[0].stage):'ANALYZING'}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,marginTop:8}}>Technical: {technicalLabel(rows[0]?.technicalStage)} · Fundamentals: {fundamentalLabel(rows[0]?.health)}</div></div><div style={{textAlign:'right'}}><div style={{fontSize:34,fontWeight:800,fontFamily:"'Inter',sans-serif",color:C.green}}>{rows[0]?.score||'—'}</div><div style={{fontSize:9,color:C.dim,letterSpacing:1}}>EDGE SCORE</div></div></div>
+        <div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:9,color:C.dim,letterSpacing:1.4,marginBottom:7}}>HIGHEST-RANKED STOCK SETUP</div><div style={{display:'flex',alignItems:'baseline',gap:10}}><span style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,color:C.text}}>{rows[0]?.symbol||'—'}</span><span style={{fontSize:12,color:C.subtext}}>{rows[0]?.name||'Loading market data'}</span><span style={{fontSize:10,fontWeight:800,color:stageColor(rows[0]?.stage,C),border:`1px solid ${stageColor(rows[0]?.stage,C)}50`,background:`${stageColor(rows[0]?.stage,C)}12`,padding:'3px 7px',borderRadius:20}}>{rows[0]?decisionLabel(rows[0]):'ANALYZING'}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:13,color:C.subtext,marginTop:8}}>Technical: {technicalLabel(rows[0]?.technicalStage)} · Fundamentals: {fundamentalLabel(rows[0]?.health)}</div></div><div style={{textAlign:'right'}}><div style={{fontSize:34,fontWeight:800,fontFamily:"'Inter',sans-serif",color:C.green}}>{rows[0]?.score||'—'}</div><div style={{fontSize:9,color:C.dim,letterSpacing:1}}>EDGE SCORE</div></div></div>
         <button onClick={()=>rows[0]&&setSelected(rows[0].symbol)} style={{marginTop:17,border:'none',background:C.green,color:'#1c1916',padding:'10px 16px',borderRadius:7,fontWeight:800,fontSize:11,cursor:'pointer'}}>OPEN LIVE TRADE PLAN →</button>
       </div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow}}><div style={{fontSize:10,color:C.dim,letterSpacing:1.3,marginBottom:13}}>MARKET CONDITIONS · LIVE INDEX PROXY</div><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}><div><div style={{fontSize:18,fontWeight:800,color:marketState.color}}>{marketState.label}</div><div style={{fontSize:10,color:C.dim,marginTop:3}}>{marketState.detail}</div></div><div style={{width:44,height:44,borderRadius:'50%',display:'grid',placeItems:'center',border:`4px solid ${marketState.color}`,fontWeight:800,color:C.text}}>{marketState.score??'—'}</div></div><div style={{fontSize:11,color:C.subtext,lineHeight:1.55}}>Regime is derived from current SPY and QQQ percentage changes. It is context, not an entry signal.</div></div>
@@ -470,11 +478,11 @@ export default function StockWorkspace({ C, getToken }) {
           <div style={{display:'flex',gap:6,marginTop:9,flexWrap:'wrap'}}>{['ALL','QUALITY + READY','QUALITY + WAIT','BLOCKED'].map(f=><button key={f} onClick={()=>setFilter(f)} style={{border:`1px solid ${filter===f?C.green:C.border}`,background:filter===f?`${C.green}18`:'transparent',color:filter===f?C.green:C.dim,borderRadius:5,padding:'5px 9px',fontSize:9,cursor:'pointer'}}>{f==='QUALITY + READY'?'BUY SETUPS':f==='QUALITY + WAIT'?'HOLD / WAIT':f}</button>)}</div>
           <div style={{marginTop:10,padding:'9px 10px',border:`1px solid ${C.border}`,borderRadius:7,background:C.cardAlt,fontSize:9,color:C.subtext,lineHeight:1.6}}><strong style={{color:C.green}}>BUY SETUP</strong> = healthy company and valid entry · <strong style={{color:C.orange}}>HOLD / WAIT</strong> = company may be healthy, but entry is weak or an event is near · <strong style={{color:C.red}}>AVOID</strong> = fundamental checks failed · <strong style={{color:C.dim}}>NOT RATED</strong> = insufficient data</div>
         </div>
-        <div style={{maxHeight:650,overflowY:'auto'}}>{rows.map(s=><button key={s.symbol} onClick={()=>setSelected(s.symbol)} style={{width:'100%',display:'grid',gridTemplateColumns:'1fr auto',gap:10,textAlign:'left',padding:'14px',border:'none',borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${selected===s.symbol?C.green:'transparent'}`,background:selected===s.symbol?`${C.green}0d`:'transparent',cursor:'pointer',color:C.text}}><div><div style={{display:'flex',alignItems:'center',gap:7}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{s.symbol}</strong><span style={{fontSize:9,color:stageColor(s.stage,C),fontWeight:800}}>{plainDecision(s.stage)}</span>{watchlist.includes(s.symbol)&&<span style={{color:C.orange,fontSize:10}}>★</span>}</div><div style={{fontSize:10,color:C.dim,margin:'3px 0 7px'}}>{s.name} · {s.sector}</div><div style={{fontSize:10,color:C.subtext}}>Technical: {technicalLabel(s.technicalStage)} · Fundamentals: {fundamentalLabel(s.health)}</div></div><div style={{textAlign:'right'}}><div style={{fontFamily:"'Inter',sans-serif",fontWeight:800}}>${s.price.toFixed(2)}</div><div style={{fontSize:10,color:s.change>=0?C.green:C.red,marginTop:3}}>{s.change>=0?'+':''}{s.change}%</div><div style={{fontSize:10,color:C.green,marginTop:8}}>{s.score} EDGE</div></div></button>)}</div>
+        <div style={{maxHeight:650,overflowY:'auto'}}>{rows.map(s=><button key={s.symbol} onClick={()=>setSelected(s.symbol)} style={{width:'100%',display:'grid',gridTemplateColumns:'1fr auto',gap:10,textAlign:'left',padding:'14px',border:'none',borderBottom:`1px solid ${C.border}`,borderLeft:`3px solid ${selected===s.symbol?C.green:'transparent'}`,background:selected===s.symbol?`${C.green}0d`:'transparent',cursor:'pointer',color:C.text}}><div><div style={{display:'flex',alignItems:'center',gap:7}}><strong style={{fontFamily:"'Inter',sans-serif",fontSize:14}}>{s.symbol}</strong><span style={{fontSize:9,color:stageColor(s.stage,C),fontWeight:800}}>{decisionLabel(s)}</span>{watchlist.includes(s.symbol)&&<span style={{color:C.orange,fontSize:10}}>★</span>}</div><div style={{fontSize:10,color:C.dim,margin:'3px 0 7px'}}>{s.name} · {s.sector}</div><div style={{fontSize:10,color:C.subtext}}>Technical: {technicalLabel(s.technicalStage)} · Fundamentals: {fundamentalLabel(s.health)}</div></div><div style={{textAlign:'right'}}><div style={{fontFamily:"'Inter',sans-serif",fontWeight:800}}>${s.price.toFixed(2)}</div><div style={{fontSize:10,color:s.change>=0?C.green:C.red,marginTop:3}}>{s.change>=0?'+':''}{s.change}%</div><div style={{fontSize:10,color:C.green,marginTop:8}}>{s.score} EDGE</div></div></button>)}</div>
       </section>
       <section>
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow,marginBottom:14}}>
-          <div style={{display:'flex',justifyContent:'space-between',gap:14,flexWrap:'wrap',alignItems:'flex-start'}}><div><div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}><h2 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0}}>{stock.symbol}</h2><span style={{color:C.subtext,fontSize:12}}>{stock.name}</span><span style={{fontSize:10,fontWeight:800,color:stageColor(stock.stage,C),border:`1px solid ${stageColor(stock.stage,C)}55`,padding:'3px 7px',borderRadius:12}}>{detailLoading?'ANALYZING…':plainDecision(stock.stage)}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,marginTop:7}}>${stock.price.toFixed(2)} <span style={{fontSize:12,color:stock.change>=0?C.green:C.red}}>{stock.change>=0?'+':''}{stock.change.toFixed(2)}% today</span></div><div style={{fontSize:10,color:C.subtext,lineHeight:1.6,marginTop:7,maxWidth:650}}><strong>Technical {technicalLabel(stock.technicalStage)}:</strong> {stock.analysisReason}<br/><strong>Fundamentals {fundamentalLabel(stock.health)}:</strong> {stock.health?.reasons?.[0]}</div></div><div style={{display:'flex',gap:7}}><button onClick={()=>toggleWatch(stock.symbol)} style={{background:'transparent',border:`1px solid ${C.border}`,color:watchlist.includes(stock.symbol)?C.orange:C.subtext,borderRadius:7,padding:'9px 11px',fontSize:10,cursor:'pointer'}}>{watchlist.includes(stock.symbol)?'★ WATCHING':'☆ WATCHLIST'}</button><button onClick={togglePaper} disabled={loading||detailLoading||stock.stage!=='QUALITY + READY'} style={{background:tracked?`${C.red}18`:C.green,border:`1px solid ${tracked?C.red:C.green}`,color:tracked?C.red:'#1c1916',borderRadius:7,padding:'9px 13px',fontSize:10,fontWeight:800,cursor:'pointer',opacity:(loading||detailLoading||stock.stage!=='QUALITY + READY')?.45:1}}>{tracked?'STOP PAPER TRADE':'START PAPER TRADE'}</button></div></div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:14,flexWrap:'wrap',alignItems:'flex-start'}}><div><div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}><h2 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0}}>{stock.symbol}</h2><span style={{color:C.subtext,fontSize:12}}>{stock.name}</span><span style={{fontSize:10,fontWeight:800,color:stageColor(stock.stage,C),border:`1px solid ${stageColor(stock.stage,C)}55`,padding:'3px 7px',borderRadius:12}}>{detailLoading?'ANALYZING…':decisionLabel(stock)}</span></div><div style={{fontFamily:"'Inter',sans-serif",fontSize:30,fontWeight:800,marginTop:7}}>${stock.price.toFixed(2)} <span style={{fontSize:12,color:stock.change>=0?C.green:C.red}}>{stock.change>=0?'+':''}{stock.change.toFixed(2)}% today</span></div><div style={{fontSize:10,color:C.subtext,lineHeight:1.6,marginTop:7,maxWidth:650}}><strong>Technical {technicalLabel(stock.technicalStage)}:</strong> {stock.analysisReason}<br/><strong>Fundamentals {fundamentalLabel(stock.health)}:</strong> {stock.health?.reasons?.[0]}</div></div><div style={{display:'flex',gap:7}}><button onClick={()=>toggleWatch(stock.symbol)} style={{background:'transparent',border:`1px solid ${C.border}`,color:watchlist.includes(stock.symbol)?C.orange:C.subtext,borderRadius:7,padding:'9px 11px',fontSize:10,cursor:'pointer'}}>{watchlist.includes(stock.symbol)?'★ WATCHING':'☆ WATCHLIST'}</button><button onClick={togglePaper} disabled={loading||detailLoading||stock.stage!=='QUALITY + READY'} style={{background:tracked?`${C.red}18`:C.green,border:`1px solid ${tracked?C.red:C.green}`,color:tracked?C.red:'#1c1916',borderRadius:7,padding:'9px 13px',fontSize:10,fontWeight:800,cursor:'pointer',opacity:(loading||detailLoading||stock.stage!=='QUALITY + READY')?.45:1}}>{tracked?'STOP PAPER TRADE':'START PAPER TRADE'}</button></div></div>
           {tradeMessage&&<div style={{marginTop:12,padding:'9px 11px',borderRadius:6,border:`1px solid ${tradeMessage.includes('saved')?C.green:C.border}`,color:tradeMessage.includes('saved')?C.green:C.subtext,fontSize:10}}>{tradeMessage}</div>}
           <div className="stock-metrics" style={{marginTop:16}}><Metric label="EDGE SCORE" value={`${stock.score} / 100`} color={C.green} C={C}/><Metric label="SETUP" value={stock.setup} color={C.blue} C={C}/><Metric label="TREND" value={stock.trend} C={C}/><Metric label="REWARD / RISK" value={stock.rr} color={C.green} C={C}/></div>
         </div>
@@ -495,3 +503,4 @@ export default function StockWorkspace({ C, getToken }) {
     </div>
   </div>
 }
+

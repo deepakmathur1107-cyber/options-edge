@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow } from '../src/lib/stockAnalysis.js'
+import { analyzeFundamentalHealth, analyzeStockBars, buildStockTradePlan, isBullishScannerRow, mergeLiveQuoteIntoDailyBars } from '../src/lib/stockAnalysis.js'
 
 const require=createRequire(import.meta.url)
 const serverRatingAnalysis=require('../api/_lib/stockRatingAnalysis.js')
@@ -24,6 +24,36 @@ test('keeps a materially extended stock on wait',()=>{
   const result=analyzeStockBars(barsFor(closes))
   assert.equal(result.status,'WAIT')
   assert.match(result.reason,/5\.5%|defined/)
+})
+
+test('fresh live resistance cross can create a provisional buy setup',()=>{
+  const now=new Date('2026-08-13T15:00:00Z')
+  const closes=[...Array.from({length:30},(_,i)=>78-i*.18),...Array.from({length:20},(_,i)=>72+i*.08)]
+  const historical=barsFor(closes)
+  const merged=mergeLiveQuoteIntoDailyBars(historical,{last:75.2,high:75.3,low:74.8,volume:1300,trade_date:now.getTime()/1000},now)
+  const result=analyzeStockBars(merged.bars)
+  assert.equal(merged.provisional,true)
+  assert.equal(result.status,'READY')
+  assert.equal(result.setup,'BREAKOUT')
+  assert.equal(result.provisional,true)
+})
+
+test('stale live quotes never change the confirmed daily rating',()=>{
+  const now=new Date('2026-08-13T15:00:00Z')
+  const historical=barsFor(Array.from({length:60},(_,i)=>100+i*.1))
+  const merged=mergeLiveQuoteIntoDailyBars(historical,{last:200,high:201,low:199,volume:5000,trade_date:(now.getTime()-10*60*1000)/1000},now)
+  assert.equal(merged.provisional,false)
+  assert.equal(merged.bars.length,historical.length)
+})
+
+test('live breakout does not chase beyond two percent over resistance',()=>{
+  const now=new Date('2026-08-13T15:00:00Z')
+  const closes=[...Array.from({length:30},(_,i)=>78-i*.18),...Array.from({length:20},(_,i)=>72+i*.08)]
+  const historical=barsFor(closes)
+  const resistance=Math.max(...historical.slice(-20).map(bar=>bar.high))
+  const price=resistance*1.025
+  const merged=mergeLiveQuoteIntoDailyBars(historical,{last:price,high:price,low:price*.995,volume:1400,trade_date:now.getTime()/1000},now)
+  assert.equal(analyzeStockBars(merged.bars).status,'WAIT')
 })
 
 test('rejects bearish option scanner rows from bullish stock discovery',()=>{
