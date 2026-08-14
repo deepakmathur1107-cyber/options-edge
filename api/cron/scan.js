@@ -47,6 +47,31 @@ function sb() {
   return _sb
 }
 
+async function collectForwardIvHistory(client, rows, capturedAt) {
+  if (!client || !Array.isArray(rows)) return
+  // Use Swing's 21-45 DTE selected contract as a consistent forward proxy.
+  // Do not mix Quick/LEAP tenors in the same ticker/day series and do not
+  // manufacture historical observations. A later dedicated ATM-30D collector
+  // can replace this source without relabeling what these rows represent.
+  const daily = new Map()
+  for (const row of rows) {
+    if (!String(row.timeframe || '').startsWith('Swing')) continue
+    const iv = Number(row.iv)
+    if (!(iv > 0)) continue
+    daily.set(row.ticker, {
+      ticker: row.ticker,
+      date: capturedAt.toISOString().slice(0, 10),
+      iv_close: iv,
+      source: 'selected_swing_contract_21_45d',
+      dte: Number.isFinite(Number(row.dte_at_signal)) ? Number(row.dte_at_signal) : null,
+      captured_at: capturedAt.toISOString(),
+    })
+  }
+  if (!daily.size) return
+  const { error } = await client.from('iv_history').upsert([...daily.values()], { onConflict: 'ticker,date' })
+  if (error) console.error('[cron/scan] forward IV history upsert failed (non-fatal):', error.message)
+}
+
 // A partial unique index in Supabase guarantees that two overlapping scan
 // invocations cannot both create an open primary lifecycle for the same
 // contract. If this invocation loses that race, preserve its observation by
@@ -544,6 +569,7 @@ module.exports = async function handler(req, res) {
         reasons: r.reasons, warnings: r.warnings, hard_blocks: r.hardBlocks,
         entry_mid: r.midRaw, bid: r.bidRaw, ask: r.askRaw,
         underlying_price: r.priceRaw, iv: r.ivRaw, delta: r.deltaRaw,
+        theta: r.thetaRaw, gamma: r.gammaRaw, vega: r.vegaRaw,
         chg_pct: parseFloat(r.chgPct) || null,
         volume: r.volume, open_interest: r.oi, dte_at_signal: r.dte,
         is_fallback_expiry: r.isFallbackExpiry || false,
@@ -580,6 +606,19 @@ module.exports = async function handler(req, res) {
         // vix_level/vix_chg_pct are LOG ONLY — not wired into scoring yet,
         // same log-first-then-validate discipline as regime_spx_chg_pct above.
         long_term_trend: trendContext?.direction || null,
+        weekly_trend: trendContext?.weekly_trend?.direction || null,
+        support_level: r.supportLevel,
+        resistance_level: r.resistanceLevel,
+        support_distance_pct: r.supportDistancePct,
+        resistance_distance_pct: r.resistanceDistancePct,
+        expected_move_pct: r.expectedMovePct,
+        breakeven_required_pct: r.breakevenRequiredPct,
+        breakeven_expected_move_ratio: r.expectedMovePct > 0 && r.breakevenRequiredPct != null
+          ? r.breakevenRequiredPct / r.expectedMovePct
+          : null,
+        earnings_days_at_signal: r.earningsDate
+          ? Math.ceil((new Date(`${String(r.earningsDate).slice(0, 10)}T12:00:00Z`) - scannedAt) / 86400000)
+          : null,
         vix_level: vix.level,
         vix_chg_pct: vix.chgPct,
         // Shadow vertical spread — added 2026-07-19, Phase 1 of the
@@ -631,6 +670,8 @@ module.exports = async function handler(req, res) {
           regime_spx_chg_pct: spxChg,
           regime_ndx_chg_pct: ndxChg,
           vix_chg_pct: vix.chgPct,
+          expected_move_pct: r.expectedMovePct,
+          breakeven_required_pct: r.breakevenRequiredPct,
         }),
       }
       const directionStability = buildDirectionStability(historyRow, recentDirectionRows)
@@ -694,6 +735,7 @@ module.exports = async function handler(req, res) {
         if (result.recoveredConflict) console.warn(`[cron/scan] attached concurrent ${row.ticker} observation to lifecycle ${result.lifecycleId}`)
       }
     }
+    await collectForwardIvHistory(client, bufferedRows, scannedAt)
   }
 
   const durationMs = Date.now() - startedAt
@@ -713,4 +755,4 @@ module.exports = async function handler(req, res) {
   })
 }
 
-module.exports._test = { insertHistoryRow }
+module.exports._test = { insertHistoryRow, collectForwardIvHistory }

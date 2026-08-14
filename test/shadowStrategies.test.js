@@ -48,3 +48,24 @@ test('bearish put candidate requires market, volatility, stock direction, and li
   })
   assert.equal(bullishMarket.assignments.bearish_regime_put_v1, false)
 })
+
+test('volatility value remains shadow-only and uses breakeven versus expected move', () => {
+  const favorable = buildShadowStrategies({
+    option_type: 'call', timeframe: 'Swing (21–45 DTE)',
+    expected_move_pct: 10, breakeven_required_pct: 6.5,
+  })
+  assert.equal(favorable.shadow_only, true)
+  assert.equal(favorable.assignments.volatility_value_v1, true)
+  assert.equal(favorable.inputs.volatility_value.breakeven_to_expected_move_ratio, 0.65)
+
+  const unfavorable = buildShadowStrategies({
+    option_type: 'call', timeframe: 'Swing (21–45 DTE)',
+    expected_move_pct: 8, breakeven_required_pct: 9,
+  })
+  assert.equal(unfavorable.assignments.volatility_value_v1, false)
+  assert.equal(unfavorable.inputs.volatility_value.status, 'MEASURED')
+
+  const unavailable = buildShadowStrategies({ option_type: 'call' })
+  assert.equal(unavailable.assignments.volatility_value_v1, false)
+  assert.equal(unavailable.inputs.volatility_value.status, 'UNAVAILABLE')
+})
