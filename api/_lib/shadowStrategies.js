@@ -45,6 +45,7 @@ function buildShadowStrategies(signal) {
       defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
       dmi_volume_confirmation_v1: dmiVolumeAligned,
     },
+    strategy_candidates: signal.strategy_candidates || null,
     exit_policies: {
       time_stop_v2f: {
         max_holding_trading_days: signal.timeframe?.startsWith('Quick') ? 3 : 10,

@@ -16,6 +16,7 @@
 
 const { scoreConviction, safeIV, pickBetterSide } = require('./convictionScore.cjs');
 const { buildVerticalSpread } = require('./verticalSpread');
+const { buildStrategyCandidates } = require('./strategyCandidates');
 
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50;
 const fmtP   = n => n==null?'—':'$'+parseFloat(n).toFixed(2);
@@ -387,6 +388,14 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // scope) or whenever a valid spread can't be formed (illiquid short
       // leg, degenerate pricing) — always safe to be absent downstream.
       td.shadowSpread = buildVerticalSpread(chain, td, price, step, sideType, tf)
+      td.strategyCandidates = buildStrategyCandidates({
+        chain,
+        selected: td,
+        price,
+        step,
+        direction: sideType,
+        timeframe: tf,
+      })
 
       // entry_spread_pct (added 2026-07-21, per outside review recommendation
       // for execution-cost awareness). (ask-bid)/mid at entry — real, honest
@@ -485,6 +494,7 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       // whenever a valid spread couldn't be formed; never affects scoring
       // or display, purely logged for later expectancy comparison.
       shadowSpread: td.shadowSpread || null,
+      strategyCandidates: td.strategyCandidates || null,
       entrySpreadPct: td.entrySpreadPct ?? null,
       scoringModelVersion: scoringModelVersion || null,
       // SHADOW ONLY — Phase 2 (2026-07-20). See TF_WEIGHT_PROFILES comment

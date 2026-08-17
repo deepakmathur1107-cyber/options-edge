@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js')
 const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 const { evaluatePromotion } = require('../_lib/promotionGates')
+const { summarizeReturns, evaluateProfitabilityGate } = require('../_lib/oeProfitability')
 
 let _supabase = null
 function sb() {
@@ -16,7 +17,7 @@ async function fetchForwardRows(maxRows = 10_000) {
   for (let from = 0; from < maxRows; from += pageSize) {
     const { data, error } = await sb()
       .from('signal_history')
-      .select('ticker,sector,outcome,experiment_cohort,scanned_at,resolved_at,realized_r_multiple,estimated_net_pnl_pct,holding_minutes,measurement_version,shadow_strategy_assignments,shadow_spread_outcome,shadow_spread_pnl_pct,shortened_hold_outcome,shortened_hold_pnl_pct')
+      .select('ticker,sector,timeframe,option_type,outcome,experiment_cohort,scanned_at,resolved_at,realized_r_multiple,estimated_net_pnl_pct,holding_minutes,measurement_version,theta,gamma,vega,expected_move_pct,breakeven_expected_move_ratio,entry_spread_pct,shadow_strategy_assignments,shadow_spread_outcome,shadow_spread_pnl_pct,shortened_hold_outcome,shortened_hold_pnl_pct')
       .eq('is_lifecycle_primary', true)
       .eq('strategy_qualified', true)
       .eq('qualification_source', 'LIVE_AT_SIGNAL')
@@ -94,6 +95,46 @@ function summarizeShadowStrategies(rows) {
   })
 }
 
+function summarizeMultilegStrategies(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const resolution = row.shadow_strategy_assignments?.multileg_resolution
+    if (resolution?.dataStatus !== 'COMPLETE' || resolution?.publishEligibleEvidence !== true) continue
+    for (const candidate of resolution.candidates || []) {
+      const key = [candidate.strategyId, row.option_type, row.timeframe, resolution.version].join('|')
+      if (!groups.has(key)) groups.set(key, { observations: [], cohorts: new Set(), strategyId: candidate.strategyId, direction: row.option_type, timeframe: row.timeframe, version: resolution.version })
+      const group = groups.get(key)
+      group.observations.push({
+        returnOnRisk: Number(candidate.returnOnRisk),
+        holdingMinutes: resolution.holdingMinutes,
+        scannedAt: row.scanned_at,
+        exitAt: resolution.exitAt,
+        ticker: row.ticker,
+      })
+      if (row.experiment_cohort) group.cohorts.add(row.experiment_cohort)
+    }
+  }
+  return [...groups.values()].map(group => {
+    const outOfSample = summarizeReturns(group.observations)
+    const validation = {
+      partition: 'OUT_OF_SAMPLE',
+      cohorts: group.cohorts.size,
+      costModelApplied: true,
+      sameSignalTiming: true,
+      outOfSample,
+    }
+    return {
+      strategyKey: [group.strategyId, group.direction, group.timeframe, group.version].join('|'),
+      strategyId: group.strategyId,
+      direction: group.direction,
+      timeframe: group.timeframe,
+      version: group.version,
+      metrics: outOfSample,
+      profitabilityGate: evaluateProfitabilityGate(validation),
+    }
+  }).sort((a, b) => b.metrics.sampleSize - a.metrics.sampleSize)
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -122,9 +163,17 @@ module.exports = async function handler(req, res) {
       averageHoldingMinutes,
       promotion,
       shadowStrategies: summarizeShadowStrategies(rows),
+      multilegStrategies: summarizeMultilegStrategies(rows),
       shadowMeasurementCoverage: {
         spreadSettlements: rows.filter(row => row.shadow_spread_pnl_pct != null && Number.isFinite(Number(row.shadow_spread_pnl_pct))).length,
         shortenedHoldResults: rows.filter(row => row.shortened_hold_pnl_pct != null && Number.isFinite(Number(row.shortened_hold_pnl_pct))).length,
+        fullGreeks: rows.filter(row => [row.theta, row.gamma, row.vega].every(value => value != null && Number.isFinite(Number(value)))).length,
+        expectedMove: rows.filter(row => row.expected_move_pct != null && Number.isFinite(Number(row.expected_move_pct))).length,
+        volatilityValue: rows.filter(row => row.breakeven_expected_move_ratio != null && Number.isFinite(Number(row.breakeven_expected_move_ratio))).length,
+        liquidity: rows.filter(row => row.entry_spread_pct != null && Number.isFinite(Number(row.entry_spread_pct))).length,
+        completeStrategyComparisons: rows.filter(row => row.shadow_strategy_assignments?.strategy_candidates?.coverage?.completeComparison === true).length,
+        synchronizedMultilegResolutions: rows.filter(row => row.shadow_strategy_assignments?.multileg_resolution?.dataStatus === 'COMPLETE').length,
+        unavailableMultilegResolutions: rows.filter(row => row.shadow_strategy_assignments?.multileg_resolution?.dataStatus === 'UNAVAILABLE').length,
       },
       limitations: [
         'Forward-only: historical backfills are excluded.',
@@ -138,4 +187,4 @@ module.exports = async function handler(req, res) {
   }
 }
 
-module.exports._test = { summarizeShadowStrategies }
+module.exports._test = { summarizeShadowStrategies, summarizeMultilegStrategies }

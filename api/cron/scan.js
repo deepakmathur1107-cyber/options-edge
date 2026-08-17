@@ -625,6 +625,7 @@ module.exports = async function handler(req, res) {
           volume: r.volume,
           open_interest: r.oi,
           shadow_vertical_spread: r.shadowSpread,
+          strategy_candidates: r.strategyCandidates,
           timeframe: tf,
           profit_target_pct: r.profitTargetPct,
           dmi_volume_confirmation: trendContext?.dmi_volume_confirmation,
