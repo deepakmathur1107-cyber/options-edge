@@ -11,6 +11,10 @@ const clean = {
   oi: 4045,
   hard_blocks: [],
   warnings: [],
+  profitability_validation: {
+    partition: 'OUT_OF_SAMPLE', cohorts: 2, costModelApplied: true, sameSignalTiming: true,
+    outOfSample: { sampleSize: 300, expectancy: 0.1, profitFactor: 1.5, maxDrawdown: 0.1, sharpe: 1 },
+  },
 }
 
 test('admits a liquid, high-score setup with no material warnings', () => {

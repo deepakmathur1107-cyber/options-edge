@@ -1,4 +1,5 @@
 const QUALITY_SHORTLIST_VERSION = 'quality_shortlist_v1'
+const { evaluateProfitabilityGate } = require('./oeProfitability')
 
 const DEFAULT_RULES = Object.freeze({
   minimumScore: 80,
@@ -40,6 +41,11 @@ function buildQualityShortlistDecision(row = {}, rules = DEFAULT_RULES) {
   const spreadPct = mid > 0 && bid != null && ask != null
     ? ((ask - bid) / mid) * 100
     : null
+  const profitabilityGate = evaluateProfitabilityGate(row.profitability_validation)
+
+  // A setup may remain visible for research, but it is never publishable as
+  // a recommendation without positive out-of-sample expectancy after costs.
+  if (!profitabilityGate.publish) exclusions.push('PROFITABILITY_NOT_VALIDATED')
 
   if (!Number.isFinite(score) || score < rules.minimumScore) exclusions.push('SCORE_BELOW_80')
   // Forward evidence through 2026-08-13 keeps puts research-only. Continue
@@ -59,6 +65,8 @@ function buildQualityShortlistDecision(row = {}, rules = DEFAULT_RULES) {
   return {
     version: QUALITY_SHORTLIST_VERSION,
     eligible: exclusions.length === 0,
+    publish_decision: profitabilityGate.decision,
+    profitability_gate: profitabilityGate,
     exclusions: [...new Set(exclusions)],
     metrics: {
       score: Number.isFinite(score) ? score : null,

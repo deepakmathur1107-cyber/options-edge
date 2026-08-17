@@ -56,6 +56,7 @@ function buildShadowStrategies(signal) {
       // changes scoring, Quality Shortlist, or subscriber recommendations.
       volatility_value_v1: volatilityValueFavorable,
     },
+    strategy_candidates: signal.strategy_candidates || null,
     exit_policies: {
       time_stop_v2f: {
         max_holding_trading_days: signal.timeframe?.startsWith('Quick') ? 3 : 10,
