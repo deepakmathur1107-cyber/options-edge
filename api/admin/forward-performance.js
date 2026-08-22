@@ -101,8 +101,9 @@ function summarizeMultilegStrategies(rows) {
     const resolution = row.shadow_strategy_assignments?.multileg_resolution
     if (resolution?.dataStatus !== 'COMPLETE' || resolution?.publishEligibleEvidence !== true) continue
     for (const candidate of resolution.candidates || []) {
-      const key = [candidate.strategyId, row.option_type, row.timeframe, resolution.version].join('|')
-      if (!groups.has(key)) groups.set(key, { observations: [], cohorts: new Set(), strategyId: candidate.strategyId, direction: row.option_type, timeframe: row.timeframe, version: resolution.version })
+      const candidateVersion = resolution.candidateVersion || 'LEGACY_CANDIDATE_VERSION_UNKNOWN'
+      const key = [candidate.strategyId, row.option_type, row.timeframe, candidateVersion, resolution.version].join('|')
+      if (!groups.has(key)) groups.set(key, { observations: [], cohorts: new Set(), strategyId: candidate.strategyId, direction: row.option_type, timeframe: row.timeframe, candidateVersion, resolverVersion: resolution.version })
       const group = groups.get(key)
       group.observations.push({
         returnOnRisk: Number(candidate.returnOnRisk),
@@ -124,11 +125,12 @@ function summarizeMultilegStrategies(rows) {
       outOfSample,
     }
     return {
-      strategyKey: [group.strategyId, group.direction, group.timeframe, group.version].join('|'),
+      strategyKey: [group.strategyId, group.direction, group.timeframe, group.candidateVersion, group.resolverVersion].join('|'),
       strategyId: group.strategyId,
       direction: group.direction,
       timeframe: group.timeframe,
-      version: group.version,
+      candidateVersion: group.candidateVersion,
+      resolverVersion: group.resolverVersion,
       metrics: outOfSample,
       profitabilityGate: evaluateProfitabilityGate(validation),
     }

@@ -48,9 +48,10 @@ function selectMarkAtOrBefore(bars, exitAt) {
     .sort((a, b) => b.time - a.time)[0]?.bar || null
 }
 
-function buildResolutionRecord({ candidateResults, exitAt, holdingMinutes, dataStatus, reason = null, resolvedAt = new Date().toISOString() }) {
+function buildResolutionRecord({ candidateResults, candidateVersion = null, exitAt, holdingMinutes, dataStatus, reason = null, resolvedAt = new Date().toISOString() }) {
   return {
     version: RESOLUTION_VERSION,
+    candidateVersion,
     evidenceType: 'ACTUAL_SYNCHRONIZED_LEG_MARKS',
     sameSignalTiming: true,
     costModelApplied: true,

@@ -698,6 +698,11 @@ module.exports = async function handler(req, res) {
   }
 
   const { data: rows, error: fetchErr } = await query
+    // Expired contracts are the only rows guaranteed to have a terminal
+    // outcome available. Put them ahead of still-live contracts so the
+    // resolver reduces measurement debt before spending calls walking
+    // positions that may remain open. ISO expiry_raw values sort correctly.
+    .order('expiry_raw', { ascending: true, nullsFirst: false })
     // Second tarpit fix: order untried rows (resolve_attempts null/0) BEFORE
     // already-retried ones. Without this, a row stuck on its 4th failed
     // attempt (unconfirmable-but-in-retention-window) sits in the exact same
