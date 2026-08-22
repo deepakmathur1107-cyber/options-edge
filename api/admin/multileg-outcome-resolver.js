@@ -79,6 +79,7 @@ module.exports = async function handler(req, res) {
         ...root,
         multileg_resolution: buildResolutionRecord({
           candidateResults: dataStatus === 'COMPLETE' ? candidateResults : [],
+          candidateVersion: root.strategy_candidates.version || null,
           exitAt: row.resolved_at,
           holdingMinutes: row.holding_minutes,
           dataStatus,
