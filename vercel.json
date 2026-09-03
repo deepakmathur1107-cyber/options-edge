@@ -34,7 +34,7 @@
     },
     {
       "path": "/api/admin/multileg-outcome-resolver?limit=10",
-      "schedule": "30 23 * * 1-5"
+      "schedule": "5,35 0-4 * * 2-6"
     },
     {
       "path": "/api/cron/resolve-outcomes?burndown=1&limit=75",
