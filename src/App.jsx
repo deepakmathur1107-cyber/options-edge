@@ -13,6 +13,7 @@ import ForwardPerformancePanel from './components/ForwardPerformancePanel'
 import StockWorkspace from './components/StockWorkspace'
 import { DARK_THEME, LIGHT_THEME } from './theme'
 import { getSessionPhase } from './lib/marketSession'
+import { classifyMarketMover } from './lib/marketMover'
 import { scoreConviction, pickBetterSide } from './lib/convictionScore'
 import { classifyScanDecision, executionQuality, marketAlignment, rejectionSummary, strategyEvidence } from './lib/scanDecision'
 
@@ -601,7 +602,7 @@ const CHECKLIST = [
   {id:'notch',cat:'TA',   l:'Stock NOT already moved >2% today', d:'Chasing a gap = paying inflated premium. Wait for a pullback or skip.'},
   {id:'flow', cat:'Flow', l:'Options Flow Checked',      d:'Unusual sweeps align with thesis'},
   {id:'oi',   cat:'Flow', l:'Open Interest at Strikes',  d:'High OI at your strikes = magnet zones'},
-  {id:'iv',   cat:'Flow', l:'IV Rank Assessed',          d:'Buy low IV (<40%), sell high IV (>55%). MSTR at 66% = sell, not buy.'},
+  {id:'iv',   cat:'Flow', l:'Contract IV Captured',      d:'Current contract IV is captured. IV Rank/Percentile will appear only after enough point-in-time history exists.'},
   {id:'voloc',cat:'Flow', l:'Volume has directional context', d:'High vol alone means nothing — sweeps on ASK = buying, BID = selling. Confirm directionality.'},
   {id:'cat',  cat:'News', l:'Catalyst Identified',       d:'Know the SPECIFIC WHY — earnings date, product launch, macro event, technical breakout'},
   {id:'time', cat:'News', l:'Catalyst Timing Clear',     d:'Event date vs expiry date checked. No catalyst = no long option.'},
@@ -2809,11 +2810,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           score, bid:td.bid, ask:td.ask, mid:td.mid,
           volume:td.volume, oi:td.oi, warnings, hardBlocks,
         })
-        const decision = quality.eligible
-          ? 'QUALIFIED'
-          : score>=70 && !(hardBlocks||[]).length
-            ? 'WATCH'
-            : 'AVOID'
+        const expectedMovePct = td.iv > 0 && dte > 0 ? td.iv * Math.sqrt(dte / 365) * 100 : null
+        const breakevenRequiredPct = Number.isFinite(Number(breakevenReqPct)) ? Math.abs(Number(breakevenReqPct)) : null
+        const mover = classifyMarketMover({
+          symbol:sym, optionType:optType, quote, price,
+          spxChange:spxChgToday, ndxChange:ndxChgToday,
+          expectedMovePct, breakevenRequiredPct,
+          baseEligible:quality.eligible,
+        })
 
         const expiryDisplay=expiryDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
         results.push({
@@ -2830,7 +2834,18 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
           ], reasons, warnings, hardBlocks,
           volume:td.volume||0, oi:td.oi||0,
           qualityVersion:'quality_shortlist_v1',
-          decision,
+          decision:mover.decision,
+          setupType:mover.setupType,
+          setupState:mover.setupState,
+          triggerPrice:mover.triggerPrice,
+          invalidationPrice:mover.invalidationPrice,
+          marketAligned:mover.marketAligned,
+          expectedMovePct:mover.expectedMovePct,
+          breakevenRequiredPct:mover.breakevenRequiredPct,
+          breakevenExpectedMoveRatio:mover.breakevenExpectedMoveRatio,
+          valueFavorable:mover.valueFavorable,
+          moverBlockers:mover.blockers,
+          moverDataBasis:mover.dataBasis,
           failedGates:quality.exclusions,
           spreadPct:quality.spreadPct,
           spreadWidth:td.spreadWidth,
@@ -2845,16 +2860,19 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         unavailable.push(`${sym} market data`)
       }
     }
-    const decisionRank = {QUALIFIED:0,WATCH:1,AVOID:2}
+    const decisionRank = {TAKE:0,TAKE_ON_TRIGGER:1,WATCH:2,NO_TRADE:3}
     results.sort((a,b)=>decisionRank[a.decision]-decisionRank[b.decision]||b.score-a.score)
     setIndexAlerts(results)
-    const qualifiedCount=results.filter(row=>row.decision==='QUALIFIED').length
+    const qualifiedCount=results.filter(row=>row.decision==='TAKE').length
+    const triggerCount=results.filter(row=>row.decision==='TAKE_ON_TRIGGER').length
     const watchCount=results.filter(row=>row.decision==='WATCH').length
     setIndexAlertsMessage(
       results.length
         ? qualifiedCount
-          ? `${qualifiedCount} qualified · ${watchCount} watch · verify live quotes before acting`
-          : `${watchCount} watch · no setup qualified. Waiting remains the actionable conclusion.`
+          ? `${qualifiedCount} TAKE · ${triggerCount} waiting for trigger · ${watchCount} watch · verify live quotes before acting`
+          : triggerCount
+            ? `${triggerCount} setup${triggerCount===1?'':'s'} waiting for a stated trigger · do not enter early`
+            : `${watchCount} watch · no setup qualified. Waiting remains the actionable conclusion.`
         : candidatesChecked
           ? 'No SPX/NDX setup passed every Quality gate. Waiting is the signal.'
           : `SPX/NDX data is unavailable (${unavailable.join(', ')||'provider response'}). Try again during market hours.`
@@ -3339,8 +3357,8 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
             <div className="dash-today-signals" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:12,boxShadow:C.shadow}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div>
-                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>QUICK INDEX SHORTLIST</div>
-                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPX / NDX {'·'} 5–14 DTE {'·'} Quality Shortlist V1 {'·'} max ${MAX_PREMIUM_PER_CONTRACT}/contract</div>
+                  <div style={{fontSize:12,color:C.dim,letterSpacing:1,fontWeight:700,fontFamily:"'Inter',sans-serif",textTransform:'uppercase'}}>MARKET MOVER · QUICK INDEX</div>
+                  <div style={{fontSize:11,color:C.subtext,marginTop:2}}>SPX / NDX {'·'} breakout or pullback/reclaim {'·'} 5–14 DTE defined-risk spreads {'·'} max ${MAX_PREMIUM_PER_CONTRACT}/contract</div>
                 </div>
                 <button className="hv" onClick={generateIndexAlerts} disabled={indexAlertsLoading} style={{
                   background: indexAlertsLoading ? C.cardAlt : C.green,
@@ -3356,13 +3374,14 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
               </div>
               {indexAlerts.length===0 && !indexAlertsLoading && (
                 <div style={{fontSize:12,color:C.subtext,textAlign:'center',padding:'10px 0'}}>
-                  {indexAlertsMessage||'Hit GENERATE to check SPX & NDX against every Quality gate'}
+                  {indexAlertsMessage||'Hit GENERATE to classify SPX & NDX as TAKE, TAKE ON TRIGGER, WATCH, or NO TRADE'}
                 </div>
               )}
               {indexAlerts.length>0&&indexAlertsMessage&&<div style={{fontSize:10.5,color:C.green,marginBottom:4}}>{indexAlertsMessage}</div>}
               {indexAlerts.slice(0,6).map((al,i)=>{
-                const high=al.decision==='QUALIFIED'
-                const cardC=al.decision==='QUALIFIED'?C.green:al.decision==='WATCH'?C.orange:C.red
+                const high=al.decision==='TAKE'
+                const cardC=al.decision==='TAKE'?C.green:(al.decision==='TAKE_ON_TRIGGER'||al.decision==='WATCH')?C.orange:C.red
+                const decisionLabel=al.decision==='TAKE_ON_TRIGGER'?'TAKE ON TRIGGER':al.decision==='NO_TRADE'?'NO TRADE':al.decision
                 return (
                   <div key={i} style={{display:'flex',gap:10,padding:'10px 0',borderBottom:i<indexAlerts.slice(0,6).length-1?`1px solid ${C.borderDim}`:'none'}}>
                     <div style={{width:8,height:8,borderRadius:'50%',background:cardC,marginTop:5,flexShrink:0}}/>
@@ -3371,7 +3390,7 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                         <span style={{fontFamily:"'Fraunces',serif",fontSize:16,color:cardC,letterSpacing:0.3}}>{al.sym}</span>
                         <span style={{fontSize:12,color:C.text}}>{al.tradeType} {al.strikeStr}</span>
                         <span style={{fontSize:10,color:al.tfColor,border:`1px solid ${al.tfColor}40`,padding:'1px 6px',borderRadius:2,whiteSpace:'nowrap'}}>{al.tfLabel||al.tfBadge}</span>
-                        <span style={{fontSize:10,fontWeight:700,color:cardC,background:`${cardC}15`,border:`1px solid ${cardC}50`,padding:'1px 7px',borderRadius:4}}>{al.decision}</span>
+                        <span style={{fontSize:10,fontWeight:700,color:cardC,background:`${cardC}15`,border:`1px solid ${cardC}50`,padding:'1px 7px',borderRadius:4}}>{decisionLabel}</span>
                         <span style={{fontFamily:"'Fraunces',serif",fontSize:14,color:cardC,marginLeft:'auto'}}>{al.score}%</span>
                       </div>
                       <div style={{fontSize:11.5,color:C.subtext}}>
@@ -3380,12 +3399,20 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                       {al.spreadWidth&&<div style={{fontSize:10.5,color:C.dim,marginTop:3}}>
                         Defined risk {'·'} {al.spreadWidth}-point width {'·'} max loss ${Math.round(al.maxLoss*100)} {'·'} max profit ${Math.round(al.maxProfit*100)} at expiry
                       </div>}
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:5,marginTop:7}}>
+                        <div style={{padding:'6px 8px',borderRadius:5,background:C.bgDeep,border:`1px solid ${C.border}`}}><div style={{fontSize:9,color:C.dim,letterSpacing:.7}}>SETUP</div><div style={{fontSize:11,color:cardC,fontWeight:700}}>{al.setupType}</div></div>
+                        <div style={{padding:'6px 8px',borderRadius:5,background:C.bgDeep,border:`1px solid ${C.border}`}}><div style={{fontSize:9,color:C.dim,letterSpacing:.7}}>TRIGGER / INVALIDATION</div><div style={{fontSize:11,color:C.text}}>{al.triggerPrice?`$${al.triggerPrice.toFixed(2)}`:'—'} / {al.invalidationPrice?`$${al.invalidationPrice.toFixed(2)}`:'—'}</div></div>
+                        <div style={{padding:'6px 8px',borderRadius:5,background:C.bgDeep,border:`1px solid ${al.valueFavorable?C.green:C.orange}45`}}><div style={{fontSize:9,color:C.dim,letterSpacing:.7}}>PREMIUM VALUE</div><div style={{fontSize:11,color:al.valueFavorable?C.green:C.orange}}>{al.breakevenExpectedMoveRatio!=null?`${Math.round(al.breakevenExpectedMoveRatio*100)}% of expected move`:'Not measurable'}</div></div>
+                      </div>
                       {al.failedGates?.length>0&&<div style={{fontSize:10.5,color:C.red,marginTop:3}}>
                         Do not take yet {'·'} failed: {al.failedGates.join(', ')}
                       </div>}
-                      {al.decision==='QUALIFIED'&&<div style={{fontSize:10.5,color:C.green,marginTop:3}}>
-                        Passed every automated gate {'·'} confirm the live debit and personal risk before considering entry
+                      {al.decision==='TAKE'&&<div style={{fontSize:10.5,color:C.green,marginTop:3}}>
+                        Setup confirmed and every automated gate passed {'·'} confirm the live debit and personal risk before considering entry
                       </div>}
+                      {al.decision==='TAKE_ON_TRIGGER'&&<div style={{fontSize:10.5,color:C.orange,marginTop:3}}>Do not enter early {'·'} wait until the index trades through the stated trigger and holds</div>}
+                      {al.moverBlockers?.length>0&&al.decision!=='TAKE'&&<div style={{fontSize:10.5,color:C.red,marginTop:3}}>{al.moverBlockers.join(' · ')}</div>}
+                      <div style={{fontSize:9.5,color:C.dim,marginTop:4}}>Basis: {al.moverDataBasis}. This is not a VWAP or 15-minute-close confirmation.</div>
                       {al.reasons.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{al.reasons.map((r,j)=><span key={j} style={{fontSize:10.5,color:cardC,background:`${cardC}10`,padding:'1px 5px',borderRadius:2}}>{r}</span>)}</div>}
                       {(al.sector||al.earningsDate)&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:4}}>
                         {al.sector&&<span style={{fontSize:10,padding:'1px 6px',background:C.bgDeep,border:`1px solid ${C.border}`,borderRadius:3,color:C.subtext}}>{al.sector}</span>}

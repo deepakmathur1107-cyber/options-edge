@@ -88,6 +88,30 @@ function classifyTrend(closes, lastPrice) {
   return { direction, sma50, sma200 }
 }
 
+function classifyWeeklyTrend(bars) {
+  if (!Array.isArray(bars) || bars.length < 50) return { direction: 'unknown', sma10: null, sma40: null }
+  const weeks = new Map()
+  for (const bar of bars) {
+    const date = new Date(`${bar.date}T12:00:00Z`)
+    if (!Number.isFinite(date.getTime()) || !Number.isFinite(Number(bar.close))) continue
+    const day = date.getUTCDay() || 7
+    date.setUTCDate(date.getUTCDate() + (4 - day))
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
+    const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7)
+    weeks.set(`${date.getUTCFullYear()}-${week}`, Number(bar.close))
+  }
+  const closes = [...weeks.values()]
+  const lastPrice = closes.at(-1)
+  const sma10 = sma(closes, 10)
+  const sma40 = sma(closes, 40)
+  if (!Number.isFinite(lastPrice) || sma10 == null) return { direction: 'unknown', sma10, sma40 }
+  let direction = 'mixed'
+  if (sma40 == null) direction = lastPrice > sma10 ? 'bullish' : lastPrice < sma10 ? 'bearish' : 'mixed'
+  else if (lastPrice > sma10 && sma10 > sma40) direction = 'bullish'
+  else if (lastPrice < sma10 && sma10 < sma40) direction = 'bearish'
+  return { direction, sma10, sma40 }
+}
+
 // getTrendContext(ticker, asOfDate, historyFetcher, rateTracker)
 // asOfDate: 'YYYY-MM-DD' string, or omit for "today" (live scans always omit;
 // the backtest endpoint passes historical dates to reconstruct trend AS OF
@@ -124,6 +148,7 @@ async function getTrendContext(ticker, asOfDate, historyFetcher, rateTracker) {
     const lastPrice = closes[closes.length - 1]
     const result = {
       ...classifyTrend(closes, lastPrice),
+      weekly_trend: classifyWeeklyTrend(bars),
       dmi_volume_confirmation: calculateDmiVolumeConfirmation(bars),
     }
     if (!asOfDate) await redisSet(redisKey, result, REDIS_TTL_SECS)
@@ -156,4 +181,4 @@ async function getVix(quoteFetcher, rateTracker) {
   }
 }
 
-module.exports = { getTrendContext, getVix, classifyTrend, sma }
+module.exports = { getTrendContext, getVix, classifyTrend, classifyWeeklyTrend, sma }

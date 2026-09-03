@@ -11,6 +11,13 @@ function buildShadowStrategies(signal) {
   const ndxChange = Number(signal.regime_ndx_chg_pct)
   const vixChange = Number(signal.vix_chg_pct)
   const dmiVolume = signal.dmi_volume_confirmation || null
+  const expectedMovePct = Number(signal.expected_move_pct)
+  const breakevenRequiredPct = Number(signal.breakeven_required_pct)
+  const breakevenToExpectedMove = expectedMovePct > 0 && Number.isFinite(breakevenRequiredPct)
+    ? breakevenRequiredPct / expectedMovePct
+    : null
+  const volatilityValueMeasured = Number.isFinite(breakevenToExpectedMove)
+  const volatilityValueFavorable = volatilityValueMeasured && breakevenToExpectedMove <= 0.70
   const swingTimeframe = String(signal.timeframe || '').startsWith('Swing')
   const dmiVolumeAligned = swingTimeframe && dmiVolume?.status === 'MEASURED' && (
     (optionType === 'call' && dmiVolume.bullish_confirmed) ||
@@ -44,6 +51,10 @@ function buildShadowStrategies(signal) {
       bearish_regime_put_v1: optionType === 'put' && confirmedBearishMarket && directionConfirmed && liquid,
       defined_risk_spread_v2e: !!signal.shadow_vertical_spread,
       dmi_volume_confirmation_v1: dmiVolumeAligned,
+      // Pure shadow hypothesis: the option needs no more than 70% of its
+      // IV-implied expected underlying move to reach breakeven. This never
+      // changes scoring, Quality Shortlist, or subscriber recommendations.
+      volatility_value_v1: volatilityValueFavorable,
     },
     strategy_candidates: signal.strategy_candidates || null,
     exit_policies: {
@@ -76,6 +87,15 @@ function buildShadowStrategies(signal) {
       dmi_volume_confirmation: swingTimeframe
         ? (dmiVolume || { status: 'UNAVAILABLE' })
         : { status: 'NOT_APPLICABLE', reason: 'Quick requires completed 15-minute candles; daily data is not substituted.' },
+      volatility_value: {
+        status: volatilityValueMeasured ? 'MEASURED' : 'UNAVAILABLE',
+        expected_move_pct: Number.isFinite(expectedMovePct) ? expectedMovePct : null,
+        breakeven_required_pct: Number.isFinite(breakevenRequiredPct) ? breakevenRequiredPct : null,
+        breakeven_to_expected_move_ratio: breakevenToExpectedMove,
+        favorable_threshold: 0.70,
+        methodology: 'contract_iv_sqrt_time',
+        shadow_only: true,
+      },
     },
     shadow_only: true,
   }
