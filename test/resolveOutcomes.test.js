@@ -20,6 +20,18 @@ test('resolver API budget preserves call and rate-limit headroom', () => {
   assert.equal(resolver.rateBudgetReached({ calls: 10, minAvailable: null }, 100), false)
 })
 
+test('embedded multi-leg capture only uses a healthy qualified resolver window', () => {
+  const healthy = {
+    qualifiedMode: true, circuitBroken: false, timedOut: false, durationMs: 10_000,
+    rateTracker: { calls: 0, minAvailable: null },
+  }
+  assert.equal(resolver.shouldCaptureMultileg(healthy), true)
+  assert.equal(resolver.shouldCaptureMultileg({ ...healthy, qualifiedMode: false }), false)
+  assert.equal(resolver.shouldCaptureMultileg({ ...healthy, durationMs: 220_000 }), false)
+  assert.equal(resolver.shouldCaptureMultileg({ ...healthy, rateTracker: { calls: 81, minAvailable: 39 } }), false)
+  assert.equal(resolver.shouldCaptureMultileg({ ...healthy, rateTracker: { calls: 4, minAvailable: 20 } }), false)
+})
+
 function row(overrides = {}) {
   return {
     ticker: 'AAPL',
