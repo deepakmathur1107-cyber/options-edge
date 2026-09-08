@@ -51,7 +51,11 @@ module.exports=async function handler(req,res) {
 
   const client=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY)
   const {data,error}=await client.from('stock_rating_history').select('*')
-    .eq('rating','BUY_SETUP').is('close_outcome',null).lt('rating_date',today)
+    // BUY_SETUP is the actionable cohort; HOLD_WAIT is its required control
+    // group. Both need horizon returns or the app cannot measure whether the
+    // rating added value. HOLD_WAIT rows have no trade target/stop, so this
+    // does not manufacture a trade outcome for them.
+    .is('close_outcome',null).lt('rating_date',today)
     .order('rating_date',{ascending:true}).limit(MAX_ROWS)
   if(error) return res.status(500).json({error:error.message})
   const rows=(data||[]).filter(row=>row.last_observed_date!==today)
