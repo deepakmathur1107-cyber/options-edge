@@ -17,10 +17,30 @@
 const { scoreConviction, safeIV, pickBetterSide } = require('./convictionScore.cjs');
 const { buildVerticalSpread } = require('./verticalSpread');
 const { buildStrategyCandidates } = require('./strategyCandidates');
+const { blackScholes, expectedMovePct } = require('./optionsModel');
 
 const autoStep = p => p<25?.5:p<50?1:p<100?2:p<250?5:p<500?10:p<1000?20:50;
 const fmtP   = n => n==null?'—':'$'+parseFloat(n).toFixed(2);
 const fmtPct = n => n==null?'—':(parseFloat(n)*100).toFixed(1)+'%';
+const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+
+function buildModelFoundation({ spot, strike, dte, iv, optionType, tradierGreeks = {}, breakevenReqPct = null }) {
+  const model = blackScholes({
+    spot, strike, years: Number(dte) / 365, volatility: iv, optionType,
+  });
+  const expectedMove = expectedMovePct(iv, dte);
+  const pickGreek = name => finite(tradierGreeks?.[name]) ?? finite(model?.[name]);
+  const breakeven = finite(breakevenReqPct);
+  return {
+    theta: pickGreek('theta'),
+    gamma: pickGreek('gamma'),
+    vega: pickGreek('vega'),
+    expectedMovePct: expectedMove,
+    breakevenExpectedMoveRatio: breakeven != null && expectedMove > 0
+      ? Math.abs(breakeven) / expectedMove
+      : null,
+  };
+}
 
 function getETHour() {
   const now = new Date();
@@ -259,6 +279,8 @@ const buildNakedResult = (chain, price, step, optType, tfCfg) => {
     iv:            safeIV(best),
     delta:         best.greeks?.delta||null,
     theta:         best.greeks?.theta||null,
+    gamma:         best.greeks?.gamma||null,
+    vega:          best.greeks?.vega||null,
     volume:        best.volume||0,
     oi:            best.open_interest||0,
     primaryStrike: best.strike,
@@ -466,6 +488,15 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
     const breakevenPct2 = bePriceReturn != null && price > 0
       ? (((bePriceReturn / price) - 1) * 100).toFixed(1)
       : null;
+    const modelFoundation = buildModelFoundation({
+      spot: price,
+      strike: td.primaryStrike,
+      dte: dte2,
+      iv: td.iv,
+      optionType: optType,
+      tradierGreeks: { theta: td.theta, gamma: td.gamma, vega: td.vega },
+      breakevenReqPct,
+    });
 
     return {
       ticker, score,
@@ -488,6 +519,11 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
       priceRaw: price,
       ivRaw: td.iv||0,
       deltaRaw: td.delta||null,
+      thetaRaw: modelFoundation.theta,
+      gammaRaw: modelFoundation.gamma,
+      vegaRaw: modelFoundation.vega,
+      expectedMovePct: modelFoundation.expectedMovePct,
+      breakevenExpectedMoveRatio: modelFoundation.breakevenExpectedMoveRatio,
       primaryStrikeRaw: td.primaryStrike,
       optionType: optType,
       // SHADOW ONLY — see verticalSpread.js top comment. null for Quick or
@@ -529,4 +565,4 @@ function scanTicker({ ticker, quote, expDates, chain, tf, fund, spxChg, ndxChg, 
   } catch { return null; }
 }
 
-module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, scanTicker, autoStep, isOpeningWindow, isPreMarket, safeChgPct, findLeg };
+module.exports = { TF_CONFIG, pickExpiry, buildNakedResult, buildModelFoundation, scanTicker, autoStep, isOpeningWindow, isPreMarket, safeChgPct, findLeg };
