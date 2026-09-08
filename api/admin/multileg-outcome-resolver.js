@@ -67,16 +67,10 @@ async function persistRun(run) {
   }
 }
 
-module.exports = async function handler(req, res) {
-  const authHeader = req.headers.authorization || ''
-  const authorized = authHeader === `Bearer ${process.env.CRON_SECRET || '__never__'}`
-    || (req.query.secret && req.query.secret === CRON_SECRET)
-  if (!authorized && process.env.NODE_ENV === 'production') return res.status(401).json({ error: 'Unauthorized' })
-  if (req.method && !['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' })
-
+async function runMultilegBatch({ limit = 5, maxCalls = 90, maxDurationMs = 260_000 } = {}) {
   const startedAt = Date.now()
   const tracker = newRateTracker()
-  const limit = Math.min(25, Math.max(1, Number(req.query.limit) || 5))
+  limit = Math.min(25, Math.max(1, Number(limit) || 5))
   const { data, error } = await sb().from('signal_history')
     .select('id,ticker,expiry_raw,resolved_at,hit_target_at,hit_stop_at,resolution_method,holding_minutes,shadow_strategy_assignments')
     .eq('is_lifecycle_primary', true)
@@ -84,7 +78,7 @@ module.exports = async function handler(req, res) {
     .not('shadow_strategy_assignments', 'is', null)
     .order('resolved_at', { ascending: false })
     .limit(2000)
-  if (error) return res.status(500).json({ error: error.message })
+  if (error) throw error
 
   const rows = (data || []).filter(row => {
     const root = row.shadow_strategy_assignments
@@ -97,18 +91,23 @@ module.exports = async function handler(req, res) {
   let circuitBroken = false
 
   for (const row of rows) {
-    if (Date.now() - startedAt > 260_000 || tracker.calls >= 90) { circuitBroken = true; break }
+    if (Date.now() - startedAt > maxDurationMs || tracker.calls >= maxCalls) { circuitBroken = true; break }
     processed++
     try {
       const root = row.shadow_strategy_assignments
       const candidateResults = []
+      const markCache = new Map()
       const exit = determineExitPoint(row)
       let failure = exit.ok ? null : exit
       if (!failure) {
         for (const candidate of root.strategy_candidates.candidates) {
           const marks = []
           for (const leg of candidate.legs || []) {
-            const marked = await markLeg(row, leg, exit, tracker)
+            const markKey = `${leg.optionType}|${leg.strike}`
+            const marked = markCache.has(markKey)
+              ? markCache.get(markKey)
+              : await markLeg(row, leg, exit, tracker)
+            markCache.set(markKey, marked)
             if (!marked.ok) { failure = marked; break }
             marks.push(marked)
           }
@@ -173,14 +172,30 @@ module.exports = async function handler(req, res) {
     data_unavailable: unavailable,
     errors,
     circuit_broken: circuitBroken,
-    timed_out: Date.now() - startedAt > 260_000,
+    timed_out: Date.now() - startedAt > maxDurationMs,
     tradier_calls: tracker.calls || 0,
     status_counts: tracker.statusCounts || {},
     min_available: tracker.minAvailable,
     skip_reason: rows.length ? null : 'no_complete_comparison_backlog',
     deployment_sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
   })
-  return res.status(200).json({ checked: rows.length, processed, complete, unavailable, retryable, errors, circuitBroken, durationMs, rateHealth: tracker })
+  return { checked: rows.length, processed, complete, unavailable, retryable, errors, circuitBroken, durationMs, rateHealth: tracker }
 }
 
+module.exports = async function handler(req, res) {
+  const authHeader = req.headers.authorization || ''
+  const authorized = authHeader === `Bearer ${process.env.CRON_SECRET || '__never__'}`
+    || (req.query.secret && req.query.secret === CRON_SECRET)
+  if (!authorized && process.env.NODE_ENV === 'production') return res.status(401).json({ error: 'Unauthorized' })
+  if (req.method && !['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' })
+  try {
+    const result = await runMultilegBatch({ limit: req.query.limit })
+    return res.status(200).json(result)
+  } catch (error) {
+    console.error('[multileg-resolver] batch failed:', error.message)
+    return res.status(500).json({ error: 'Multi-leg resolver failed' })
+  }
+}
+
+module.exports.runMultilegBatch = runMultilegBatch
 module.exports._test = { etParts, storedMarketParts, determineExitPoint }

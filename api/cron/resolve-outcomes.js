@@ -111,6 +111,12 @@ function rateBudgetReached(rateTracker, maxTradierCalls) {
     Number(rateTracker.minAvailable) <= MIN_TRADIER_HEADROOM
 }
 
+function shouldCaptureMultileg({ qualifiedMode, circuitBroken, timedOut, durationMs, rateTracker }) {
+  if (!qualifiedMode || circuitBroken || timedOut || durationMs >= 220_000) return false
+  if ((rateTracker.calls || 0) > 80) return false
+  return rateTracker.minAvailable == null || Number(rateTracker.minAvailable) > 20
+}
+
 async function persistResolverRun(client, run) {
   try {
     const { error } = await client.from('resolver_runs').insert(run)
@@ -887,6 +893,23 @@ module.exports = async function handler(req, res) {
     deployment_sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
   })
 
+  // The standalone multi-leg cron failed to register invocations in
+  // production even though this qualified resolver runs reliably every five
+  // minutes. Use a deliberately tiny slice of the remaining time/rate budget
+  // to capture synchronized A/B/C outcomes here. The imported batch has its
+  // own telemetry and failure isolation, so it cannot turn a successful
+  // primary-resolution run into a failed response.
+  let multilegCapture = null
+  if (shouldCaptureMultileg({ qualifiedMode, circuitBroken, timedOut, durationMs, rateTracker })) {
+    try {
+      const { runMultilegBatch } = require('../admin/multileg-outcome-resolver')
+      multilegCapture = await runMultilegBatch({ limit: 2, maxCalls: 10, maxDurationMs: 40_000 })
+    } catch (error) {
+      console.error('[resolve-outcomes] embedded multi-leg capture failed:', error.message)
+      multilegCapture = { error: 'embedded_multileg_capture_failed' }
+    }
+  }
+
   return res.status(200).json({
     checked: rowsProcessed,
     resolved, stillOpen, dataUnavailable, errors,
@@ -899,6 +922,7 @@ module.exports = async function handler(req, res) {
       minAvailable: rateTracker.minAvailable,
       throttled429: (rateTracker.statusCounts[429] || 0) > 0,
     },
+    multilegCapture,
     results,
   })
 }
@@ -915,4 +939,5 @@ module.exports._test = {
   persistResolverRun,
   rateBudgetReached,
   resolverModeConfig,
+  shouldCaptureMultileg,
 }
