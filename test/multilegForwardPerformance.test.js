@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { summarizeMultilegStrategies } = require('../api/admin/forward-performance')._test
+const { effectiveExitAt } = require('../api/admin/multileg-outcome-resolver')._test
 
 function row(cohort, value, strategyId = 'BULL_CALL_DEBIT') {
   return {
@@ -28,4 +29,13 @@ test('excludes unavailable and partial comparisons from evidence', () => {
   incomplete.shadow_strategy_assignments.multileg_resolution.dataStatus = 'UNAVAILABLE'
   incomplete.shadow_strategy_assignments.multileg_resolution.publishEligibleEvidence = false
   assert.deepEqual(summarizeMultilegStrategies([incomplete]), [])
+})
+
+test('multi-leg comparison uses the actual first target or stop event', () => {
+  assert.equal(effectiveExitAt({
+    hit_target_at: '2026-09-02T16:30:00Z',
+    hit_stop_at: '2026-09-02T15:45:00Z',
+    resolved_at: '2026-09-03T03:00:00Z',
+  }), '2026-09-02T15:45:00.000Z')
+  assert.equal(effectiveExitAt({ resolved_at: '2026-09-03T03:00:00Z' }), '2026-09-03T03:00:00Z')
 })

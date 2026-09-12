@@ -18,12 +18,21 @@ function etParts(value) {
   return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` }
 }
 
-async function markLeg(row, leg, tracker) {
-  const exit = etParts(row.resolved_at)
+function effectiveExitAt(row) {
+  const candidates = [row.hit_target_at, row.hit_stop_at]
+    .filter(Boolean)
+    .map(value => new Date(value))
+    .filter(value => Number.isFinite(value.getTime()))
+    .sort((a, b) => a - b)
+  return candidates[0]?.toISOString() || row.resolved_at
+}
+
+async function markLeg(row, leg, exitAt, tracker) {
+  const exit = etParts(exitAt)
   const symbol = buildOccSymbol(row.ticker, leg.optionType, leg.strike, row.expiry_raw)
   const response = await getOptionTimesalesDetailed(symbol, `${exit.date} 09:30`, `${exit.date} ${exit.time}`, tracker)
   if (!response.ok) return { ok: false, reason: response.errorType || `HTTP_${response.status}`, retryable: response.retryable }
-  const mark = selectMarkAtOrBefore(response.bars, row.resolved_at)
+  const mark = selectMarkAtOrBefore(response.bars, exitAt)
   if (!mark) return { ok: false, reason: 'NO_SYNCHRONIZED_MARK', retryable: false }
   return { ok: true, symbol, close: Number(mark.close), markAt: mark.time || mark.timestamp || mark.date }
 }
@@ -38,10 +47,11 @@ module.exports = async function handler(req, res) {
   const tracker = newRateTracker()
   const limit = Math.min(25, Math.max(1, Number(req.query.limit) || 5))
   const { data, error } = await sb().from('signal_history')
-    .select('id,ticker,expiry_raw,resolved_at,holding_minutes,shadow_strategy_assignments')
+    .select('id,ticker,expiry_raw,resolved_at,hit_target_at,hit_stop_at,holding_minutes,shadow_strategy_assignments')
     .eq('is_lifecycle_primary', true)
     .not('resolved_at', 'is', null)
     .not('shadow_strategy_assignments', 'is', null)
+    .contains('shadow_strategy_assignments', { strategy_candidates: { coverage: { completeComparison: true } } })
     .order('resolved_at', { ascending: false })
     .limit(500)
   if (error) return res.status(500).json({ error: error.message })
@@ -56,12 +66,13 @@ module.exports = async function handler(req, res) {
     if (Date.now() - startedAt > 260_000 || tracker.calls >= 90) break
     try {
       const root = row.shadow_strategy_assignments
+      const exitAt = effectiveExitAt(row)
       const candidateResults = []
       let failure = null
       for (const candidate of root.strategy_candidates.candidates) {
         const marks = []
         for (const leg of candidate.legs || []) {
-          const marked = await markLeg(row, leg, tracker)
+          const marked = await markLeg(row, leg, exitAt, tracker)
           if (!marked.ok) { failure = marked; break }
           marks.push(marked)
         }
@@ -80,7 +91,7 @@ module.exports = async function handler(req, res) {
         multileg_resolution: buildResolutionRecord({
           candidateResults: dataStatus === 'COMPLETE' ? candidateResults : [],
           candidateVersion: root.strategy_candidates.version || null,
-          exitAt: row.resolved_at,
+          exitAt,
           holdingMinutes: row.holding_minutes,
           dataStatus,
           reason: failure?.reason || null,
@@ -100,4 +111,4 @@ module.exports = async function handler(req, res) {
   return res.status(200).json({ checked: rows.length, complete, unavailable, errors, durationMs, rateHealth: tracker })
 }
 
-module.exports._test = { etParts }
+module.exports._test = { etParts, effectiveExitAt }

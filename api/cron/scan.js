@@ -47,7 +47,7 @@ function sb() {
   return _sb
 }
 
-async function collectForwardIvHistory(client, rows, capturedAt) {
+async function collectForwardIvHistory(client, rows) {
   if (!client || !Array.isArray(rows)) return
   // Use Swing's 21-45 DTE selected contract as a consistent forward proxy.
   // Do not mix Quick/LEAP tenors in the same ticker/day series and do not
@@ -57,7 +57,8 @@ async function collectForwardIvHistory(client, rows, capturedAt) {
   for (const row of rows) {
     if (!String(row.timeframe || '').startsWith('Swing')) continue
     const iv = Number(row.iv)
-    if (!(iv > 0)) continue
+    const capturedAt = new Date(row.scanned_at)
+    if (!(iv > 0) || !Number.isFinite(capturedAt.getTime())) continue
     daily.set(row.ticker, {
       ticker: row.ticker,
       date: capturedAt.toISOString().slice(0, 10),
@@ -736,7 +737,7 @@ module.exports = async function handler(req, res) {
         if (result.recoveredConflict) console.warn(`[cron/scan] attached concurrent ${row.ticker} observation to lifecycle ${result.lifecycleId}`)
       }
     }
-    await collectForwardIvHistory(client, bufferedRows, scannedAt)
+    await collectForwardIvHistory(client, bufferedRows)
   }
 
   const durationMs = Date.now() - startedAt
