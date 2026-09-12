@@ -47,6 +47,34 @@ function sb() {
   return _sb
 }
 
+async function collectForwardIvHistory(client, rows) {
+  if (!client || !Array.isArray(rows)) return
+
+  // Keep one consistently-labelled forward observation per ticker/day. Swing's
+  // selected 21-45 DTE contract is the closest proxy currently available to a
+  // standard 30-DTE IV series. Never mix Quick/LEAP tenors or synthesize history.
+  const daily = new Map()
+  for (const row of rows) {
+    if (!String(row.timeframe || '').startsWith('Swing')) continue
+    const iv = Number(row.iv)
+    const capturedAt = new Date(row.scanned_at)
+    if (!(iv > 0) || !Number.isFinite(capturedAt.getTime())) continue
+    daily.set(row.ticker, {
+      ticker: row.ticker,
+      date: capturedAt.toISOString().slice(0, 10),
+      iv_close: iv,
+      source: 'selected_swing_contract_21_45d',
+      dte: Number.isFinite(Number(row.dte_at_signal)) ? Number(row.dte_at_signal) : null,
+      captured_at: capturedAt.toISOString(),
+    })
+  }
+
+  if (!daily.size) return
+  const { error } = await client.from('iv_history')
+    .upsert([...daily.values()], { onConflict: 'ticker,date' })
+  if (error) console.error('[cron/scan] forward IV history upsert failed (non-fatal):', error.message)
+}
+
 // A partial unique index in Supabase guarantees that two overlapping scan
 // invocations cannot both create an open primary lifecycle for the same
 // contract. If this invocation loses that race, preserve its observation by
@@ -698,6 +726,7 @@ module.exports = async function handler(req, res) {
         if (result.recoveredConflict) console.warn(`[cron/scan] attached concurrent ${row.ticker} observation to lifecycle ${result.lifecycleId}`)
       }
     }
+    await collectForwardIvHistory(client, bufferedRows)
   }
 
   const durationMs = Date.now() - startedAt
@@ -717,4 +746,4 @@ module.exports = async function handler(req, res) {
   })
 }
 
-module.exports._test = { insertHistoryRow }
+module.exports._test = { insertHistoryRow, collectForwardIvHistory }
