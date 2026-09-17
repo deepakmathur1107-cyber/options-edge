@@ -92,8 +92,8 @@ export default function MorningBrief({ getToken, theme, isAdmin, onBriefLoaded }
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
       if (res.status === 404) { setError('notGenerated'); setLoading(false); return }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setBrief(data.brief)
       setGeneratedAt(data.generatedAt)
       setIsOldBrief(data.isOldBrief || false)

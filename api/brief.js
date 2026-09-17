@@ -13,10 +13,13 @@ const { fetchMarketData, fetchNews } = require('./_lib/newsData')
 const { getSRLevels }    = require('./_lib/srLevels')
 const { getTickerBrief } = require('./_lib/tickerBrief')
 const { getTweetAngles } = require('./_lib/tweetAngles')
+const { createBoundedFetch } = require('./_lib/boundedFetch')
+const { isCronRequest } = require('./_lib/cronAuth')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { global: { fetch: createBoundedFetch(8000) } }
 )
 
 // ── Is it within the active brief window? (8am-5pm ET, trading days) ───────
@@ -169,6 +172,21 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,x-cron-secret')
   if (req.method === 'OPTIONS') return res.status(204).end()
 
+  const isCron = isCronRequest(req)
+
+  // Vercel Cron invokes configured paths with GET and sends CRON_SECRET in
+  // the Authorization header. This must run before the user-authenticated
+  // GET route or the scheduled readout is rejected as an unsigned user.
+  if (req.method === 'GET' && isCron) {
+    try {
+      const result = await generateAndStore(new Date())
+      return res.status(200).json({ ok: true, brief: result.brief, generatedAt: result.generatedAt, cron: true })
+    } catch (e) {
+      console.error('[brief] cron generation failed:', e.message)
+      return res.status(503).json({ error: 'Market Readout provider is temporarily unavailable.', code: 'READOUT_PROVIDER_UNAVAILABLE' })
+    }
+  }
+
   // ── GET ?news=1 — return raw headlines for ticker strip (no auth) ──────────
   if (req.method === 'GET' && req.query.news === '1') {
     const headlines = await fetchNews().catch(() => [])
@@ -250,9 +268,6 @@ module.exports = async function handler(req, res) {
 
   // ── POST — cron or admin force-generate ───────────────────────────────────
   if (req.method === 'POST') {
-    const secret = req.headers['x-cron-secret'] || ''
-    const isCron = process.env.CRON_SECRET && secret === process.env.CRON_SECRET
-
     if (!isCron) {
       const { clerkId } = await getAuth(req)
       const ADMIN_IDS   = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim())
@@ -282,7 +297,10 @@ module.exports = async function handler(req, res) {
       .limit(1)
       .maybeSingle()
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) {
+      console.error('[brief] cached read failed:', error)
+      return res.status(503).json({ error: 'Market Readout data is temporarily unavailable.', code: 'READOUT_DATA_UNAVAILABLE' })
+    }
 
     const now        = new Date()
     const isOldBrief = !data || !sameDay(data.generated_at, now.toISOString())

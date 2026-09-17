@@ -1215,6 +1215,7 @@ export default function App(props={}) {
   // Independent of scanTF, which still drives Manual mode's own scan.
   const [alertTfFilter, setAlertTfFilter] = useState(null)
   const [autoLog,     setAutoLog]     = useState([])
+  const [autoServiceError, setAutoServiceError] = useState('')
   const [lastAlert,   setLastAlert]   = useState(null)
   const [alertHistory, setAlertHistory] = useState([])   // last 10 full alert objects
   const [shortlistOnly, setShortlistOnly] = useState(true)
@@ -2292,8 +2293,9 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         headers: alertsTok ? { Authorization: `Bearer ${alertsTok}` } : {}
       })
       const data = await res.json()
-      if (!data?.cached) throw new Error(data?.reason||'lookup unavailable')
+      if (!res.ok || !data?.cached) throw new Error(data?.reason||'Scanner data is temporarily unavailable.')
       const rows = data.results || []
+      setAutoServiceError('')
       // Sector/direction concentration clusters — computed server-side in
       // scan-cache.js against the FULL uncapped batch (not just these capped
       // rows), so the count shown can legitimately be larger than what's
@@ -2422,8 +2424,12 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
         : ''
       setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ${rows.length} result(s) · ${minScoreRef.current}%+ threshold${note}`,...p.slice(0,99)])
     } catch (e) {
-      setAutoLog(p=>[`[${fmtLocalTime(new Date())}] Lookup failed — running live: ${e.message}`,...p.slice(0,99)])
-      runAutoScan()
+      // Cache/database outages are infrastructure failures, not a reason to
+      // launch a 500-ticker browser scan and consume the market-data budget.
+      // Preserve the last known results and retry on the normal interval.
+      const message = e.message || 'Scanner data is temporarily unavailable.'
+      setAutoServiceError(message)
+      setAutoLog(p=>[`[${fmtLocalTime(new Date())}] ⚠ ${message} Previous results preserved; retrying automatically.`,...p.slice(0,99)])
     }
   }
 
@@ -3922,6 +3928,16 @@ ${topReasons.length ? '_' + topReasons.join(' · ') + '_' : ''}
                   letterSpacing:0.3, cursor:'pointer', fontFamily:"'Fraunces',serif",
                 }}>{autoOn?'⏹ STOP':'▶ START'}</button>
               </div>
+
+              {autoServiceError && (
+                <div role="status" style={{
+                  marginBottom:10,padding:'9px 12px',borderRadius:6,
+                  border:`1px solid ${C.orange}55`,background:`${C.orange}12`,
+                  color:C.orange,fontSize:11.5,lineHeight:1.5,
+                }}>
+                  ⚠ Live scanner data is temporarily unavailable. Previous results are preserved and the app will retry automatically—no additional market-data scan was started.
+                </div>
+              )}
 
               {/* Filter results by ticker + Frequency */}
               <div style={{display:'grid',gridTemplateColumns:'1fr 140px',gap:8,alignItems:'end',marginBottom:4}}>
