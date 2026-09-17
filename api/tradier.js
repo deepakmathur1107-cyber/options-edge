@@ -23,6 +23,8 @@ const TRADIER_BASE  = TRADIER_MODE === 'sandbox'
 const REDIS_URL   = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const FREE_LIMIT  = 4
+const { createBoundedFetch } = require('./_lib/boundedFetch')
+const fetchMarketData = createBoundedFetch(12000)
 
 // FIX: allowlist of Tradier endpoints this proxy is permitted to forward to.
 // Matches the market-data paths the frontend calls. Anything else is
@@ -105,20 +107,6 @@ function getTTL(path) {
 const { getAuth, ADMIN_IDS: LIB_ADMIN_IDS } = require('./_lib/auth')
 const { getFundamentals } = require('./_lib/fundamentals')
 
-async function getPlan(clerkId) {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key || !clerkId) return 'pro'
-  try {
-    const { createClient } = require('@supabase/supabase-js')
-    const sb = createClient(url, key)
-    const { data } = await sb.from('subscriptions')
-      .select('status').eq('clerk_id', clerkId).maybeSingle()
-    const s = data?.status || 'inactive'
-    return (s==='active'||s==='trialing') ? 'pro' : 'free'
-  } catch { return 'pro' }
-}
-
 // ─── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', 'https://www.optionsedgeflow.com')
@@ -153,7 +141,9 @@ module.exports = async function handler(req, res) {
         // Diagnostic mode — bypass Redis/Supabase cache, call api-ninjas directly
         // and show exactly what each layer sees
         const { createClient } = require('@supabase/supabase-js')
-        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+          global: { fetch: createBoundedFetch(4000) },
+        })
 
         // 1. Check Supabase
         const { data: sbRow } = await sb
@@ -221,7 +211,9 @@ module.exports = async function handler(req, res) {
         // 2. Clear Supabase
         try {
           const { createClient } = require('@supabase/supabase-js')
-          const sbForce = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+          const sbForce = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+            global: { fetch: createBoundedFetch(4000) },
+          })
           await sbForce.from('ticker_fundamentals').delete().eq('ticker', ticker)
           console.log(`[fundamentals] force: deleted Supabase row for ${ticker}`)
         } catch(e) { console.warn('[fundamentals] force: Supabase clear failed', e.message) }
@@ -261,14 +253,13 @@ module.exports = async function handler(req, res) {
 
   // ── Admin check ─────────────────────────────────────────────────────────────
   const ADMIN_IDS = LIB_ADMIN_IDS || (process.env.ADMIN_CLERK_IDS||'').split(',').map(s=>s.trim()).filter(Boolean)
-  const { clerkId } = await getAuth(req)
+  const { clerkId, plan: authPlan } = await getAuth(req)
   const isAdmin   = clerkId && ADMIN_IDS.includes(clerkId)
 
   // ── Usage gate (free users only) ─────────────────────────────────────────────
   // If no clerkId at all — still allow, server token covers market data access
   if (clerkId && !isAdmin) {
-    const plan = await getPlan(clerkId)
-    if (plan === 'free') {
+    if (authPlan === 'free') {
       const count = await usageIncr(clerkId)
       if (count > FREE_LIMIT) {
         return res.status(429).json({
@@ -308,7 +299,7 @@ module.exports = async function handler(req, res) {
   console.log(`[tradier] ${tradierPath}`)
 
   try {
-    const upstream = await fetch(url, {
+    const upstream = await fetchMarketData(url, {
       headers: { Authorization: `Bearer ${activeToken}`, Accept: 'application/json' }
     })
 
@@ -328,6 +319,10 @@ module.exports = async function handler(req, res) {
 
   } catch (e) {
     console.error('[tradier] error:', e.message)
-    return res.status(500).json({ error: 'Market data fetch failed: ' + e.message })
+    const timedOut = e?.name === 'AbortError'
+    return res.status(timedOut ? 504 : 502).json({
+      error: timedOut ? 'Market data provider timed out. Please retry shortly.' : 'Market data request failed.',
+      code: timedOut ? 'MARKET_DATA_TIMEOUT' : 'MARKET_DATA_FAILED',
+    })
   }
 }
