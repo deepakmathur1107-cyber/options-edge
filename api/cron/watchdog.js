@@ -3,6 +3,8 @@
 // timeframe; if any is older than its expected cadence (+ grace period),
 // sends a Telegram alert so a silent cron failure doesn't go unnoticed.
 
+const { createBoundedFetch } = require('../_lib/boundedFetch')
+
 const EXPECTED_MAX_AGE_MIN = {
   'Quick (5–14 DTE)':       20,   // runs every 15 min — flag if >20 min old
   'Swing (21–45 DTE)':      20,
@@ -15,7 +17,9 @@ function sb() {
   if (!_sb && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const { createClient } = require('@supabase/supabase-js')
-      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        global: { fetch: createBoundedFetch(5000) },
+      })
     } catch (e) { console.error('[watchdog] supabase init failed:', e.message) }
   }
   return _sb
@@ -53,13 +57,27 @@ module.exports = async function handler(req, res) {
 
   const stale = []
   for (const tf of Object.keys(EXPECTED_MAX_AGE_MIN)) {
-    const { data } = await client
+    const { data, error } = await client
       .from('scan_results')
       .select('scanned_at')
       .eq('timeframe', tf)
       .order('scanned_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+
+    // A failed freshness read is not evidence that a scan is stale. Starting
+    // four self-heal scans while PostgREST cannot reach the database creates
+    // a retry storm and makes recovery slower. Stop immediately and let the
+    // next scheduled watchdog run perform a clean health check.
+    if (error) {
+      console.error('[watchdog] database health check failed:', error)
+      return res.status(503).json({
+        error: 'Scanner database temporarily unavailable',
+        code: 'WATCHDOG_DATABASE_UNAVAILABLE',
+        retryable: true,
+        selfHealStarted: false,
+      })
+    }
 
     const ageMin = data ? (Date.now() - new Date(data.scanned_at).getTime()) / 60000 : Infinity
     if (ageMin > EXPECTED_MAX_AGE_MIN[tf]) {

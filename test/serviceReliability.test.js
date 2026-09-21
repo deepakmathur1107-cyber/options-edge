@@ -2,6 +2,8 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { isCronRequest } = require('../api/_lib/cronAuth')
 const { createBoundedFetch } = require('../api/_lib/boundedFetch')
+const fs = require('node:fs')
+const path = require('node:path')
 
 test('accepts the Bearer authorization Vercel sends to cron GET requests', () => {
   assert.equal(isCronRequest({ headers: { authorization: 'Bearer expected' } }, 'expected'), true)
@@ -23,4 +25,14 @@ test('bounded fetch aborts an unavailable provider instead of hanging', async ()
   } finally {
     global.fetch = originalFetch
   }
+})
+
+test('watchdog stops on a database read failure instead of launching self-heal scans', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../api/cron/watchdog.js'), 'utf8')
+  const errorGuard = source.indexOf("if (error) {")
+  const selfHeal = source.indexOf("fetch(`${host}/api/cron/scan")
+  assert.ok(errorGuard >= 0, 'watchdog must handle a failed database read')
+  assert.ok(selfHeal > errorGuard, 'database failure guard must run before self-heal scans')
+  assert.match(source, /selfHealStarted:\s*false/)
+  assert.match(source, /createBoundedFetch\(5000\)/)
 })
