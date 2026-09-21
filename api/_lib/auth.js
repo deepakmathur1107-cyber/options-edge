@@ -35,6 +35,27 @@ function base64urlDecode(str) {
   return Buffer.from(b64 + pad, 'base64')
 }
 
+function getSessionToken(req) {
+  const authorization = String(req.headers.authorization || '')
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (bearer) return bearer
+
+  // Clerk documents the __session cookie as the same-origin transport for a
+  // session token. Use it when a browser request arrives before getToken()
+  // has populated the explicit Authorization header.
+  const cookieHeader = String(req.headers.cookie || '')
+  for (const part of cookieHeader.split(';')) {
+    const separator = part.indexOf('=')
+    if (separator < 0) continue
+    const name = part.slice(0, separator).trim()
+    if (name !== '__session') continue
+    const value = part.slice(separator + 1).trim()
+    try { return decodeURIComponent(value) }
+    catch { return value }
+  }
+  return ''
+}
+
 // FIX: in-memory JWKS cache — module-scope, survives across warm invocations
 // on the same Vercel function instance. 10 minute TTL balances "pick up key
 // rotation reasonably fast" against "don't hit Clerk on every request."
@@ -118,7 +139,7 @@ async function getSubPlan(clerkId) {
 
 // Main auth function — call this at the top of every handler
 async function getAuth(req) {
-  const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
+  const token = getSessionToken(req)
 
   if (!token) {
     return { clerkId: null, isAdmin: false, plan: 'free', allowed: false, error: 'No token' }
@@ -140,8 +161,9 @@ async function getAuth(req) {
     return { clerkId, isAdmin: false, plan, allowed }
 
   } catch (e) {
+    console.warn('[auth] session token rejected:', e.message)
     return { clerkId: null, isAdmin: false, plan: 'free', allowed: false, error: e.message }
   }
 }
 
-module.exports = { getAuth, ADMIN_IDS }
+module.exports = { getAuth, getSessionToken, ADMIN_IDS }

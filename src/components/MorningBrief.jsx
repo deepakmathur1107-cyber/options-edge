@@ -87,10 +87,18 @@ export default function MorningBrief({ getToken, theme, isAdmin, onBriefLoaded }
   // Load brief from server — server handles 2hr auto-refresh logic
   const load = useCallback(async () => {
     try {
-      const token = await getToken()
-      const res   = await fetch('/api/brief', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
+      const request = async () => {
+        const token = await getToken()
+        return fetch('/api/brief', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: 'same-origin',
+        })
+      }
+      let res = await request()
+      // Clerk can briefly report a loaded signed-in session before a fresh
+      // token is ready. Retry once; the server also accepts Clerk's
+      // same-origin __session cookie as a fallback.
+      if (res.status === 401) res = await request()
       if (res.status === 404) { setError('notGenerated'); setLoading(false); return }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
