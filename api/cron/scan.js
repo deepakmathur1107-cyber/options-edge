@@ -24,6 +24,7 @@ const { buildQualificationRecord } = require('../_lib/strategyClassification')
 const { classifyOptionMarketSession } = require('../_lib/marketCalendar')
 const { buildShadowStrategies } = require('../_lib/shadowStrategies')
 const { buildDirectionStability, RECENT_FLIP_MINUTES } = require('../_lib/directionStability')
+const { createBoundedFetch } = require('../_lib/boundedFetch')
 const crypto = require('crypto')
 
 const TRADIER_MODE  = process.env.TRADIER_MODE  || 'production'
@@ -41,7 +42,9 @@ function sb() {
   if (!_sb && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const { createClient } = require('@supabase/supabase-js')
-      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        global: { fetch: createBoundedFetch(5000) },
+      })
     } catch (e) { console.error('[cron/scan] supabase init failed:', e.message) }
   }
   return _sb
@@ -276,6 +279,19 @@ module.exports = async function handler(req, res) {
 
   const client = sb()
   if (!client) return res.status(500).json({ error: 'Supabase not configured' })
+
+  // Fail before spending any Tradier/API budget when the database cannot
+  // accept the results. Without this preflight, every downstream Supabase
+  // call can wait for the platform timeout while market-data work continues.
+  const { error: databaseError } = await client.from('scan_results').select('ticker').limit(1)
+  if (databaseError) {
+    console.error('[cron/scan] database preflight failed:', databaseError)
+    return res.status(503).json({
+      error: 'Scanner database temporarily unavailable',
+      code: 'SCAN_DATABASE_UNAVAILABLE',
+      retryable: true,
+    })
+  }
 
   const startedAt = Date.now()
   const MAX_MS = 280_000   // leave 20s headroom under the 300s Pro maxDuration

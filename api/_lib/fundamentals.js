@@ -16,6 +16,7 @@ const REDIS_URL     = process.env.UPSTASH_REDIS_REST_URL   || ''
 const REDIS_TOKEN   = process.env.UPSTASH_REDIS_REST_TOKEN || ''
 const SUPABASE_URL  = process.env.SUPABASE_URL              || ''
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const { createBoundedFetch } = require('./boundedFetch')
 
 const REDIS_TTL_SECS  = 6 * 60 * 60    // 6 hours; financial statements do not change intraday
 const SUPABASE_TTL_MS = 7 * 24 * 3600 * 1000  // 7 days in Supabase
@@ -27,7 +28,9 @@ function sb() {
   if (!_sb && SUPABASE_URL && SUPABASE_KEY) {
     try {
       const { createClient } = require('@supabase/supabase-js')
-      _sb = createClient(SUPABASE_URL, SUPABASE_KEY)
+      _sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+        global: { fetch: createBoundedFetch(4000) },
+      })
     } catch (e) {
       console.warn('[fundamentals] supabase require failed:', e.message)
       return null

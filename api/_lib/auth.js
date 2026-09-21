@@ -17,6 +17,7 @@
 //    Clerk's JWKS endpoint being up/fast) on every API call.
 
 const ADMIN_IDS = (process.env.ADMIN_CLERK_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+const { createBoundedFetch } = require('./boundedFetch')
 
 // FIX: your actual Clerk instance issuer — confirmed directly from a decoded
 // production JWT (not the dashboard label, which showed the underlying
@@ -102,12 +103,13 @@ async function getSubPlan(clerkId) {
   if (!url || !key) return 'pro'  // no DB = assume pro (dev mode)
   try {
     const { createClient } = require('@supabase/supabase-js')
-    const supabase = createClient(url, key)
-    const { data } = await supabase
+    const supabase = createClient(url, key, { global: { fetch: createBoundedFetch(4000) } })
+    const { data, error } = await supabase
       .from('subscriptions')
       .select('status, plan')
       .eq('clerk_id', clerkId)
       .maybeSingle()
+    if (error) throw error
     const status = data?.status || 'inactive'
     if (status === 'active' || status === 'trialing') return data?.plan || 'pro'
     return 'free'

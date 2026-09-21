@@ -16,13 +16,16 @@ const { attachLifecycleSummaries } = require('./_lib/lifecycleSummary')
 const { buildSizingForScanRow } = require('./_lib/userPositionSizing')
 const { attachQualityShortlist } = require('./_lib/qualityShortlist')
 const { CLUSTER_MIN_COUNT } = require('./_lib/clusterConfig')
+const { createBoundedFetch } = require('./_lib/boundedFetch')
 
 let _sb = null
 function sb() {
   if (!_sb && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const { createClient } = require('@supabase/supabase-js')
-      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+      _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        global: { fetch: createBoundedFetch(8000) },
+      })
     } catch (e) { console.error('[scan-cache] supabase init failed:', e.message) }
   }
   return _sb
@@ -54,6 +57,16 @@ async function getSizingPrefs(client, clerkId) {
 
 function attachPositionSizing(rows, prefs) {
   for (const row of rows || []) row.position_sizing = buildSizingForScanRow(row, prefs)
+}
+
+function dataUnavailable(res, error) {
+  if (error) console.error('[scan-cache] data provider unavailable:', error)
+  return res.status(503).json({
+    cached: false,
+    results: [],
+    code: 'SCAN_DATA_UNAVAILABLE',
+    reason: 'Scanner data is temporarily unavailable. Existing results have been preserved.',
+  })
 }
 
 // CLUSTER_MIN_COUNT: minimum same-sector + same-direction signals in a single
@@ -149,7 +162,7 @@ module.exports = async function handler(req, res) {
         .gt('expires_at', new Date().toISOString())
         .maybeSingle()
 
-      if (error) return res.status(200).json({ cached: false, reason: error.message })
+      if (error) return dataUnavailable(res, error)
       if (!data)  return res.status(200).json({ cached: false })
       await attachLifecycleSummaries(client, [data])
       attachPositionSizing([data], sizingPrefs)
@@ -171,7 +184,7 @@ module.exports = async function handler(req, res) {
         .gt('expires_at', new Date().toISOString())
         .order('score', { ascending: false })
         .limit(50)
-      if (error) return res.status(200).json({ cached: false, reason: error.message, results: [] })
+      if (error) return dataUnavailable(res, error)
 
       // Clustering: separate, uncapped query against the SAME filter
       // conditions (timeframe/threshold/freshness) as above, but selecting
@@ -209,10 +222,11 @@ module.exports = async function handler(req, res) {
         .gt('expires_at', new Date().toISOString())
         .order('score', { ascending: false })
         .limit(PER_TF_LIMIT)
-      if (error) { console.error(`[scan-cache] mixed-tf query failed for ${tfKey}:`, error.message); return [] }
-      return data || []
+      return { data: data || [], error, timeframe: tfKey }
     }))
-    const data = perTfResults.flat().sort((a, b) => b.score - a.score)
+    const failedQuery = perTfResults.find(result => result.error)
+    if (failedQuery) return dataUnavailable(res, failedQuery.error)
+    const data = perTfResults.flatMap(result => result.data).sort((a, b) => b.score - a.score)
 
     // Clustering computed PER TIMEFRAME, not pooled across all four — a
     // cluster within Quick (5-14 DTE) and a same-sector/direction cluster
@@ -237,6 +251,6 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ cached: true, results: data, clustersByTf })
   } catch (e) {
     console.error('[scan-cache] error:', e.message)
-    return res.status(200).json({ cached: false, reason: e.message })
+    return dataUnavailable(res, e)
   }
 }
