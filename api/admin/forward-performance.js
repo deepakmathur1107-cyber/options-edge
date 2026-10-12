@@ -3,6 +3,10 @@ const { getAuth, ADMIN_IDS } = require('../_lib/auth')
 const { evaluatePromotion } = require('../_lib/promotionGates')
 const { summarizeReturns, evaluateProfitabilityGate } = require('../_lib/oeProfitability')
 
+const RESPONSE_CACHE_MS = 5 * 60 * 1000
+let _cachedPayload = null
+let _cachedAt = 0
+
 let _supabase = null
 function sb() {
   if (!_supabase) {
@@ -150,6 +154,12 @@ module.exports = async function handler(req, res) {
     return res.status(403).json({ error: 'Admin access required' })
   }
 
+  const now = Date.now()
+  if (_cachedPayload && now - _cachedAt < RESPONSE_CACHE_MS) {
+    res.setHeader('X-Options-Edge-Cache', 'HIT')
+    return res.status(200).json(_cachedPayload)
+  }
+
   try {
     const rows = await fetchForwardRows()
     const promotion = evaluatePromotion(rows)
@@ -158,7 +168,7 @@ module.exports = async function handler(req, res) {
     const averageHoldingMinutes = measured.length
       ? measured.reduce((sum, row) => sum + Number(row.holding_minutes || 0), 0) / measured.length
       : null
-    return res.status(200).json({
+    const payload = {
       generatedAt: new Date().toISOString(),
       enrolled: rows.length,
       resolvedWithExecutionMetrics: measured.length,
@@ -182,9 +192,17 @@ module.exports = async function handler(req, res) {
         'Shadow strategies do not change displayed recommendations.',
         'Promotion remains blocked until every gate passes.',
       ],
-    })
+    }
+    _cachedPayload = payload
+    _cachedAt = Date.now()
+    res.setHeader('X-Options-Edge-Cache', 'MISS')
+    return res.status(200).json(payload)
   } catch (error) {
     console.error('[admin/forward-performance] failed:', error.message)
+    if (_cachedPayload) {
+      res.setHeader('X-Options-Edge-Cache', 'STALE')
+      return res.status(200).json({ ..._cachedPayload, stale: true, staleReason: 'Database query timed out; showing the last successful snapshot.' })
+    }
     return res.status(500).json({ error: 'Failed to load forward performance' })
   }
 }
