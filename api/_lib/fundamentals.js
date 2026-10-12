@@ -139,6 +139,40 @@ async function fetchEarningsFromFinnhub(ticker) {
   }
 }
 
+// Finnhub company profile is the resilient fallback for the base company
+// record. API-Ninjas has returned HTTP 400 for valid symbols in production;
+// that must not suppress the independent Finnhub financial metrics.
+async function fetchProfileFromFinnhub(ticker) {
+  if (!FINNHUB_KEY) return null
+  try {
+    const url = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${FINNHUB_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const profile = await res.json()
+    if (!profile || (!profile.ticker && !profile.name)) return null
+    const marketCapMillions = Number(profile.marketCapitalization)
+    return {
+      ticker: profile.ticker || ticker,
+      market_cap: Number.isFinite(marketCapMillions) ? Math.round(marketCapMillions * 1_000_000) : null,
+      pe_ratio: null,
+      sector: profile.finnhubIndustry || null,
+      industry: profile.finnhubIndustry || null,
+      earnings_date: await fetchEarningsFromFinnhub(ticker),
+      updated_at: new Date().toISOString(),
+    }
+  } catch (e) {
+    console.warn(`[fundamentals] Finnhub profile error for ${ticker}:`, e.message)
+    return null
+  }
+}
+
+async function fetchBaseFundamentals(ticker) {
+  const ninjas = await fetchFromNinjas(ticker)
+  if (ninjas) return ninjas
+  console.warn(`[fundamentals] API-Ninjas profile unavailable for ${ticker}; using Finnhub fallback`)
+  return fetchProfileFromFinnhub(ticker)
+}
+
 // Finnhub basic financials supplies the health metrics that the stock gate
 // needs. This is kept server-side and cached with the combined fundamentals
 // object, so the API key never reaches the browser.
@@ -306,8 +340,8 @@ async function getFundamentals(ticker) {
   }
 
   // 3. api-ninjas (external call — counts against 3000/month limit)
-  console.log(`[fundamentals] cache miss — calling api-ninjas for ${ticker}`)
-  const fresh = await fetchFromNinjas(ticker)
+  console.log(`[fundamentals] cache miss — calling fundamentals providers for ${ticker}`)
+  const fresh = await fetchBaseFundamentals(ticker)
   if (fresh) {
     const metrics=await fetchFinancialMetricsFromFinnhub(ticker)
     const combined={...fresh,...metrics,market_cap:metrics.market_cap??fresh.market_cap,pe_ratio:metrics.pe_ratio??fresh.pe_ratio}
@@ -332,7 +366,7 @@ async function prefetchFundamentals(tickers, maxNinjasCalls = 20) {
     const stored = await supabaseGet(ticker)
     if (stored) { await redisSet(redisKey, stored, REDIS_TTL_SECS); continue }
     // Not cached anywhere — call ninjas
-    const fresh = await fetchFromNinjas(ticker)
+    const fresh = await fetchBaseFundamentals(ticker)
     ninjasCalled++
     if (fresh) {
       await supabaseSet(fresh)
@@ -344,4 +378,9 @@ async function prefetchFundamentals(tickers, maxNinjasCalls = 20) {
   console.log(`[fundamentals] prefetch done — ${ninjasCalled} api-ninjas calls`)
 }
 
-module.exports = { getFundamentals, prefetchFundamentals, getNinjasUsage }
+module.exports = {
+  getFundamentals,
+  prefetchFundamentals,
+  getNinjasUsage,
+  _test: { fetchProfileFromFinnhub, fetchBaseFundamentals },
+}
