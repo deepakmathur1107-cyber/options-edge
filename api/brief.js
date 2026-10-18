@@ -15,11 +15,12 @@ const { getTickerBrief } = require('./_lib/tickerBrief')
 const { getTweetAngles } = require('./_lib/tweetAngles')
 const { createBoundedFetch } = require('./_lib/boundedFetch')
 const { isCronRequest } = require('./_lib/cronAuth')
+const { storeBriefReliably } = require('./_lib/reliableBriefStore')
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { global: { fetch: createBoundedFetch(8000) } }
+  { global: { fetch: createBoundedFetch(15000) } }
 )
 
 // ── Is it within the active brief window? (8am-5pm ET, trading days) ───────
@@ -128,9 +129,7 @@ async function generateAndStore(now) {
     if (!brief[f]) throw new Error(`Missing field: ${f}`)
   }
 
-  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
-  const { error } = await supabase.from('morning_brief').insert({
+  const row = {
     generated_at: now.toISOString(),
     tone:         brief.tone,
     why:          brief.why,
@@ -139,10 +138,37 @@ async function generateAndStore(now) {
     bias:         brief.bias,
     risk_trigger: brief.risk_trigger,
     raw_json:     brief,
-  })
-  if (error) throw new Error(`Supabase: ${error.message}`)
+  }
 
-  console.log(`[brief] Generated: ${brief.bias} — ${brief.why}`)
+  const stored = await storeBriefReliably({
+    row,
+    insertRow: async candidate => {
+      const { data, error } = await supabase
+        .from('morning_brief')
+        .insert(candidate)
+        .select('*')
+        .maybeSingle()
+      return { data, error }
+    },
+    findByGeneratedAt: async generatedAt => {
+      const { data, error } = await supabase
+        .from('morning_brief')
+        .select('*')
+        .eq('generated_at', generatedAt)
+        .maybeSingle()
+      if (error) throw error
+      return data
+    },
+  })
+
+  // Cleanup happens only after the new readout is safely stored. A cleanup
+  // failure is non-fatal: retaining extra history is safer than losing the
+  // last known-good readout.
+  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const { error: cleanupError } = await supabase.from('morning_brief').delete().lt('generated_at', cutoff)
+  if (cleanupError) console.warn('[brief] old-readout cleanup failed:', cleanupError)
+
+  console.log(`[brief] Generated: ${brief.bias} — ${brief.why}; storage attempts=${stored.attempts}; recovered=${stored.recoveredAfterTimeout}`)
   return { brief, generatedAt: now.toISOString() }
 }
 
@@ -159,6 +185,17 @@ function sameDay(isoA, isoB) {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(new Date(d))
   return fmt(isoA) === fmt(isoB)
+}
+
+async function findTodayBrief(now) {
+  const { data, error } = await supabase
+    .from('morning_brief')
+    .select('*')
+    .order('generated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data && sameDay(data.generated_at, now.toISOString()) ? data : null
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -179,7 +216,13 @@ module.exports = async function handler(req, res) {
   // GET route or the scheduled readout is rejected as an unsigned user.
   if (req.method === 'GET' && isCron) {
     try {
-      const result = await generateAndStore(new Date())
+      const now = new Date()
+      const existing = await findTodayBrief(now)
+      if (existing) {
+        console.log(`[brief] cron no-op — today's readout already exists at ${existing.generated_at}`)
+        return res.status(200).json({ ok: true, skipped: true, reason: 'TODAY_BRIEF_EXISTS', generatedAt: existing.generated_at, cron: true })
+      }
+      const result = await generateAndStore(now)
       return res.status(200).json({ ok: true, brief: result.brief, generatedAt: result.generatedAt, cron: true })
     } catch (e) {
       console.error('[brief] cron generation failed:', e.message)
@@ -349,3 +392,5 @@ module.exports = async function handler(req, res) {
 
   return res.status(405).json({ error: 'Method not allowed' })
 }
+
+module.exports._test = { sameDay, inBriefWindow }
