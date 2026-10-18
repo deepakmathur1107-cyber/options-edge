@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/brief",
-      "schedule": "0 13 * * 1-5"
+      "schedule": "0,10 13 * * 1-5"
     },
     {
       "path": "/api/cron/scan?tf=Quick (5\u201314 DTE)",
@@ -58,6 +58,9 @@
     }
   ],
   "functions": {
+    "api/brief.js": {
+      "maxDuration": 60
+    },
     "api/*.js": {
       "maxDuration": 30
     },
