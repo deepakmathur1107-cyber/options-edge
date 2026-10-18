@@ -69,6 +69,10 @@ module.exports = async (req, res) => {
         .then(({ data, error }) => { if (error) throw error; return data; }),
       supabase.from('resolver_runs')
         .select('started_at, finished_at, mode, rows_fetched, rows_processed, resolved, still_open, data_unavailable, errors, circuit_broken, timed_out, tradier_calls, status_counts, skip_reason, deployment_sha')
+        // Signal-outcome resolver modes only. Multileg and credit-shadow jobs
+        // write to the same table on different cadences and would otherwise
+        // be read as "the latest resolver run" by deriveResolverRunHealth.
+        .in('mode', ['nightly', 'burndown', 'manual', 'qualified'])
         .order('started_at', { ascending: false }).limit(12)
         .then(({ data, error }) => {
           // Safe during a rolling deployment where API code may briefly arrive
